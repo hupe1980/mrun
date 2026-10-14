@@ -2,87 +2,75 @@
 
 ## Core Principles
 
-### I. User Latency Before Language Prestige
+### I. Agent Latency Is the Product
 
-mrun MUST optimize successful local coding-agent work, including repeated prompt processing,
-time to first useful output, tool handoff, cancellation, and memory pressure. Rust is the runtime
-language, not evidence of an inference speedup. Every performance claim MUST name its workload,
-hardware, model, quality contract, comparator configuration, and reproducible evidence.
+mrun MUST optimize what a coding agent waits for: time to first useful token on long, repeated
+contexts, tool-loop turnaround, cancellation, and steady decode speed. Every performance claim
+MUST name hardware, model, quantization, workload and comparator settings, and MUST be reproducible
+with the in-repo benchmark harness. "Best-in-class" is a dated, scoped benchmark result, never a
+label.
 
-### II. Correctness Gates Every Optimization
+### II. Exactness Before Speed
 
-An optimization MUST pass state, numerical, protocol, and task-quality checks appropriate to its
-scope before becoming a default. Cache reuse MUST preserve exact token-prefix semantics and
-compatible inference state. Approximate attention, KV quantization, and speculative decoding
-MUST be explicitly qualified and reversible. Silent context truncation, stale state reuse,
-invented usage counts, and concealed fallback are prohibited.
+Reused inference state MUST be exact: same model, tokenizer, template, KV format and token prefix.
+Hash lookups MUST be confirmed by token comparison. Approximate techniques (KV eviction, KV
+quantization, speculative decoding, approximate prefix matching) MUST be opt-in, separately
+identified in cache keys, and gated by a measured quality check. Silent context truncation,
+stale-state reuse and invented usage counts are prohibited.
 
-### III. Memory Is a Bounded Shared Resource
+### III. Memory Is Budgeted by Construction
 
-Weights, active inference state, retained prefixes, scratch space, queues, and streaming buffers
-MUST have explicit ownership and finite budgets. Admission MUST reserve prompt and output growth
-before execution. Cancellation and eviction MUST respect in-flight GPU lifetimes. Unified memory
-MUST NOT be counted as independent CPU and GPU pools. Allocator accounting MUST be accompanied by
-process and system measurements; it is not a proof of a hard process-RSS limit.
+Large memory (weights, KV arena, prefix cache) MUST be allocated or reserved by mrun against an
+explicit budget computed at startup, and admission MUST reserve a request's full prompt plus output
+KV before execution. Transient scratch MUST be bounded by measured envelopes from a worst-case
+startup profile plus fixed input caps, not by per-allocation hooks into third-party code. Unified
+memory MUST NOT be double-counted as CPU plus GPU. Memory pressure MUST shed cache before failing
+requests, and failures MUST be explicit.
 
-### IV. Local Privacy and Least Authority
+### IV. Local, Private, Least Authority
 
-Inference MUST work offline after explicit model provisioning. Default serving MUST bind only to
-loopback; cloud fallback, telemetry uploads, remote model code, prompt logging, and persisted
-conversation state MUST be disabled by default. Tool execution belongs to the client, not the
-runtime. Cache access MUST be scoped to a trusted local principal; client-supplied cache or session
-identifiers are not authorization. Network exposure requires an explicit authenticated policy.
+Inference MUST work offline after an explicit `mrun pull`. Serving MUST bind to loopback by
+default. No telemetry, prompt logging, remote code, or persisted conversation state by default.
+Tools run in the client, never in mrun. Models are identified by content hash, never by path or
+name alone.
 
-### V. Reuse Engines, Own the Agent Contract
+### V. Own the Runtime, Reuse the Kernels
 
-mrun MUST first qualify an existing optimized Apple Silicon engine against its requirements.
-Native C/C++/Metal dependencies are permitted behind narrow Rust-owned boundaries. Backend types
-MUST NOT leak into the public runtime contract. Model-specific state and templates belong to the
-model/backend adapter, not HTTP handlers. Custom kernels require a profile showing the bottleneck,
-a reference path, and a measured end-to-end win; speculative abstractions are not a substitute.
+mrun owns scheduling, KV state, memory, APIs and model execution order, built on Candle tensors and
+its Metal kernels. New GPU kernels or forks of upstream crates require a profile showing the
+bottleneck, a reference implementation for correctness tests, and a measured end-to-end win.
+Prefer small, upstreamable patches. Backend types MUST NOT leak into the public API.
 
-### VI. Reproducible Evidence and Honest Scope
+### VI. Simple Over Clever, Developer Experience First
 
-Tests and benchmarks MUST use pinned, redistributable inputs or documented hash-verified downloads.
-Comparisons MUST retain raw observations, failed runs, quality outcomes, and uncertainty, and MUST
-enable documented competitor optimizations in the product comparison. Hardware-specific claims
-MUST be qualified on that hardware. Unsupported model/backend combinations MUST fail explicitly.
-"Best-in-class" MUST remain an aspiration until a dated comparison matrix supports a scoped claim.
+One binary, sensible defaults, zero required configuration. Clear errors that say what to do next.
+Prefer the smallest design that meets the requirement; remove code, options and abstractions that
+do not serve a current requirement. No speculative plugin frameworks or multi-backend layers.
 
 ## Target and Constraints
 
-- Primary qualification target: Apple M4 Pro with 48 GB unified memory, one interactive local user.
-	Exact CPU/GPU configuration, installed memory bytes, macOS, SDK, and power mode MUST be recorded.
-- Initial scope: text generation for a small qualified coding-model set and OpenCode-compatible
-	streaming and tool-call interchange. General Ollama parity, training, and remote execution are
-	not initial requirements.
-- Rust orchestration with Tokio/Axum is the intended serving direction. Backend, model artifact,
-	quantization, deployment minimum, and Rust minimum MUST be decided in feature planning from
-	compatibility and measurement evidence, not guessed in a feature specification.
-- No automatic privileged OS tuning, wired-memory-limit changes, or model downloads on inference.
-- Preserve the project's MIT/Apache-2.0 licensing intent; audit native dependencies, model licenses,
-	and fixture redistribution separately before distribution.
+- Primary target: Apple Silicon Macs with Metal, qualified first on an M4 Pro with 48 GB unified
+  memory. Linux/CPU builds MUST compile and run portable tests; they are not performance targets.
+- Rust stable (pinned in `rust-toolchain.toml`), Tokio + Axum for serving, Candle for tensors.
+- API compatibility is a product feature: OpenAI Chat Completions and Anthropic Messages first.
+- No automatic privileged OS tuning (for example raising the GPU wired-memory limit).
+- Licensing: MIT OR Apache-2.0. Model licenses are shown to the user at pull time.
 
 ## Development Workflow
 
-Use the official project-local Spec Kit workflow: constitution, then specify, clarify when needed,
-plan, tasks, analyze, implement, and converge. Specifications are living contracts; changes MUST
-reconcile dependent plans, tasks, tests, and evidence. The project-wide spec index owns scope and
-sequence; each numbered feature owns independently testable behavior and explicit requirement IDs.
-
-Planning MUST resolve backend capabilities and numerical tolerances before implementation tasks
-are accepted. Implementation MUST add regression tests for positive and rejected paths, especially
-cache identity, cancellation, resource cleanup, and stream termination. Portable correctness checks
-belong in ordinary CI; physical M4 Pro evidence belongs in explicit hardware qualification lanes.
-Feature completion requires passing its acceptance gates, not merely generating tasks or compiling.
+Spec Kit drives features: specify, clarify when needed, plan, tasks, analyze, implement. The spec
+index (`specs/README.md`) owns the roadmap and feature order. Each feature owns testable
+requirements. Tests ship with the change: positive and rejected paths for cache identity,
+admission, cancellation and stream termination. CI runs fmt, clippy and tests on Linux; Metal
+correctness and performance run on Apple hardware via `mrun bench` and documented commands.
+A feature is done when its acceptance checks pass, not when its tasks are ticked.
 
 ## Governance
 
-This constitution governs plans and implementation. Each review MUST check compliance and record
-any exception with rationale, scope, expiry, and mitigation. Amendments require maintainer approval,
-a dated impact assessment, and reconciliation of affected artifacts. Version changes use semantic
-versioning: major for incompatible principle changes, minor for new principles, patch for wording.
-Numerical targets in feature specs are proposed acceptance gates, not measured accomplishments;
-changing them after a failed run requires review and preservation of the original evidence.
+This constitution governs specs, plans and code reviews. Exceptions MUST be written in the plan
+with scope and expiry. Amendments update this file with a semantic version bump (major: principle
+removed or redefined; minor: principle added; patch: wording) and reconcile affected specs.
+Numerical targets in specs are acceptance gates; changing one after a failed run requires a note
+in the spec explaining why.
 
-**Version**: 1.0.0 | **Ratified**: 2026-10-13 | **Last Amended**: 2026-10-13
+**Version**: 2.0.0 | **Ratified**: 2026-10-13 | **Last Amended**: 2026-10-14
