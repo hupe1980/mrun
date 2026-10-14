@@ -12,8 +12,10 @@
 
 ### Session 2026-10-14
 
-- Q: How much memory may the cache use? → A: All attention-state capacity not reserved by the active request; there is no separate cache budget to tune.
-- Q: Do miss explanations include prompt text? → A: Positions, counts and cause only by default; text excerpts only with `--debug-cache`, shown live and never written to disk.
+- Q: How much memory may the cache use? → A: All attention-state capacity not occupied by the active request's tokens; there is no separate cache budget to tune.
+- Q: Do miss explanations include prompt text? → A: Positions, counts and cause only; text excerpts only with `--debug-cache` (loopback only), printed to the server terminal, never on disk or in responses.
+- Q: Should mrun strip known volatile client content (opt-in normalization)? → A: Deferred (analysis 2026-10-14): `mrun connect` fixes the known Claude Code case via environment; revisit if diagnostics show misses `connect` cannot fix.
+- Q: How does the cache share memory with large output limits? → A: Cached state may occupy capacity reserved for output until the output needs it, then it is evicted lazily; admission always happens before restore.
 - Q: How do concurrent subagents share? → A: Requests are serialized (feature 002); a queued request that shares a prefix with the active one reuses it once that prefix is cached. (Maintainer decision: queue now, batch later.)
 
 ## User Scenarios & Testing *(mandatory)*
@@ -81,12 +83,13 @@ the reported divergence position, surrounding text excerpt and cause category.
 **Acceptance Scenarios**:
 
 1. **Given** a request that reuses less than its closest cached prefix would allow, **When** it
-   completes, **Then** the response (and `mrun ps`) reports the divergence token position, cached
-   vs processed counts and a cause category.
+   completes, **Then** the response headers and `mrun ps` report the divergence token position,
+   cached vs processed counts and a cause category.
 2. **Given** a known volatile pattern (for example a per-request client header in the system
    prompt), **When** detected, **Then** the explanation names it and the documented fix.
 3. **Given** debug diagnostics are off (default), **When** a miss is explained, **Then** no prompt
-   text is written to disk; excerpts appear only in the live response or terminal.
+   text appears anywhere; with `--debug-cache` (loopback only), excerpts appear only in the server's
+   terminal, never on disk or in HTTP responses.
 
 ---
 
@@ -120,66 +123,69 @@ request and simulate memory pressure; verify eviction order and that requests su
 - A model reloaded from changed files: its old cache entries are discarded.
 - Processing chunk size changed by configuration: entries stay valid (they hold stored bytes for
   exact tokens); only numerical tolerance tests notice the difference.
+- A request whose output reservation needs memory held by cached state: cached state is evicted
+  as the output grows; the request never fails because of the cache.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 - **FR-001**: The cache MUST reuse the longest exactly matching token prefix among cached states
-  for the same model identity (weights, tokenizer, chat template, attention-state format), confirming matches by token comparison, never by hash alone.
+  for the same model identity (weights, tokenizer, chat template, attention-state format),
+  confirming matches by token comparison, never by hash alone.
 - **FR-002**: Reused state MUST be immutable while shared; no request may observe tokens or state
   written by another request beyond the shared prefix.
-- **FR-003**: Continuing the same conversation MUST reuse the active state without copying it.
+- **FR-003**: Continuing the same conversation MUST reuse the active state without copying it; when
+  the request diverges inside the active state, the active state MUST be trimmed to the divergence
+  point (no copy) rather than restored.
 - **FR-004**: When the whole prompt is cached, the engine MUST reprocess at most the final token to
   obtain next-token output.
 - **FR-005**: Every response MUST report cached and processed prompt tokens; the totals MUST match
-  the prompt length exactly.
+  the prompt length exactly (per-API fields owned by feature 002).
 - **FR-006**: For every request, mrun MUST record the divergence position against the closest
-  cached prompt and classify misses (new conversation, edit, template/tokenization difference,
-  volatile content, evicted, capacity, model change, disabled), available in responses' extension
-  fields and in `mrun ps`.
-- **FR-007**: Cache size MUST be bounded in bytes by the memory budget; eviction MUST prefer state
-  with the lowest recompute time saved per byte, adjusted for recency, and MUST never evict state in
-  use.
-- **FR-008**: Memory pressure signals MUST shrink the cache before affecting running requests.
+  cached prompt and classify misses (new, edit, template, volatile, evicted, capacity, model,
+  disabled); the result MUST be returned in feature 002's `x-mrun-cache-*` response headers (all
+  three APIs) and shown in `mrun ps`.
+- **FR-007**: Cache memory MUST come only from attention-state capacity not needed by the active
+  request; admission happens before any restore. Cached state may occupy capacity reserved for a
+  request's output until that output needs it, and is then evicted. Eviction removes the least
+  recently used unpinned leaves, assistant turns before user/tool turns before system prompts, and
+  MUST never evict state in use.
+- **FR-008**: Memory pressure signals MUST shrink the cache (and release freed memory to the OS)
+  before affecting running requests.
 - **FR-009**: Users MUST be able to disable the cache per request and globally, and clear it
   (`mrun cache clear` and an HTTP endpoint).
 - **FR-010**: The cache MUST be in memory only in this feature; nothing is persisted to disk.
-- **FR-011**: Cache entries MUST be scoped to the local server; no client-supplied identifier can
-  read another client's entries without presenting the same token prefix.
+- **FR-011**: Cache entries are shared by all clients of one server. Because cached-token counts
+  reveal whether a prefix was seen before, mrun MUST document this, MUST refuse `--debug-cache`
+  (prompt excerpts) on non-loopback binds, and MUST NOT expose excerpts in any HTTP response.
 - **FR-012**: The data model MUST allow entries to carry model-state checkpoints at chosen token
   boundaries, so hybrid-attention models can be supported later without redesign.
-- **FR-013**: mrun MAY offer opt-in, per-client "cache-stable" normalization that removes known
-  volatile client content (for example a per-request billing/attribution header) before rendering;
-  it MUST be off by default, listed in `mrun ps`, and reported in the response's miss/normalization
-  extension field, because it changes what the model sees.
 
 ### Key Entities
 
 - **Cache Key**: Model identity (weights hash, tokenizer hash, template hash, state format).
 - **Prefix Node**: A token range within a tree of token sequences, holding an immutable state
   segment, byte size, recompute-cost estimate, last use and active-use count.
-- **Miss Report**: Divergence position, closest cached length, cause category, optional live excerpt.
+- **Miss Report**: Divergence position, closest cached length, cause category.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: On a recorded 20-turn agent session at 30K tokens of context, median time to first
-  token per turn is at least 5× lower with the cache than without, on the target Mac.
-- **SC-002**: In a mutation suite of at least 100 cases (append, edit, rewind, branch, model or
-  template change), zero stale reuses occur (every reused token range equals the request's tokens
-  under the same model identity), and teacher-forced next-token log-probabilities match cache-off
-  runs within 1e-2 absolute at every checked position, with greedy outputs agreeing on at least 99%
-  of tokens.
+- **SC-001**: Replaying feature 005's pinned agent trace `agent/opencode-refactor` (20 turns,
+  reaching 30K tokens, recorded request parameters) against Qwen3-Coder-30B-A3B 4-bit on the target
+  Mac, median time to first token over turns 2–20 is at least 5× lower with the cache than without.
+- **SC-002**: In a mutation suite of at least 100 structural cases (append, edit, rewind, branch,
+  model or template change), zero stale reuses occur (every reused token range equals the request's
+  tokens under the same model identity). On real weights for 30 of those cases, under teacher
+  forcing the log-probability of the reference next token differs from cache-off by at most 1e-2
+  at every position, and the first 32 greedy tokens are identical for at least 95% of cases.
 - **SC-003**: Restoring a 30K-token prefix from cache takes under 10% of the time to compute it.
-- **SC-004**: 100% of injected volatile-content misses in the diagnostics suite report the correct
-  divergence position and cause category.
-- **SC-005**: Under simulated memory pressure the cache shrinks within 1 second and no running
-  request fails.
-- **SC-006**: Against llama.cpp server, Ollama and oMLX with their prompt caches enabled, mrun's
-  median time to first token on the recorded agent session is equal or better (published via
-  feature 005, losing cells included).
+- **SC-004**: 100% of injected volatile-content cases in the diagnostics suite (at least 20) report
+  the correct divergence position and cause category.
+- **SC-005**: Under a simulated memory-pressure warning, cached bytes and MLX cache memory drop
+  within 1 second and no running request fails.
 
 ## Assumptions
 

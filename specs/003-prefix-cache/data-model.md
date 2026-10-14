@@ -2,8 +2,7 @@
 
 ## CacheKey
 
-`{model_identity (004 manifest identity), kv_dtype, template_hash, normalization: Option<profile>}`
-— one radix tree per key.
+`{model_identity (001 R10), kv_dtype, template_hash}` — one radix tree per key.
 
 ## PrefixNode
 
@@ -11,20 +10,30 @@
 | --- | --- | --- |
 | edge | Vec<u32> | token slice from parent to this node |
 | depth | u32 | tokens from root to end of edge |
-| segment | Option<KvSegmentId> | KV bytes for this edge's tokens (owned copy in the engine) |
-| bytes | u64 | segment size |
-| recompute_s | f32 | estimated prefill time saved |
-| last_used | Instant | |
+| segment | KvSegmentId | owned KV for exactly this edge's tokens (always present) |
+| bytes | u64 | segment size (from `Engine::snapshot`) |
+| kind | System \| User \| Tool \| Assistant \| Periodic | eviction order |
+| text_hash | Option<u64> | hash of the message text ending at this node (miss classification) |
+| last_used | Instant | LRU |
 | in_use | u32 | pinned while > 0 |
-| boundary | MessageEnd \| Periodic | why the snapshot exists |
 | state_checkpoint | Option<StateId> | reserved for hybrid models (FR-012); always None now |
 
-Invariants: children have distinct first tokens; a node with `in_use > 0` and its ancestors are
-not evicted; sum of `bytes` ≤ cache capacity = KV capacity − active reservation.
+Invariants (property-tested):
+- children have distinct first tokens;
+- every node on any root path owns a segment for its edge, so restore along a path is contiguous;
+- a split at token p of an edge copies the segment into [start, p) and [p, end) and drops the
+  original;
+- only leaves with `in_use == 0` are evicted; ancestors of pinned nodes are never evicted;
+- `sum(bytes) + active_cache_bytes ≤ kv_capacity_bytes`.
 
-## Lookup result
+## LivePath
 
-`{matched: u32, segments: Vec<KvSegmentId>, hot: bool, miss: MissReport}`
+The active cache viewed as an unmaterialized path: tokens, boundary positions and kinds. Its
+boundary prefixes are materialized into nodes only when the live path is replaced (R2).
+
+## Lookup
+
+`{matched: u32, on_live_path: bool, nodes: Vec<NodeId> (pinned), miss: MissReport}`
 
 ## MissReport
 
@@ -32,13 +41,11 @@ not evicted; sum of `bytes` ≤ cache capacity = KV capacity − active reservat
 | --- | --- |
 | prompt_tokens | u32 |
 | cached_tokens | u32 (reused) |
-| closest_cached | u32 (longest prefix ever seen for this key, if still known) |
+| closest_cached | u32 (longest prefix known for this key, incl. ghosts) |
 | divergence | Option<u32> (token position) |
 | cause | new \| edit \| template \| volatile \| evicted \| capacity \| model \| disabled \| none |
-| normalized | Option<profile> |
-| excerpt | Option<String> (only with `--debug-cache`) |
 
 ## CacheStats (`mrun ps`, `/mrun/status`)
 
-`{entries, bytes, capacity_bytes, hit_tokens_total, prompt_tokens_total, hit_rate, evictions,
+`{segments, bytes, live_tokens, hit_tokens_total, prompt_tokens_total, hit_rate, evictions,
 pressure_events, last_miss: MissReport}`

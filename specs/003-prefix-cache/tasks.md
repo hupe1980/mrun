@@ -8,44 +8,44 @@ description: "Tasks for 003 Prefix Cache"
 
 ## Phase 1: Setup
 
-- [ ] T001 Add proptest dev-dependency; create `crates/mrun/src/cache/{mod.rs, tree.rs, evict.rs, miss.rs, normalize.rs}` module skeletons
+- [ ] T001 Add proptest dev-dependency; create `crates/mrun/src/cache/{mod.rs, tree.rs, evict.rs, miss.rs}` skeletons
 
 ## Phase 2: Foundational
 
-- [ ] T002 `crates/mrun-engine`: implement `Engine::snapshot(range)` (materialized slice copy + eval), `restore(segments, keep)` (copy into fresh step-aligned buffers, trim), `drop_segment`; CPU tests: restore + continue equals uninterrupted run within 1e-3 on tiny model; no aliasing (append after restore does not copy the full buffer — check via memory counters)
-- [ ] T003 `ScriptedEngine` snapshot/restore with structural tracking (which token ranges each segment holds)
-- [ ] T004 `cache/tree.rs`: radix tree (insert with edge split, longest-match walk, pin/unpin, remove leaf) + proptest invariants in `crates/mrun/tests/prefix_tree_props.rs`
+- [ ] T002 Verify 001's `Engine::snapshot/restore/drop_segment/trim` meet the contract on CPU (tiny model): restore + continue equals uninterrupted within 1e-3; snapshot buffers never alias the active cache; append after restore does not copy the whole buffer (memory counters)
+- [ ] T003 `ScriptedEngine` segment tracking (which token ranges each segment holds) for structural tests
+- [ ] T004 `cache/tree.rs`: radix tree (insert with edge split by segment copy, longest-match walk incl. live path, pin/unpin, leaf removal) + proptest invariants from the data model in `crates/mrun/tests/prefix_tree_props.rs`; lookup microbench (≤ 1 ms at 100K tokens)
 
 ## Phase 3: US1 — Fast repeated turns (P1) 🎯 MVP
 
-- [ ] T005 [US1] `cache/mod.rs` `lookup`/`commit` using renderer boundaries (002 T004) + periodic 4,096-token cuts; hot path when the active cache is a prefix
-- [ ] T006 [US1] Integrate in `runtime/worker.rs`: lookup → restore/hot → admission → prefill remainder → commit prompt segments → commit assistant segment on Stop/ToolCalls
-- [ ] T007 [US1] Usage reports cached/processed exactly (FR-005) in all three APIs; per-request `"mrun": {"cache": false}` and `--no-cache`
-- [ ] T008 [US1] Full-prompt hit reprocesses exactly the last token (FR-004) — test
+- [ ] T005 [US1] `cache/mod.rs` lookup / evict_for / prepare / finish / release per contract, live-path materialization on replacement, boundaries from 002's renderer, periodic 4,096-token cuts
+- [ ] T006 [US1] Integrate in `runtime/worker.rs` in contract order (lookup → admission → prepare → prefill → decode with lazy eviction → finish → release); test: admission failure after a hit leaves the store unchanged
+- [ ] T007 [US1] Supply cached/processed counts to 002's usage mapping and `x-mrun-cache-*` headers; `--no-cache` and per-request opt-out
+- [ ] T008 [US1] Full-prompt hit reprocesses exactly the last token (FR-004); divergence inside the live path trims without copying (FR-003) — tests
 
 ## Phase 4: US2 — Branches share safely (P1)
 
-- [ ] T009 [US2] Mutation suite (≥ 100 cases: append, edit at positions, rewind, interleaved branches, model/template change) in `crates/mrun/tests/prefix_mutations.rs` asserting structural exactness (reused ranges equal request tokens under the same key)
-- [ ] T010 [US2] macOS numerics `crates/mrun-engine/tests/prefix_numerics.rs`: cache-on vs cache-off log-prob |Δ| ≤ 1e-2, greedy agreement ≥ 99% (SC-002)
+- [ ] T009 [US2] Mutation suite (≥ 100 cases: append, edit at positions, rewind, interleaved branches, model/template change, cancel mid-prefill) in `crates/mrun/tests/prefix_mutations.rs` asserting structural exactness and in-memory only (no files written)
+- [ ] T010 [US2] macOS numerics `crates/mrun-engine/tests/prefix_numerics.rs` on 30 cases (SC-002 thresholds)
+- [ ] T011 [US2] Template round-trip tests per model and API: re-rendered history (with reasoning, tool calls) vs generated tokens; mismatches classified `template`
 
 ## Phase 5: US3 — Know why the cache missed (P1)
 
-- [ ] T011 [P] [US3] `cache/miss.rs`: closest-prefix tracking, divergence position, cause classification (new, edit, template, volatile, evicted, capacity, model, disabled); volatile patterns table (Claude Code attribution/billing header, timestamps); tests per cause
-- [ ] T012 [US3] Expose MissReport in `usage.mrun.cache` / `response.metadata.mrun.cache`, `/mrun/status`, `mrun ps`; `--debug-cache` excerpts (never written to disk; audit test)
-- [ ] T013 [US3] `cache/normalize.rs` opt-in `--normalize claude-code` profile + reporting (FR-013); off by default
+- [ ] T012 [P] [US3] `cache/miss.rs`: closest-prefix tracking with ghost list, text hashes per boundary, classification precedence, volatile pattern table (Claude Code attribution block, timestamps); ≥ 20 injected cases (SC-004)
+- [ ] T013 [US3] MissReport in headers, `/mrun/status`, `mrun ps`; `--debug-cache` excerpts on the server terminal only, refused off-loopback; audit test (no excerpts in responses or on disk)
 
 ## Phase 6: US4 — Cache never costs memory safety (P2)
 
-- [ ] T014 [P] [US4] `cache/evict.rs`: score = recompute seconds / bytes × exp(−idle/10 min); never evict pinned; `evict_for(bytes)` used by admission; tests
-- [ ] T015 [US4] `runtime/pressure.rs`: macOS dispatch memory-pressure source (warn → evict to 50%, critical → evict all unpinned), Linux no-op; test via injected events; manual check with `memory_pressure`
+- [ ] T014 [P] [US4] `cache/evict.rs`: LRU with turn-type order, never pinned, `clear_cache()` after evicting; tests
+- [ ] T015 [US4] `runtime/pressure.rs`: macOS dispatch memory-pressure source → worker queue, handled between steps (warning → 50%, critical → all unpinned); Linux no-op; injected-event test asserting < 1 s and running request unaffected
 - [ ] T016 [US4] `mrun cache clear` + `POST /mrun/cache/clear`; running request unaffected — test
 
 ## Phase 7: Polish
 
-- [ ] T017 [P] Measure SC-001 (agent replay 5× TTFT) and SC-003 (restore < 10% of prefill) with `mrun bench`; record in research
-- [ ] T018 [P] README section "Why did my cache miss?"
+- [ ] T017 [P] SC-001 (agent replay 5× TTFT, trace from 005) and SC-003 (restore < 10% of prefill) measured; record in research
+- [ ] T018 [P] README section "Why did my cache miss?" incl. the shared-cache side-channel note (FR-011)
 
 ## Dependencies
 
-Needs 001 (engine snapshot API) and 002 (renderer boundaries, usage). T002–T004 → T005 → T006 →
-T007/T008 → US2/US3/US4 in any order.
+Needs 001 (Engine primitives) and 002 (renderer boundaries, headers, worker). T002–T004 → T005 →
+T006 → T007/T008 → US2/US3/US4 in any order. SC-001 needs 005's trace.
