@@ -4,13 +4,13 @@
   "license": "MIT OR Apache-2.0",
   "license_files": ["../../../LICENSE-MIT", "../../../LICENSE-APACHE"],
   "provenance": "mrun-authored self-contained Rust repair fixtures; references are authoring controls, not model outcomes",
-  "language": "Rust 2024, minimum 1.85.0",
+  "language": "Rust 2024, minimum 1.94.0",
   "dependencies": {"serde_json": "=1.0.154"},
   "seeds": [7, 19, 41],
   "allowed_actions": ["read", "edit", "test"],
   "tool_calls": 12,
   "wall_seconds": 180,
-  "test_command": ["cargo", "+1.85.0", "test", "--offline"],
+  "test_command": ["cargo", "+1.94.0", "test", "--offline"],
   "cases": [
     {
       "id": "C-001", "prompt": "Fix the off-by-one sum so the upper bound is included and zero remains valid.",

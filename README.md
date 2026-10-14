@@ -17,9 +17,9 @@ cargo test --locked --lib
 cargo check --locked --all-targets --all-features
 ```
 
-The foundation integration suite includes deliberately failing admission and qualification tests
-for unimplemented behavior; the full test suite is not green. System observations and model-profile
-eligibility remain unavailable until a qualified backend and its resource controls are implemented.
+The portable foundation suite, including the admission policy and qualification-report contracts,
+passes. Real system observations remain unavailable, so admission fails closed until a backend and
+its resource controls are implemented; no model profile is eligible for serving.
 
 The `mrun` package at version `0.0.1` has no stable public API.
 The project repository is [hupe1980/mrun](https://github.com/hupe1980/mrun).

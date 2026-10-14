@@ -95,7 +95,7 @@ fn coding_fixtures_compile_fail_behaviorally_and_have_passing_references() {
         std::fs::create_dir_all(workspace.join("src")).unwrap();
         std::fs::write(
             workspace.join("Cargo.toml"),
-            "[package]\nname=\"mrun-authored-task\"\nversion=\"0.0.0\"\nedition=\"2024\"\nrust-version=\"1.85\"\n[dependencies]\nserde_json=\"=1.0.154\"\n",
+            "[package]\nname=\"mrun-authored-task\"\nversion=\"0.0.0\"\nedition=\"2024\"\nrust-version=\"1.94\"\n[dependencies]\nserde_json=\"=1.0.154\"\n",
         )
         .unwrap();
         for (source_key, files_key, should_pass) in [
@@ -119,7 +119,7 @@ fn coding_fixtures_compile_fail_behaviorally_and_have_passing_references() {
             let result = std::process::Command::new(cargo)
                 .args(["test", "--offline", "--lib"])
                 .current_dir(&workspace)
-                .env("RUSTUP_TOOLCHAIN", "1.85.0")
+                .env("RUSTUP_TOOLCHAIN", "1.94.0")
                 .env("RUSTC", cargo.with_file_name("rustc"))
                 .env("CARGO_TARGET_DIR", root.path().join("target"))
                 .output()
