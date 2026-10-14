@@ -1,0 +1,82 @@
+diff --git a/candle-core/src/metal_backend/device.rs b/candle-core/src/metal_backend/device.rs
+index da748843..8ee160a8 100644
+--- a/candle-core/src/metal_backend/device.rs
++++ b/candle-core/src/metal_backend/device.rs
+@@ -109,6 +109,7 @@ impl MetalDevice {
+             subbuffers.retain(|s| {
+                 if Arc::strong_count(s) == 1 {
+                     self.residency_set.remove(s);
++                    candle_metal_kernels::metal::report_released(s.length());
+                     false
+                 } else {
+                     true
+@@ -120,6 +121,7 @@ impl MetalDevice {
+             subbuffers.retain(|s| {
+                 if Arc::strong_count(s) == 1 {
+                     self.residency_set.remove(s);
++                    candle_metal_kernels::metal::report_released(s.length());
+                     false
+                 } else {
+                     true
+diff --git a/candle-metal-kernels/src/metal/device.rs b/candle-metal-kernels/src/metal/device.rs
+index 9d724b2b..d49bb8c8 100644
+--- a/candle-metal-kernels/src/metal/device.rs
++++ b/candle-metal-kernels/src/metal/device.rs
+@@ -4,7 +4,40 @@ use crate::{
+ use objc2::{rc::Retained, runtime::AnyObject, runtime::ProtocolObject};
+ use objc2_foundation::NSString;
+ use objc2_metal::{MTLCompileOptions, MTLCopyAllDevices, MTLCreateSystemDefaultDevice, MTLDevice};
+-use std::{ffi::c_void, ptr};
++use std::{ffi::c_void, ptr, sync::OnceLock};
++
++/// Experimental mrun reservation gate (patch 0001, not upstream): consulted with the exact
++/// byte length before every raw buffer constructor, so a denied reservation allocates nothing.
++pub type AllocationGate = fn(usize) -> Result<(), String>;
++/// Experimental mrun release report: bytes whose last pooled reference was dropped after a
++/// completed command-buffer wait.
++pub type ReleaseReport = fn(usize);
++
++static ALLOCATION_GATE: OnceLock<(AllocationGate, ReleaseReport)> = OnceLock::new();
++
++/// Installs the process-wide gate once; a second installation is refused.
++pub fn install_allocation_gate(
++    gate: AllocationGate,
++    release: ReleaseReport,
++) -> Result<(), MetalKernelError> {
++    ALLOCATION_GATE
++        .set((gate, release))
++        .map_err(|_| MetalKernelError::InvalidInput("allocation gate already installed".into()))
++}
++
++fn admit(length: usize) -> Result<(), MetalKernelError> {
++    match ALLOCATION_GATE.get() {
++        Some((gate, _)) => gate(length).map_err(MetalKernelError::FailedToCreateResource),
++        None => Ok(()),
++    }
++}
++
++/// Reports bytes released by the pool after synchronization.
++pub fn report_released(length: usize) {
++    if let Some((_, release)) = ALLOCATION_GATE.get() {
++        release(length);
++    }
++}
+ 
+ /// Metal device type classification based on Apple Silicon architecture.
+ ///
+@@ -75,6 +108,7 @@ impl Device {
+         length: usize,
+         options: MTLResourceOptions,
+     ) -> Result<Buffer, MetalKernelError> {
++        admit(length)?;
+         self.as_ref()
+             .newBufferWithLength_options(length, options)
+             .map(Buffer::new)
+@@ -91,6 +125,7 @@ impl Device {
+     ) -> Result<Buffer, MetalKernelError> {
+         let pointer = ptr::NonNull::new(pointer as *mut c_void)
+             .ok_or_else(|| MetalKernelError::InvalidInput("Null pointer".to_string()))?;
++        admit(length)?;
+         unsafe {
+             self.as_ref()
+                 .newBufferWithBytes_length_options(pointer, length, options)
