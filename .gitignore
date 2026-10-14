@@ -28,13 +28,12 @@ rustc-ice-*.txt
 /cache/
 /benchmark-results/
 
-# Internal architecture notes and local Spec Kit feature specs.
+# Internal architecture notes and local Spec Kit planning.
 # Public documentation and packages must not depend on these paths.
-# Spec Kit tooling for Claude (.specify/, .claude/skills/speckit-*/) is tracked;
-# machine-local Spec Kit state is ignored by .specify/.gitignore.
-/concepts/
-/specs/
-/.github/skills/speckit-*/
+#/concepts/
+#/specs/
+#/.specify/
+#/.github/skills/speckit-*/
 
 # Local compiled artifacts
 /build/
