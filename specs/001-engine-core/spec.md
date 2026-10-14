@@ -8,6 +8,15 @@
 
 **Input**: User description: "Engine core: run a pulled local coding model on an Apple Silicon Mac from the mrun binary. `mrun run <model>` streams generated text in the terminal; the engine owns the model's attention state with fixed-grid chunked prefill so a long prompt can be cancelled within one chunk; a startup memory budget sizes weights + KV + measured scratch and rejects prompts that cannot fit with the numbers; greedy output must match the reference implementation token-for-token; decode speed within 10% of the reference on the same weights. First models: Qwen3-8B-4bit (reference) and Qwen3-Coder-30B-A3B-Instruct-4bit (MoE). Sampling: temperature, top-p, top-k, min-p, seed, stop sequences, max tokens. Engine runs on a dedicated thread; async callers stream tokens through a bounded channel."
 
+## Clarifications
+
+### Session 2026-10-14
+
+- Q: What prompt-processing chunk size meets the 300 ms interruption target? → A: Default 512 tokens on a fixed grid (configurable 128–2048); the plan validates it against SC-004 and prompt speed (SC-003) with `mrun bench`.
+- Q: Should Qwen3 hybrid models think by default in `mrun run`? → A: No thinking unless requested (`--think`); Qwen3-Coder has no thinking mode. (Maintainer decision.)
+- Q: How many conversations run at once? → A: One active generation; others queue (feature 002). Parallel decoding is a later feature. (Maintainer decision.)
+- Q: Where do models come from? → A: The shared Hugging Face cache (honoring `HF_HOME`), plus explicit local paths. (Maintainer decision; pulling is feature 004.)
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Chat with a local model in the terminal (Priority: P1)

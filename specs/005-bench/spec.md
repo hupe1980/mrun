@@ -8,6 +8,14 @@
 
 **Input**: User description: "`mrun bench` measures what agents feel and compares fairly: agent-trace replay (recorded multi-turn sessions with tool results), synthetic long-context and decode cells, cancellation latency and memory; runs mrun and competitors (llama.cpp server, Ollama, oMLX, mlx-lm server) on the same machine with their caches enabled, records full settings and machine state, emits JSON plus a markdown report; quality checks so speed never hides wrong output."
 
+## Clarifications
+
+### Session 2026-10-14
+
+- Q: Where do agent traces come from? → A: Recorded by mrun maintainers running the supported clients on public open-source repositories, with mrun's request recorder (opt-in, debug only), then reviewed and redacted before bundling.
+- Q: What is the primary comparison metric? → A: Median time to first token per turn and total session time on the agent suite; tok/s cells are secondary.
+- Q: Which competitor versions? → A: The latest stable release of each at measurement time, recorded in the report; profiles document each one's recommended cache flags.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Measure my agent workload (Priority: P1)

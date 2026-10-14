@@ -8,6 +8,14 @@
 
 **Input**: User description: "Best-in-class developer experience: `mrun pull/ls/rm` with content-hash verified models and short aliases, `mrun connect <client>` that configures Claude Code, Codex and OpenCode, `mrun doctor` that diagnoses the machine and setup, `mrun ps` that shows the loaded model, memory and cache, one config file with sane defaults, shell completions; fresh Mac to working agent session in under 5 minutes."
 
+## Clarifications
+
+### Session 2026-10-14
+
+- Q: Where are models stored? → A: In the shared Hugging Face hub cache (`HF_HOME` / `HF_HUB_CACHE`), so models downloaded by other MLX tools are reused; mrun keeps aliases, manifests and config in `~/.mrun` (`MRUN_HOME` overrides). (Maintainer decision.)
+- Q: Where is the config file? → A: `~/.mrun/config.toml`; environment variables `MRUN_*` override it; flags override both.
+- Q: Which client config does `connect` write? → A: Claude Code: environment settings in `~/.claude/settings.json` (`ANTHROPIC_BASE_URL`, model, `CLAUDE_CODE_ATTRIBUTION_HEADER=0`); Codex: a provider profile in `~/.codex/config.toml` with `wire_api = "responses"`; OpenCode: a provider in `opencode.json`. Exact keys are verified against pinned client versions in the plan.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - From zero to a working agent in minutes (Priority: P1)

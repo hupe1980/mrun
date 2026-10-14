@@ -8,6 +8,14 @@
 
 **Input**: User description: "Exact prefix reuse across turns, branches and tool loops: a radix tree of attention-state snapshots keyed by token IDs per model identity; restore by copy, hot path zero-copy; every response reports cached tokens and every miss explains where and why the prompt diverged; memory pressure sheds cache first; eviction weighs recompute cost saved per byte with recency; designed so hybrid models can store state checkpoints."
 
+## Clarifications
+
+### Session 2026-10-14
+
+- Q: How much memory may the cache use? → A: All attention-state capacity not reserved by the active request; there is no separate cache budget to tune.
+- Q: Do miss explanations include prompt text? → A: Positions, counts and cause only by default; text excerpts only with `--debug-cache`, shown live and never written to disk.
+- Q: How do concurrent subagents share? → A: Requests are serialized (feature 002); a queued request that shares a prefix with the active one reuses it once that prefix is cached. (Maintainer decision: queue now, batch later.)
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Fast repeated agent turns (Priority: P1)
