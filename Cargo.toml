@@ -1,0 +1,26 @@
+[package]
+name = "mrun"
+version = "0.0.1"
+authors = ["hupe1980"]
+edition = "2024"
+rust-version = "1.94"
+description = "Foundations for a local LLM runtime for Apple Silicon"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hupe1980/mrun"
+readme = "README.md"
+keywords = ["llm", "inference", "apple-silicon"]
+include = ["/Cargo.toml", "/src/**", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+
+[features]
+default = []
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+clap = { version = "~4.5", features = ["derive"] }
+jsonschema = { version = "0.33", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower = { version = "0.5", features = ["limit", "util"] }
+tracing = "0.1"

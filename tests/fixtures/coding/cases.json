@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "stage": "draft",
+  "license": "MIT OR Apache-2.0",
+  "license_files": ["../../../LICENSE-MIT", "../../../LICENSE-APACHE"],
+  "provenance": "mrun-authored self-contained Rust repair fixtures; references are authoring controls, not model outcomes",
+  "language": "Rust 2024, minimum 1.85.0",
+  "dependencies": {"serde_json": "=1.0.154"},
+  "seeds": [7, 19, 41],
+  "allowed_actions": ["read", "edit", "test"],
+  "tool_calls": 12,
+  "wall_seconds": 180,
+  "test_command": ["cargo", "+1.85.0", "test", "--offline"],
+  "cases": [
+    {
+      "id": "C-001", "prompt": "Fix the off-by-one sum so the upper bound is included and zero remains valid.",
+      "source": "pub fn sum(upper: u32) -> u64 { (1..upper).map(u64::from).sum() }",
+      "reference": "pub fn sum(upper: u32) -> u64 { (1..=upper).map(u64::from).sum() }",
+      "tests": "#[test] fn upper_bound() { assert_eq!(sum(0), 0); assert_eq!(sum(1), 1); assert_eq!(sum(4), 10); }"
+    },
+    {
+      "id": "C-002", "prompt": "Return None for an empty input rather than inventing a value.",
+      "source": "pub fn first(values: &[i32]) -> Option<i32> { values.first().copied().or(Some(0)) }",
+      "reference": "pub fn first(values: &[i32]) -> Option<i32> { values.first().copied() }",
+      "tests": "#[test] fn empty_input() { assert_eq!(first(&[]), None); assert_eq!(first(&[7, 8]), Some(7)); }"
+    },
+    {
+      "id": "C-003", "prompt": "Slice by Unicode scalar values without corrupting UTF-8 or panicking.",
+      "source": "pub fn prefix(text: &str, count: usize) -> String { String::from_utf8_lossy(&text.as_bytes()[..count.min(text.len())]).into_owned() }",
+      "reference": "pub fn prefix(text: &str, count: usize) -> String { text.chars().take(count).collect() }",
+      "tests": "#[test] fn unicode_prefix() { assert_eq!(prefix(\"a\\u{e9}z\", 2), \"a\\u{e9}\"); assert_eq!(prefix(\"\", 2), \"\"); assert_eq!(prefix(\"abc\", 10), \"abc\"); }"
+    },
+    {
+      "id": "C-004", "prompt": "Report integer overflow instead of wrapping it.",
+      "source": "pub fn add(left: u32, right: u32) -> Option<u32> { Some(left.wrapping_add(right)) }",
+      "reference": "pub fn add(left: u32, right: u32) -> Option<u32> { left.checked_add(right) }",
+      "tests": "#[test] fn overflow() { assert_eq!(add(2, 3), Some(5)); assert_eq!(add(u32::MAX, 1), None); }"
+    },
+    {
+      "id": "C-005", "prompt": "Sort by the first tuple field while preserving original order for equal keys.",
+      "source": "pub fn ordered(mut items: Vec<(u32, u32)>) -> Vec<(u32, u32)> { items.sort_by_key(|&(key, identity)| (key, std::cmp::Reverse(identity))); items }",
+      "reference": "pub fn ordered(mut items: Vec<(u32, u32)>) -> Vec<(u32, u32)> { items.sort_by_key(|&(key, _identity)| key); items }",
+      "tests": "#[test] fn stable_order() { assert_eq!(ordered(vec![(1, 1), (1, 2), (0, 3)]), vec![(0, 3), (1, 1), (1, 2)]); }"
+    },
+    {
+      "id": "C-006", "prompt": "Deduplicate without changing first-occurrence order.",
+      "source": "pub fn unique(mut values: Vec<u32>) -> Vec<u32> { values.sort(); values.dedup(); values }",
+      "reference": "pub fn unique(values: Vec<u32>) -> Vec<u32> { let mut seen = std::collections::HashSet::new(); values.into_iter().filter(|value| seen.insert(*value)).collect() }",
+      "tests": "#[test] fn first_occurrences() { assert_eq!(unique(vec![3, 1, 3, 2, 1]), vec![3, 1, 2]); assert!(unique(vec![]).is_empty()); }"
+    },
+    {
+      "id": "C-007", "prompt": "Apply the Gregorian leap-year rule at century boundaries.",
+      "source": "pub fn leap(year: u32) -> bool { year % 4 == 0 }",
+      "reference": "pub fn leap(year: u32) -> bool { year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) }",
+      "tests": "#[test] fn century_boundary() { assert!(!leap(1900)); assert!(leap(2000)); assert!(leap(2024)); assert!(!leap(2023)); }"
+    },
+    {
+      "id": "C-008", "prompt": "Accept only nonempty normal relative path components; reject traversal and absolute paths.",
+      "source": "pub fn local(path: &std::path::Path) -> bool { !path.is_absolute() }",
+      "reference": "pub fn local(path: &std::path::Path) -> bool { !path.as_os_str().is_empty() && path.components().all(|part| matches!(part, std::path::Component::Normal(_))) }",
+      "tests": "#[test] fn safe_paths() { use std::path::Path; assert!(local(Path::new(\"src/lib.rs\"))); assert!(!local(Path::new(\"../private\"))); assert!(!local(Path::new(\"/private\"))); assert!(!local(Path::new(\"\"))); }"
+    },
+    {
+      "id": "C-009", "prompt": "Validate the required JSON count field and return a stable error for missing or mistyped data.",
+      "source": "pub fn count(value: &serde_json::Value) -> Result<u64, &'static str> { Ok(value.get(\"count\").and_then(serde_json::Value::as_u64).unwrap_or(0)) }",
+      "reference": "pub fn count(value: &serde_json::Value) -> Result<u64, &'static str> { value.get(\"count\").and_then(serde_json::Value::as_u64).ok_or(\"invalid count\") }",
+      "tests": "#[test] fn required_field() { assert_eq!(count(&serde_json::json!({})), Err(\"invalid count\")); assert_eq!(count(&serde_json::json!({\"count\": 7})), Ok(7)); assert_eq!(count(&serde_json::json!({\"count\": \"7\"})), Err(\"invalid count\")); }"
+    },
+    {
+      "id": "C-010", "prompt": "Preserve escaped JSON string semantics using serde_json, including newline and embedded quotes.",
+      "source": "pub fn parse(text: &str) -> Result<String, serde_json::Error> { serde_json::from_str::<String>(text).map(|value| value.replace('\\n', \"\\\\n\")) }",
+      "reference": "pub fn parse(text: &str) -> Result<String, serde_json::Error> { serde_json::from_str::<String>(text) }",
+      "tests": "#[test] fn escaped_strings() { assert_eq!(parse(\"\\\"line\\\\nquote\\\\\\\"\\\"\").unwrap(), \"line\\nquote\\\"\"); assert!(parse(\"unterminated\").is_err()); }"
+    },
+    {
+      "id": "C-011", "prompt": "Propagate parse and overflow errors instead of turning invalid input into success.",
+      "source": "pub fn double(text: &str) -> Result<u32, &'static str> { Ok(text.parse::<u32>().unwrap_or(0).wrapping_mul(2)) }",
+      "reference": "pub fn double(text: &str) -> Result<u32, &'static str> { text.parse::<u32>().map_err(|_| \"invalid\")?.checked_mul(2).ok_or(\"overflow\") }",
+      "tests": "#[test] fn error_propagation() { assert_eq!(double(\"bad\"), Err(\"invalid\")); assert_eq!(double(\"7\"), Ok(14)); assert_eq!(double(\"4294967295\"), Err(\"overflow\")); }"
+    },
+    {
+      "id": "C-012", "prompt": "Release the request-local reservation on both normal and cancelled paths.",
+      "source": "pub fn run(cancelled: bool, live: &std::cell::Cell<u32>) { live.set(live.get() + 1); if cancelled { return; } live.set(live.get() - 1); }",
+      "reference": "pub fn run(cancelled: bool, live: &std::cell::Cell<u32>) { live.set(live.get() + 1); live.set(live.get() - 1); if cancelled { return; } }",
+      "tests": "#[test] fn cancellation_cleanup() { let live = std::cell::Cell::new(0); run(true, &live); assert_eq!(live.get(), 0); run(false, &live); assert_eq!(live.get(), 0); }"
+    },
+    {
+      "id": "C-013", "prompt": "Remove the resource leak so the RAII lease is released after the operation.",
+      "source": "struct Lease<'a>(&'a std::cell::Cell<u32>); impl Drop for Lease<'_> { fn drop(&mut self) { self.0.set(self.0.get() - 1); } } pub fn use_resource(live: &std::cell::Cell<u32>) { live.set(live.get() + 1); let lease = Lease(live); std::mem::forget(lease); }",
+      "reference": "struct Lease<'a>(&'a std::cell::Cell<u32>); impl Drop for Lease<'_> { fn drop(&mut self) { self.0.set(self.0.get() - 1); } } pub fn use_resource(live: &std::cell::Cell<u32>) { live.set(live.get() + 1); let _lease = Lease(live); }",
+      "tests": "#[test] fn resource_release() { let live = std::cell::Cell::new(0); use_resource(&live); assert_eq!(live.get(), 0); use_resource(&live); assert_eq!(live.get(), 0); }"
+    },
+    {
+      "id": "C-014", "prompt": "Preserve FIFO fairness in the request queue.",
+      "source": "pub fn next(queue: &mut std::collections::VecDeque<u32>) -> Option<u32> { queue.pop_back() }",
+      "reference": "pub fn next(queue: &mut std::collections::VecDeque<u32>) -> Option<u32> { queue.pop_front() }",
+      "tests": "#[test] fn fifo() { let mut queue = std::collections::VecDeque::from([1, 2, 3]); assert_eq!(next(&mut queue), Some(1)); assert_eq!(next(&mut queue), Some(2)); assert_eq!(next(&mut queue), Some(3)); assert_eq!(next(&mut queue), None); }"
+    },
+    {
+      "id": "C-015", "prompt": "Treat the limit as total attempts, including zero, and stop after the first success.",
+      "source": "pub fn retry(limit: u32, mut operation: impl FnMut() -> bool) -> bool { for _attempt in 0..=limit { if operation() { return true; } } false }",
+      "reference": "pub fn retry(limit: u32, mut operation: impl FnMut() -> bool) -> bool { for _attempt in 0..limit { if operation() { return true; } } false }",
+      "tests": "#[test] fn attempt_limit() { let mut calls = 0; assert!(!retry(2, || { calls += 1; false })); assert_eq!(calls, 2); assert!(!retry(0, || { calls += 1; true })); assert_eq!(calls, 2); assert!(retry(3, || true)); }"
+    },
+    {
+      "id": "C-016", "prompt": "Map queue-full to 429, queue-timeout to 503 and unknown-model to 404.",
+      "source": "pub fn status(code: &str) -> u16 { match code { \"queue_full\" => 503, \"queue_timeout\" => 429, \"model_not_found\" => 404, _ => 500 } }",
+      "reference": "pub fn status(code: &str) -> u16 { match code { \"queue_full\" => 429, \"queue_timeout\" => 503, \"model_not_found\" => 404, _ => 500 } }",
+      "tests": "#[test] fn http_statuses() { assert_eq!(status(\"queue_full\"), 429); assert_eq!(status(\"queue_timeout\"), 503); assert_eq!(status(\"model_not_found\"), 404); assert_eq!(status(\"unknown\"), 500); }"
+    },
+    {
+      "id": "C-017", "prompt": "Reject malformed or out-of-range CLI context values rather than silently clamping them.",
+      "source": "pub fn context(text: &str) -> Result<u32, &'static str> { Ok(text.parse::<u32>().unwrap_or(0).min(16384)) }",
+      "reference": "pub fn context(text: &str) -> Result<u32, &'static str> { let value = text.parse::<u32>().map_err(|_| \"invalid\")?; if !(256..=16384).contains(&value) { return Err(\"range\"); } Ok(value) }",
+      "tests": "#[test] fn cli_limits() { assert_eq!(context(\"256\"), Ok(256)); assert_eq!(context(\"16384\"), Ok(16384)); assert_eq!(context(\"bad\"), Err(\"invalid\")); assert_eq!(context(\"0\"), Err(\"range\")); assert_eq!(context(\"16385\"), Err(\"range\")); }"
+    },
+    {
+      "id": "C-018", "prompt": "Round scaled positive and negative values to the nearest integer rather than truncating.",
+      "source": "pub fn hundredths(value: f64) -> i64 { (value * 100.0) as i64 }",
+      "reference": "pub fn hundredths(value: f64) -> i64 { (value * 100.0).round() as i64 }",
+      "tests": "#[test] fn rounding() { assert_eq!(hundredths(1.236), 124); assert_eq!(hundredths(-1.236), -124); assert_eq!(hundredths(0.0), 0); }"
+    },
+    {
+      "id": "C-019", "prompt": "Use a 30-second timeout only when the configuration is absent; preserve explicit zero and positive values.",
+      "source": "pub fn timeout(value: Option<u64>) -> u64 { value.unwrap_or(0) }",
+      "reference": "pub fn timeout(value: Option<u64>) -> u64 { value.unwrap_or(30) }",
+      "tests": "#[test] fn configured_default() { assert_eq!(timeout(None), 30); assert_eq!(timeout(Some(0)), 0); assert_eq!(timeout(Some(12)), 12); }"
+    },
+    {
+      "id": "C-020", "prompt": "Migrate settings and consumer from a positional tuple to a Limits struct with named context_tokens and output_tokens fields. Preserve 8192/64 defaults and update both files.",
+      "source": "pub mod settings; pub mod consumer;",
+      "files": {"src/settings.rs": "pub fn limits() -> (u32, u32) { (8192, 64) }", "src/consumer.rs": "pub fn output_limit() -> u32 { crate::settings::limits().0 }"},
+      "reference": "pub mod settings; pub mod consumer;",
+      "reference_files": {"src/settings.rs": "pub struct Limits { pub context_tokens: u32, pub output_tokens: u32 } pub fn limits() -> Limits { Limits { context_tokens: 8192, output_tokens: 64 } }", "src/consumer.rs": "pub fn output_limit() -> u32 { crate::settings::limits().output_tokens }"},
+      "tests": "#[test] fn migrated_api() { assert_eq!(consumer::output_limit(), 64); assert!(include_str!(\"settings.rs\").contains(\"pub struct Limits\")); assert!(include_str!(\"consumer.rs\").contains(\".output_tokens\")); }"
+    }
+  ]
+}

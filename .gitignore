@@ -22,3 +22,37 @@ rustc-ice-*.txt
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Local inference data and unreviewed benchmark evidence
+/models/
+/cache/
+/benchmark-results/
+
+# Internal architecture notes and local Spec Kit planning.
+# Public documentation and packages must not depend on these paths.
+/concepts/
+/specs/
+/.specify/
+/.github/skills/speckit-*/
+
+# Local compiled artifacts
+/build/
+/release/
+*.o
+*.a
+*.so
+*.dylib
+*.rlib
+*.prof*
+
+# Local secrets, logs and editor artifacts
+.env*
+*.log
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.idea/
+.vscode/
+
+TODO.md

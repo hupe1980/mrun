@@ -1,0 +1,27 @@
+name: Portable Rust
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    name: Rust 1.94 portable contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install declared toolchain
+        run: rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
+      - name: Format
+        run: cargo +1.94.0 fmt --all --check
+      - name: Locked backend-free tests
+        run: cargo +1.94.0 test --locked --no-default-features --all-targets
+      - name: Strict portable Clippy
+        run: cargo +1.94.0 clippy --locked --no-default-features --all-targets -- -D warnings
+      - name: All portable targets
+        run: cargo +1.94.0 check --locked --no-default-features --all-targets
