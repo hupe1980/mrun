@@ -13,9 +13,9 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 
 ## Phase 1: Setup
 
-- [ ] T001 Replace the old scaffold with the workspace: root `Cargo.toml` (members `crates/mlx-sys`, `crates/mrun-engine`, `crates/mrun`; shared lints), move package metadata to `crates/mrun/Cargo.toml`, delete `src/`, `tests/` and the old fixtures
-- [ ] T002 [P] CI `.github/workflows/ci.yml`: Linux job (OpenBLAS/LAPACKE, CMake): fmt, clippy `-D warnings`, `cargo test --workspace`, plus `cargo test -p mrun --no-default-features`; macOS job: build only (hosted runners have no reliable Metal GPU for MLX)
-- [ ] T003 [P] `crates/mrun/src/main.rs` with clap: `run` only (other commands are added by their features)
+- [X] T001 Replace the old scaffold with the workspace: root `Cargo.toml` (members `crates/mrun-engine`, `crates/mrun`, plus `crates/mlx-sys` when T004 adds it; shared lints), move package metadata to `crates/mrun/Cargo.toml`, delete `src/`, `tests/` and the old fixtures
+- [X] T002 [P] CI `.github/workflows/ci.yml`: Linux job (OpenBLAS/LAPACKE, CMake): fmt, clippy `-D warnings`, `cargo test --workspace`, plus `cargo test -p mrun --no-default-features`; macOS job: build only (hosted runners have no reliable Metal GPU for MLX)
+- [X] T003 [P] `crates/mrun/src/main.rs` with clap: `run` only (other commands are added by their features)
 
 ## Phase 2: Foundational (blocks all stories)
 
@@ -23,10 +23,10 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 - [ ] T005 `crates/mlx-sys/src/bindings.rs` generated once (`regen.sh`) and checked in; smoke test evaluating `add`
 - [ ] T006 `crates/mrun-engine/src/mlx/` [feature mlx]: `Array` (RAII, `!Send`, `!Sync`), error handler → `Result`; ops: zeros, astype, reshape, transpose, matmul, quantized_matmul and gather_qmm with mode, take (embedding), argpartition, take_along_axis, sort, cumsum, argmax, logsumexp, softmax precise, where, slice, slice_update, concatenate, random key/categorical; `fast::{sdpa, rope, rms_norm}`; eval/async_eval; stream; safetensors load; memory (active/peak/cache, limits, clear_cache, wired limit); `device_info`; `deep_copy` (zeros + slice_update + eval) with a pointer-inequality debug assertion; CPU unit tests per op
 - [ ] T007 **M0 gate on the M4 Pro**: `crates/mrun-engine/examples/spike.rs` runs 4-bit quantized matmul, gather_qmm, sdpa and memory APIs on Metal with timings; record go/no-go in research R1
-- [ ] T008 [P] `crates/mrun-engine/src/engine.rs` + `identity.rs` (no MLX): `Engine` trait, ModelInfo, MemoryBudget, Segment, KvSegmentId, EngineError, CancelToken, Sampling, TokenMask; identity per research R10 with cache in `~/.mrun/identity.toml`; tests (HF blob-name shortcut, changed-file detection)
+- [X] T008 [P] `crates/mrun-engine/src/engine.rs` + `identity.rs` (no MLX): `Engine` trait, ModelInfo, MemoryBudget, Segment, KvSegmentId, EngineError, CancelToken, Sampling, TokenMask; identity per research R10 with cache in `~/.mrun/identity.toml`; tests (HF blob-name shortcut, changed-file detection)
 - [ ] T009 [P] `crates/mrun-engine/src/load.rs` [mlx]: `config.json` (qwen3, qwen3_moe), quantization with per-path overrides and mode inference, weights estimate from file sizes (pre-load check), safetensors load; named errors for unsupported architectures/quantizations; tests with generated tiny checkpoints
-- [ ] T010 [P] `crates/mrun/src/chat/{tokenizer.rs, template.rs, utf8.rs, stop.rs}`: tokenizers 0.23 (`default-features = false`, no `http`), minijinja 3 + pycompat rendering (with `enable_thinking`), UTF-8 hold-back, stop matcher with hold-back; tests incl. split multibyte and split stop strings
-- [ ] T011 `crates/mrun/src/runtime/{handle.rs, generate.rs, scripted.rs}`: `EngineHandle::spawn(factory)` (worker thread, crossbeam commands, bounded events cap 64, stall timeout 10 s → cancel); generic generation loop (reserve → prefill all but last → decode loop → stop/UTF-8 → exactly one `Finished` with `prefilled` → trim to committed tokens); `ScriptedEngine`; tests: one `Finished`, cancel at each phase, stall, trim after stop/cancel (FR-004)
+- [X] T010 [P] `crates/mrun/src/chat/{tokenizer.rs, template.rs, stop.rs}`: tokenizers 0.23 (`default-features = false`, `onig` only, no `http`), minijinja 3 + pycompat rendering (with `enable_thinking`), UTF-8-safe streaming decode (tokenizers' step decoder, in tokenizer.rs), stop matcher with hold-back; tests incl. split multibyte and split stop strings
+- [X] T011 `crates/mrun/src/runtime/{handle.rs, generate.rs, scripted.rs}`: `EngineHandle::spawn(factory)` (worker thread, crossbeam commands, bounded events cap 64, stall timeout 10 s → cancel); generic generation loop (reserve → prefill all but last → decode loop → stop/UTF-8 → exactly one `Finished` with `prefilled` → trim to committed tokens); `ScriptedEngine`; tests: one `Finished`, cancel at each phase, stall, trim after stop/cancel (FR-004)
 
 ## Phase 3: US1 — Chat in the terminal (P1) 🎯 MVP
 
@@ -47,7 +47,7 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 
 - [ ] T021 [P] [US3] `crates/mrun-engine/src/budget.rs`: physical memory (`sysctl hw.memsize`, `/proc/meminfo`), recommended working set, budget formula and overrides; unit tests
 - [ ] T022 [US3] Pre-load check from file sizes; scratch probe per research R6 (incl. per-layer growth transient) with cache in `~/.mrun/probe.toml`; `kv_capacity_tokens` capped by max position; MLX memory/cache/wired limits; refusal with all numbers (exit 4)
-- [ ] T023 [US3] Admission: prompt + max_output vs capacity (minus others' pinned, plus evictable); boundary tests (= capacity passes, +1 rejected) on ScriptedEngine and tiny model
+- [ ] T023 [US3] Admission: `prompt + max_output ≤ kv_capacity_tokens` (cached segments count as available, one request at a time); boundary tests (= capacity passes, +1 rejected) on ScriptedEngine (done in T011) and tiny model
 - [ ] T024 [US3] `mrun run --info` breakdown incl. current free memory (snapshot test)
 
 ## Phase 6: US4 — Trustworthy output (P2)

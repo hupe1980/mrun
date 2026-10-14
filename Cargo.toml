@@ -1,26 +1,31 @@
-[package]
-name = "mrun"
-version = "0.0.1"
-authors = ["hupe1980"]
+[workspace]
+resolver = "3"
+members = ["crates/mrun-engine", "crates/mrun"]
+
+[workspace.package]
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
-description = "Foundations for a local LLM runtime for Apple Silicon"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hupe1980/mrun"
-readme = "README.md"
-keywords = ["llm", "inference", "apple-silicon"]
-include = ["/Cargo.toml", "/src/**", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+authors = ["hupe1980"]
 
-[features]
-default = []
-
-[dependencies]
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
-clap = { version = "~4.5", features = ["derive"] }
-jsonschema = { version = "0.33", default-features = false }
+[workspace.dependencies]
+mrun-engine = { path = "crates/mrun-engine" }
+crossbeam-channel = "0.5.17"
+minijinja = { version = "3.0.0", features = ["serde", "json", "loop_controls", "preserve_order"] }
+minijinja-contrib = { version = "3.0.0", features = ["pycompat"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tower = { version = "0.5", features = ["limit", "util"] }
-tracing = "0.1"
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.11.1"
+tempfile = "3.27"
+thiserror = "2.0.21"
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
+toml = "1.1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

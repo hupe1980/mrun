@@ -34,7 +34,10 @@ Sources: [literature-study](../../concepts/research/literature-study.md) (A-1..A
   unstored boundaries only as far as free memory allows after evicting other unpinned leaves (the
   rest of the live path is dropped, never over budget), drop the live path, restore the matched
   segments (copy into fresh buffers, trim to the exact match) and immediately unpin them: they stay
-  in the tree as ordinary evictable leaves, so the request's own prefix is never counted twice.
+  in the tree as ordinary evictable leaves. During the copy both exist, so the restore peak is
+  `active allocation (prompt + min(max_output, 4K)) + matched tokens`; if that exceeds capacity
+  after evicting other unpinned leaves, the restore uses only the longest prefix of segments that
+  fits (cause `capacity` for the rest), never exceeding capacity.
   (4) prefill the remainder (≥ 1 token). (5) during decode, when the active cache grows, evict
   unpinned leaves on demand. Edge split during insert copies the segment into two slices.
 - **Rationale**: Constitution III (admission before execution); MLX donation semantics

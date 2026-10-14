@@ -1,0 +1,106 @@
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+/// Local inference server for coding agents on Apple Silicon.
+#[derive(Debug, Parser)]
+#[command(name = "mrun", version, about, propagate_version = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Chat with a local model in the terminal.
+    #[command(
+        after_help = "Examples:\n  mrun run mlx-community/Qwen3-8B-4bit\n  mrun run ./models/qwen3 --prompt \"Explain this error\" --max-tokens 512"
+    )]
+    Run(RunArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct RunArgs {
+    /// Local model directory or Hugging Face cache repo id (org/name).
+    model: String,
+    /// One-shot prompt; without it an interactive session starts.
+    #[arg(long)]
+    prompt: Option<String>,
+    /// System prompt.
+    #[arg(long)]
+    system: Option<String>,
+    #[arg(long, default_value_t = 0.0)]
+    temperature: f32,
+    #[arg(long, default_value_t = 1.0)]
+    top_p: f32,
+    #[arg(long, default_value_t = 0)]
+    top_k: u32,
+    #[arg(long, default_value_t = 0.0)]
+    min_p: f32,
+    #[arg(long)]
+    seed: Option<u64>,
+    #[arg(long, default_value_t = 2048)]
+    max_tokens: u32,
+    /// Stop sequence (up to 4, each at most 256 bytes).
+    #[arg(long)]
+    stop: Vec<String>,
+    /// Let models that support it think before answering.
+    #[arg(long)]
+    think: bool,
+    /// Prompt-processing chunk size in tokens.
+    #[arg(long, default_value_t = 2048)]
+    chunk: u32,
+    /// Fraction of physical memory mrun may plan with.
+    #[arg(long, default_value_t = 0.75)]
+    memory_fraction: f64,
+    /// Memory kept free for other applications and mrun's host heap, in GiB.
+    #[arg(long, default_value_t = 8)]
+    reserve_gib: u64,
+    /// Allow a budget above the automatic one.
+    #[arg(long)]
+    allow_over: bool,
+    /// Print the memory budget breakdown after loading and exit.
+    #[arg(long)]
+    info: bool,
+    /// Run the greedy conformance set for this model and exit.
+    #[arg(long)]
+    check: bool,
+}
+
+/// Interactive prompt input limit (001 FR-016).
+const MAX_PROMPT_BYTES: usize = 8 * 1024 * 1024;
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Run(args) => run(args),
+    }
+}
+
+fn run(args: RunArgs) -> ExitCode {
+    if let Some(prompt) = &args.prompt
+        && prompt.len() > MAX_PROMPT_BYTES
+    {
+        eprintln!(
+            "error: the prompt is {} bytes; the limit is {MAX_PROMPT_BYTES} bytes",
+            prompt.len()
+        );
+        return ExitCode::from(2);
+    }
+    if let Err(error) = mrun::chat::stop::StopMatcher::new(args.stop.clone()) {
+        eprintln!("error: {error}");
+        return ExitCode::from(2);
+    }
+    let path = PathBuf::from(&args.model);
+    if path.exists() && !path.join("config.json").exists() {
+        eprintln!(
+            "error: {} is not a model directory (no config.json)\n  hint: point at a directory with config.json, tokenizer.json and *.safetensors",
+            path.display()
+        );
+        return ExitCode::from(3);
+    }
+    eprintln!(
+        "error: this build of mrun has no inference engine yet\n  hint: the MLX engine is being implemented (feature 001, tasks T004-T015)"
+    );
+    ExitCode::from(1)
+}

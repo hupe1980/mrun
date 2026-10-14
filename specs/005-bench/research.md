@@ -4,7 +4,7 @@
 
 - **Decision**: Primary: per-turn time to first token (TTFT), time to first useful token (first
   non-reasoning text or completed tool call), and total session wall time on agent traces.
-  Secondary: prompt tok/s and decode tok/s at 1K/8K/16K/30K, cancellation latency (disconnect →
+  Secondary: prompt tok/s and decode tok/s at 1K/8K/16K/30K/64K and maximum context, cancellation latency (disconnect →
   next request's first byte), peak RSS/footprint and swap delta.
 - **Rationale**: Constitution I; the literature study shows agent workloads are prefill-dominated
   with long shared prefixes (see [literature-study](../../concepts/research/literature-study.md)).

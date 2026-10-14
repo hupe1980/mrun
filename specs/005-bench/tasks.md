@@ -14,7 +14,7 @@ description: "Tasks for 005 Benchmark Harness"
 ## Phase 2: Foundational
 
 - [ ] T003 `bench/stats.rs`: median, nearest-rank p95, IQR, throttling check (> 5% drift); tests on fixed samples
-- [ ] T004 `bench/driver.rs`: replay in all three API styles, per-system model name, client-side TTFT / first-useful-token / per-token timings from SSE bytes, cached-token extraction (usage fields and `x-mrun-cache-*`); tests against the fake server; test that only configured hosts are contacted (FR-011)
+- [ ] T004 `bench/driver.rs`: replay in all three API styles, per-system model name, client-side TTFT / first-useful-token / per-token timings from SSE bytes, cached-token extraction (usage fields, `: mrun` SSE comments when streaming, `x-mrun-*` headers otherwise); tests against the fake server; test that only configured hosts are contacted (FR-011)
 - [ ] T005 [P] `bench/machine.rs`: chip, memory, macOS, power source, low power, thermal, free memory and swap per system; Linux fallbacks
 - [ ] T006 `bench/report.rs`: RunResult v1 (validated against the schema) + markdown report with Method and "Losing cells" sections
 

@@ -18,7 +18,7 @@ description: "Tasks for 002 Agent APIs"
 - [ ] T003 `crates/mrun/src/api/model.rs`: ChatRequest, Message, AssistantPart, ToolDef, ToolChoice, ResponseFormat, ReasoningCtl, GenEvent, Finish, Usage, ApiError (per data model)
 - [ ] T004 `crates/mrun/src/chat/render.rs`: ChatRequest → template context (tools, tool results, reasoning replay, prefill) → tokens + message boundaries; tests vs fixture token ids
 - [ ] T005 `crates/mrun/src/runtime/{queue.rs, worker.rs}`: FIFO (8 waiting, 600 s wait deadline), keepalives while queued, cancel on disconnect, retry-after, single worker driving `Engine`, GenEvent fan-out; tests for order, full queue, deadline, disconnect, a long generation with a queued streaming request (no client timeout)
-- [ ] T006 [P] `crates/mrun/src/chat/tools/{mod.rs, holdback.rs, hermes.rs, qwen_xml.rs}`: `ToolSyntax` streaming parsers for Qwen3 and Qwen3-Coder, partial-tag hold-back, raw args preserved, parse-error reporting; unit tests incl. split tags, escaped strings, parallel calls, missing `<tool_call>` recovery for declared names
+- [ ] T006 [P] `crates/mrun/src/chat/tools/{mod.rs, holdback.rs, hermes.rs, qwen_xml.rs}`: `ToolSyntax` streaming parsers for Qwen3 and Qwen3-Coder, partial-tag hold-back, raw args preserved, per-call buffering for XML-synthesized arguments and for Anthropic (FR-004 fallback); unit tests incl. split tags, escaped strings, parallel calls, missing `<tool_call>` recovery for declared names
 - [ ] T007 [P] `crates/mrun/src/chat/reasoning.rs`: think-tag splitter (prompt-tail aware), signature and `encrypted_content` codecs; tests
 - [ ] T008 `crates/mrun/src/api/sse.rs`: SSE writer, keepalive/ping hook, disconnect detection → cancel token
 
@@ -27,7 +27,7 @@ description: "Tasks for 002 Agent APIs"
 - [ ] T009 [P] [US1] `api/chat_completions.rs` decode + encode (stream/non-stream, tool call deltas, include_usage chunk, reasoning_content, no content after finish) + conformance `chat_*` cases
 - [ ] T010 [P] [US1] `api/messages.rs` decode + encode (full event order, ping, thinking + signature, tool_use input_json_delta, `?beta=true`, x-api-key/bearer) + `count_tokens` + conformance `msg_*` cases
 - [ ] T011 [P] [US1] `api/responses.rs` decode + encode (developer message, function_call items, `output_item.done`, reasoning items with `summary: []` + encrypted_content, sequence numbers, `response.failed` codes; `previous_response_id` rejected) + conformance `resp_*` cases
-- [ ] T012 [US1] `GET /v1/models` with machine-specific `context_window`; `GET /mrun/status` (schema v1 per contract) with a conformance case; unknown model ids served by the loaded model (FR-018); `cli/serve.rs` banner with URL and `mrun launch`/`connect` hint
+- [ ] T012 [US1] `GET /v1/models` with machine-specific `context_window` and `max_output_tokens`; `GET /mrun/status` (schema v1 per contract) with a conformance case; unknown model ids served by the loaded model (FR-018); `cli/serve.rs` banner with URL and `mrun launch`/`connect` hint
 - [ ] T013 [US1] `chat/constrain.rs`: llguidance ParserFactory per model (cached), Matcher armed at tool-call trigger for strict tools and for JSON response formats; the generation loop passes the `TokenMask` to `Engine::decode` (unpipelined while masked); tests: strict args always validate (SC-003)
 - [ ] T014 [US1] Thinking control: request mapping (effort none/minimal = off) + `--thinking client|off|on` + Anthropic `budget_tokens` enforcement; tests that Codex's bare `reasoning` object does not enable thinking and Claude Code `adaptive` does unless overridden
 - [ ] T015 [US1] Output limit default (16,384) and clamping (FR-019); image-in-tool-result placeholder and `--reject-tool-images` (FR-020); non-strict invalid args policy per API (FR-004); mrun metadata in headers (non-streaming) and `: mrun` SSE comments (streaming) (FR-022); conformance cases for each
@@ -35,7 +35,7 @@ description: "Tasks for 002 Agent APIs"
 
 ## Phase 4: US2 — Clear, honest responses (P1)
 
-- [ ] T017 [US2] Usage semantics per API (Anthropic input excludes cache read; others inclusive; `cache_creation_input_tokens` = 0) and `x-mrun-cache-*` headers (FR-022) + `cross_*` conformance cases
+- [ ] T017 [US2] Usage semantics per API (Anthropic input excludes cache read; others inclusive; `cache_creation_input_tokens` = 0) and the cache values in mrun metadata (delivered by T015) + `cross_*` conformance cases
 - [ ] T018 [US2] Error mapping per API per the contract status table (queue full, queue deadline, context too long with numbers, unsupported modalities with JSON path, unknown tool result id, limits, auth, Host/Origin) + cases
 - [ ] T019 [US2] Request validation limits (body 8 MiB via tower-http, messages, tools, schema size/depth) + cases
 

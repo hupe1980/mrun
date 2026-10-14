@@ -24,7 +24,8 @@ Invariants (property-tested):
 - a split at token p of an edge copies the segment into [start, p) and [p, end) and drops the
   original;
 - only leaves with `in_use == 0` are evicted; ancestors of pinned nodes are never evicted;
-- `sum(bytes) + active_cache_bytes ≤ kv_capacity_bytes`.
+- `sum(bytes) + active_cache_bytes ≤ kv_capacity_bytes`, including during a restore (the restore
+  peak `active allocation + matched bytes` is checked before copying; see research R3).
 
 ## LivePath
 

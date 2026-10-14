@@ -19,7 +19,7 @@ description: "Tasks for 003 Prefix Cache"
 ## Phase 3: US1 — Fast repeated turns (P1) 🎯 MVP
 
 - [ ] T005 [US1] `cache/mod.rs` lookup / evict_for / prepare / finish / release per contract, live-path materialization on replacement, boundaries from 002's renderer, periodic 4,096-token cuts
-- [ ] T006 [US1] Integrate in `runtime/worker.rs` in contract order (lookup → admission → prepare → release → prefill → decode with lazy eviction → finish); tests: admission failure after a hit leaves the store unchanged; restore at exactly-full capacity never exceeds capacity (materialization bounded, restored segments unpinned)
+- [ ] T006 [US1] Integrate in `runtime/worker.rs` in contract order (lookup → admission → prepare → release → prefill → decode with lazy eviction → finish); tests: admission failure after a hit leaves the store unchanged; restore at exactly-full capacity never exceeds capacity (restore peak checked, partial restore with cause `capacity` when needed, materialization bounded, restored segments unpinned)
 - [ ] T007 [US1] Supply cached/processed counts and miss data to 002's usage mapping and mrun metadata (headers / `: mrun` SSE comments, 002 FR-022); `--no-cache` and per-request opt-out
 - [ ] T008 [US1] Full-prompt hit reprocesses exactly the last token (FR-004); divergence inside the live path trims without copying (FR-003) — tests
 

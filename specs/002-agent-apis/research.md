@@ -255,7 +255,7 @@ wire_api = "responses"
   - For a schema `string`, stream JSON-escaped characters, holding back up to `\n</parameter>`.
   - For other types, buffer until close, then emit the parsed JSON value. If it fails to parse, apply the FR-004 policy (raw arguments for Chat/Responses, plain text for Anthropic) and never repair.
   - Unknown types fall back to the string rule.
-- **Malformed or truncated calls:** a call that fails to parse becomes an error event; at `Length` it becomes "incomplete". Never report it as a completed call.
+- **Malformed or truncated calls:** a call that fails to parse follows the FR-004 fallback (raw arguments for Chat/Responses, a text block for Anthropic; XML-synthesized and Anthropic arguments are buffered per call so the fallback is possible while streaming); at `Length` it becomes "incomplete". Never report it as a completed call.
 
 ## 4. Constrained decoding
 

@@ -1,0 +1,28 @@
+[package]
+name = "mrun"
+description = "Local inference server for coding agents on Apple Silicon"
+readme = "../../README.md"
+keywords = ["llm", "inference", "apple-silicon", "mlx", "agents"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+crossbeam-channel.workspace = true
+minijinja.workspace = true
+minijinja-contrib.workspace = true
+mrun-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokenizers.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

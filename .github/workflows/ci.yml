@@ -1,4 +1,4 @@
-name: Portable Rust
+name: CI
 
 on:
   pull_request:
@@ -8,20 +8,33 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  portable:
-    name: Rust 1.94 portable contracts
+  linux:
+    name: Linux (fmt, clippy, tests)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install declared toolchain
-        run: rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
       - name: Format
-        run: cargo +1.94.0 fmt --all --check
-      - name: Locked backend-free tests
-        run: cargo +1.94.0 test --locked --no-default-features --all-targets
-      - name: Strict portable Clippy
-        run: cargo +1.94.0 clippy --locked --no-default-features --all-targets -- -D warnings
-      - name: All portable targets
-        run: cargo +1.94.0 check --locked --no-default-features --all-targets
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --locked --workspace
+
+  macos:
+    name: macOS (build)
+    # Hosted runners have no reliable Metal GPU for MLX: build only; Metal tests run on Apple hardware.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Build
+        run: cargo build --locked --workspace --all-targets

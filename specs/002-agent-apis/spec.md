@@ -124,7 +124,10 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   the call with its raw arguments string, and such raw strings are accepted unvalidated in later
   history; Anthropic Messages (whose `input` must be an object) returns the model's raw call text
   as a text block instead of a tool call. Either way a `tool-args-invalid` warning is reported per
-  FR-022. The tool-call envelope (for example a missing `<tool_call>` opener before a declared
+  FR-022. When streaming, argument text is forwarded as it arrives only where it is the model's raw
+  JSON (Qwen3 Hermes syntax on Chat/Responses); arguments synthesized from other syntaxes (Qwen3-Coder
+  XML) and all Anthropic `tool_use` input are buffered per call and emitted when the call closes,
+  so the fallback above is always possible. The tool-call envelope (for example a missing `<tool_call>` opener before a declared
   function) MAY be recognized, because it does not change argument content.
 - **FR-005**: Structured output (JSON schema response format) MUST be supported with the same
   constrained decoding.

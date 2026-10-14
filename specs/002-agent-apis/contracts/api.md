@@ -51,4 +51,5 @@ Cross-cutting:
 
 `{schema_version, version, model: {id, identity, architecture, quantization}, budget: {budget,
 weights, scratch, kv_capacity_tokens, kv_bytes_per_token}, active: {id, api, prompt_tokens,
-cached, phase, progress} | null, queued: n, cache: CacheStats (003), recording: bool}`
+cached, phase, progress} | null, queued: n, cache: CacheStats (003), recording: bool,
+last: {cached, processed, cause, divergence, max_tokens, warnings[]} | null}`

@@ -149,7 +149,7 @@ model and compare token IDs against stored reference outputs.
   refuse to load a model whose weights plus scratch estimate plus 4,096 tokens of attention state
   exceed the budget, stating each number; after loading it MUST verify with measured sizes.
 - **FR-008**: The engine MUST determine peak scratch memory with a worst-case processing chunk at
-  the deepest supported position, cache the result per (model identity, machine, mrun version),
+  the deepest supported position (plus the per-layer attention-state growth transient), cache the result per (model identity, machine, mrun version),
   and size attention-state capacity from what remains. Capacity MUST also be capped by the model's
   maximum position.
 - **FR-009**: Each request MUST be admitted only if its prompt plus output limit fits the

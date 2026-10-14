@@ -37,8 +37,11 @@ Worked example: [research R6](research.md#r6-memory-budget).
 - Admission (one request at a time): `prompt + max_output ≤ kv_capacity_tokens`. Memory held by
   cached segments counts as available and is reclaimed on demand: at admission for the initial
   allocation, and later whenever the active cache grows (FR-009). Without 003, `cached = 0`.
-- Invariant: `active cap bytes + cached bytes + one-layer growth transient ≤ KV budget` at all
-  times.
+- Invariant: `active cap bytes + cached bytes ≤ kv_capacity_bytes` at all times (the one-layer
+  growth transient lives in the scratch envelope). During a restore, the matched segments and their
+  copy in the active cache coexist, so a restore needs `active allocation + matched bytes ≤
+  kv_capacity_bytes`; when that does not fit after evicting other entries, fewer segments are
+  restored (003 R3).
 
 ## KvCache (active)
 
