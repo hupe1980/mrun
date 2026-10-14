@@ -28,12 +28,15 @@ Sources: [literature-study](../../concepts/research/literature-study.md) (A-1..A
 ## R3: Order of operations
 
 - **Decision**: (1) lookup: longest token match across the live path and the tree; pin matched
-  nodes. (2) admission: `prompt + max_output ≤ capacity − pinned(other)`; evict unpinned leaves only
-  as much as the initial allocation needs. (3) if the match is on the live path: trim to the
-  divergence (zero copy); else materialize the live path's unstored boundaries, then restore the
-  matched segments (copy into fresh buffers, then trim to the exact match). (4) prefill the
-  remainder (≥ 1 token). (5) during decode, when the active cache grows, evict unpinned leaves on
-  demand. Edge split during insert copies the segment into two slices.
+  nodes. (2) admission: `prompt + max_output ≤ capacity` (one request at a time); evict unpinned
+  leaves as much as the initial allocation plus the transient below needs. (3) if the match is on
+  the live path: trim to the divergence (zero copy). Otherwise: materialize the live path's
+  unstored boundaries only as far as free memory allows after evicting other unpinned leaves (the
+  rest of the live path is dropped, never over budget), drop the live path, restore the matched
+  segments (copy into fresh buffers, trim to the exact match) and immediately unpin them: they stay
+  in the tree as ordinary evictable leaves, so the request's own prefix is never counted twice.
+  (4) prefill the remainder (≥ 1 token). (5) during decode, when the active cache grows, evict
+  unpinned leaves on demand. Edge split during insert copies the segment into two slices.
 - **Rationale**: Constitution III (admission before execution); MLX donation semantics
   ([mlx-rust §7.3](../../concepts/research/mlx-rust.md)); analysis D2, C1, C2, T7.
 
@@ -59,7 +62,7 @@ Sources: [literature-study](../../concepts/research/literature-study.md) (A-1..A
 
 ## R6: Client normalization — deferred
 
-- **Decision**: Not built in this feature. `mrun connect` sets `CLAUDE_CODE_ATTRIBUTION_HEADER=0`
+- **Decision**: Not built in this feature. `mrun launch`/`connect` set `CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   and the attribution block is stable per conversation since Claude Code 2.1.181. Diagnostics will
   show whether residual volatile misses justify an opt-in normalization feature later.
 

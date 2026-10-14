@@ -15,7 +15,7 @@
 | kind | System \| User \| Tool \| Assistant \| Periodic | eviction order |
 | text_hash | Option<u64> | hash of the message text ending at this node (miss classification) |
 | last_used | Instant | LRU |
-| in_use | u32 | pinned while > 0 |
+| in_use | u32 | pinned while > 0 (only between lookup and the end of `prepare`) |
 | state_checkpoint | Option<StateId> | reserved for hybrid models (FR-012); always None now |
 
 Invariants (property-tested):

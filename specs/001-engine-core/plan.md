@@ -79,7 +79,7 @@ crates/
 │   │   ├── mlx/               # [mlx] safe layer: Array (RAII, !Send, !Sync), ops, fast, memory, device
 │   │   ├── load.rs            # config.json + safetensors, quantization (mode/bits/group, per-path overrides)
 │   │   ├── models/{qwen3.rs, qwen3_moe.rs, common.rs}
-│   │   ├── kv.rs              # per-layer K/V, step 256 preallocation, offset/trim, snapshot/restore copies
+│   │   ├── kv.rs              # per-layer K/V, cap rounded to 256, 4,096-token per-layer growth, trim, deep-copy snapshot/restore
 │   │   ├── sample.rs          # temperature, top-k, top-p, min-p, seed (on device), optional mask
 │   │   ├── budget.rs          # budget formula (no MLX) + [mlx] scratch probe with cache
 │   │   └── mlx_engine.rs      # [mlx] MlxEngine implementing Engine

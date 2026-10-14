@@ -8,7 +8,7 @@ lists what mrun serves and where it intentionally differs.
 | --- | --- | --- |
 | `GET /health` | Liveness + readiness | `{"status":"ok","model":...}`; 503 while loading |
 | `HEAD /api/hello` | Claude Code probe | 200, empty |
-| `GET /v1/models` | Served models | `context_window` = this machine's KV capacity |
+| `GET /v1/models` | Served models | `context_window` = this machine's KV capacity; `max_output_tokens` = server default |
 | `POST /v1/chat/completions` | OpenAI Chat Completions | stream + non-stream, tools, `response_format`, `reasoning_content` |
 | `POST /v1/messages` | Anthropic Messages | query string ignored (`?beta=true`); thinking with opaque signatures; `ping` every 10 s of silence |
 | `POST /v1/messages/count_tokens` | Anthropic token count | no queue; exact tokens mrun would process |
@@ -23,11 +23,14 @@ Cross-cutting:
   `--api-key-file` is required and checked (constant time) as `Authorization: Bearer` or
   `x-api-key`.
 - **Unknown model ids**: served by the loaded model; responses report the real id.
-- **Output limit**: absent → server default (16,384); too large → clamped, reported in
-  `x-mrun-max-tokens: <effective>`.
-- **Response headers** (all APIs): `x-mrun-cache-cached`, `x-mrun-cache-processed`,
-  `x-mrun-cache-cause`, `x-mrun-cache-divergence`, `x-mrun-warning` (comma-separated:
-  `tool-args-invalid`, `image-omitted`, `max-tokens-clamped`). Bodies stay strictly standard.
+- **Output limit**: absent → server default (16,384); too large → clamped and reported.
+- **mrun metadata** `{cached, processed, cause, divergence, max_tokens, warnings[]}` (warnings:
+  `tool-args-invalid`, `image-omitted`, `max-tokens-clamped`):
+  - non-streaming: headers `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`,
+    `x-mrun-cache-divergence`, `x-mrun-max-tokens`, `x-mrun-warning` (comma-separated);
+  - streaming: SSE comment lines `: mrun {json}` before the first content event (cache, limit) and
+    before the final event (warnings); clients ignore comments;
+  - bodies stay strictly standard; the last request's metadata is in `/mrun/status`.
 - **Disconnect**: dropping the connection cancels queued or running work.
 - **Queued streams**: keepalives every 10 s (Anthropic `ping`, SSE comment for OpenAI APIs).
 

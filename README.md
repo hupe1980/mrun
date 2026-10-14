@@ -26,7 +26,7 @@ mrun doctor                      # diagnose the machine and client setup
   and miss explanations.
 - **Predictable memory**: a startup budget for weights, attention state and scratch; oversized
   requests are rejected up front.
-- **Instant interruption**: cancellation takes effect within one processing chunk or one token.
+- **Instant interruption**: cancellation takes effect within 300 ms or one token.
 - **Engine**: Apple [MLX](https://github.com/ml-explore/mlx), called from Rust.
 - **Private by default**: loopback only, no telemetry, no prompt logging, offline after `pull`.
 

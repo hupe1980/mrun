@@ -36,7 +36,7 @@ result and markdown report with all cells, settings and machine state.
    the bundled agent traces and reports per-turn time to first token, processed/cached tokens and
    total session time.
 2. **Given** `--suite synthetic`, **When** it runs, **Then** it reports prompt and generation speed
-   at 1K, 8K, 16K and 30K context, with variance from repeated runs.
+   at 1K, 8K, 16K, 30K, 64K and maximum context, with spread from repeated runs.
 3. **Given** any run, **When** it finishes, **Then** the result records hardware, OS, power state,
    model hashes, mrun version and every setting, so it can be reproduced.
 
@@ -76,8 +76,9 @@ Each run checks output quality so a configuration that is faster but wrong is ca
 
 1. **Given** the quality suite, **When** run, **Then** it executes bundled coding tasks with
    objective tests and reports pass rates per system.
-2. **Given** an mrun change, **When** the regression check runs, **Then** it fails if greedy outputs
-   change on the conformance set or pass rate drops beyond the configured tolerance.
+2. **Given** an mrun change, **When** the regression check runs, **Then** it fails if speed or
+   pass rate drops beyond the configured tolerance (greedy-output changes are caught by feature
+   001's `mrun run --check`).
 
 ### Edge Cases
 
@@ -138,7 +139,7 @@ Each run checks output quality so a configuration that is faster but wrong is ca
 
 - **SC-001**: Two consecutive runs of the synthetic suite on an idle target Mac agree within 5% on
   median speeds.
-- **SC-002**: A full comparison of four systems on the bundled agent suite (3 repetitions)
+- **SC-002**: A full comparison of mrun and three competitors on the bundled agent suite (3 repetitions)
   completes unattended in under 4 hours on the target Mac.
 - **SC-003**: Every published report contains all cells for all systems, with failures and "n/a"
   marked and a "losing cells" section (review checklist, 100%).

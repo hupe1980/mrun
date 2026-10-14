@@ -159,8 +159,9 @@ without the attribution-header setting) and check that `mrun doctor` reports eac
 - **SC-003**: Interrupted downloads resume without re-downloading completed bytes in 100% of tests;
   corruption that changes size or modification time is detected on every use, and any corruption
   is detected by `mrun verify`.
-- **SC-004**: `mrun launch` and `mrun connect` configurations work unmodified for each supported
-  client version (pinned), validated by feature 002's real-client runs (002 T015).
+- **SC-004**: `mrun launch` and `mrun connect --write` configurations work unmodified for each
+  supported client version (pinned): the scripted read-edit-test task completes 5 of 5 runs per
+  client through each mechanism.
 - **SC-005**: Every CLI error in the error catalog includes a next step (review checklist, 100%).
 
 ## Assumptions

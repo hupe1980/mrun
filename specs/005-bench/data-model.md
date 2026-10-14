@@ -5,9 +5,9 @@
 | Field | Type | Notes |
 | --- | --- | --- |
 | suite | `agent` \| `synthetic` \| `cancel` \| `memory` \| `quality` | |
-| cell | string | e.g. `agent/claude-code-refactor`, `synthetic/prefill-16k` |
+| cell | string | e.g. `agent/opencode-refactor`, `synthetic/prefill-16k` |
 | inputs | trace file, prompt length, output length, task id | |
-| repetitions | u32 ≥ 5 | |
+| repetitions | u32 | synthetic/cancel ≥ 5, agent 3, quality 3 seeds (FR-004) |
 
 ## SystemUnderTest
 

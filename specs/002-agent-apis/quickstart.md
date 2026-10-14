@@ -19,9 +19,12 @@ curl -s localhost:8484/v1/responses -d '{"model":"qwen3-coder","input":"hi","str
 
 In `bench/tasks/smoke-fix-test/` (a tiny repo with a failing test):
 
-1. **Claude Code**: `mrun connect claude-code` env, then `claude -p "make the tests pass"` → tests
-   pass, no protocol errors.
-2. **Codex**: `mrun connect codex` profile, then `codex exec --profile mrun "make the tests pass"`.
-3. **OpenCode**: `mrun connect opencode`, then `opencode run "make the tests pass"`.
+1. **Claude Code**: `ANTHROPIC_BASE_URL=http://127.0.0.1:8484 ANTHROPIC_AUTH_TOKEN=x
+   ANTHROPIC_MODEL=qwen3-coder ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3-coder claude -p "make the tests
+   pass"` → tests pass, no protocol errors.
+2. **Codex**: a hand-written `[model_providers.mrun]` with `wire_api = "responses"` in a temporary
+   `CODEX_HOME`, then `codex exec --profile mrun "make the tests pass"`.
+3. **OpenCode**: a hand-written `opencode.json` provider (`@ai-sdk/openai-compatible`,
+   `baseURL`), then `opencode run "make the tests pass"`.
 
 Repeat 5× each; record client versions.

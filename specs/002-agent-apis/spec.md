@@ -13,7 +13,7 @@
 ### Session 2026-10-14
 
 - Q: Do models think when the client doesn't ask? → A: No. Thinking is enabled only by the request (Anthropic `thinking`, OpenAI `reasoning_effort` / `reasoning`). (Maintainer decision.)
-- Q: How are concurrent requests handled? → A: One generation at a time, FIFO queue (8 waiting, 30 s deadline); batching is a later feature. (Maintainer decision.)
+- Q: How are concurrent requests handled? → A: One generation at a time, FIFO queue (8 waiting, 600 s waiting deadline, revised after analysis); batching is a later feature. (Maintainer decision.)
 - Q: Default port? → A: 127.0.0.1:8484 (avoids Ollama 11434, LM Studio 1234, llama.cpp 8080); `--port` and `MRUN_PORT` override.
 - Q: Are non-strict tool calls constrained? → A: Tool-call syntax is always parsed with the model's native format; argument schemas are enforced by constrained decoding only for strict tools and JSON response formats, keeping the default fast path unconstrained.
 - Q: What does `count_tokens` count? → A: Exactly the tokens mrun would process for that request with the loaded model's tokenizer and template.
@@ -28,9 +28,9 @@ the local model.
 
 **Why this priority**: This is the product. Without working agent loops the engine is a demo.
 
-**Independent Test**: With `mrun serve` running and each client configured per `mrun connect`
-output, run a scripted read-edit-test task in a fixture repository and confirm it completes with
-the tests passing, for each of the three clients.
+**Independent Test**: With `mrun serve` running and each client configured by hand-written config
+(as documented in the quickstart), run a scripted read-edit-test task in a fixture repository and
+confirm it completes with the tests passing, for each of the three clients.
 
 **Acceptance Scenarios**:
 
@@ -83,7 +83,7 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
 **Acceptance Scenarios**:
 
 1. **Given** a request in progress, **When** the client disconnects, **Then** generation stops
-   within one chunk or token and the next queued request starts.
+   within 300 ms or one token and the next queued request starts.
 2. **Given** a full queue, **When** another request arrives, **Then** it is rejected immediately
    with a retry-after hint.
 3. **Given** a queued request waiting past its deadline (default 600 s), **When** the deadline
@@ -120,10 +120,12 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   and tool results, translated through one internal request model so behavior is identical.
 - **FR-004**: Tool-call arguments MUST be valid JSON matching the declared schema when the client
   requests strict tools (`strict: true` or equivalent), using constrained decoding. Non-strict
-  arguments are never modified: if they are not valid JSON, the call is returned with its raw
-  arguments and the response carries an `x-mrun-warning: tool-args-invalid` header. The tool-call
-  envelope (for example a missing `<tool_call>` opener before a declared function) MAY be
-  recognized, because it does not change argument content.
+  arguments are never modified. If they are not valid JSON: Chat Completions and Responses return
+  the call with its raw arguments string, and such raw strings are accepted unvalidated in later
+  history; Anthropic Messages (whose `input` must be an object) returns the model's raw call text
+  as a text block instead of a tool call. Either way a `tool-args-invalid` warning is reported per
+  FR-022. The tool-call envelope (for example a missing `<tool_call>` opener before a declared
+  function) MAY be recognized, because it does not change argument content.
 - **FR-005**: Structured output (JSON schema response format) MUST be supported with the same
   constrained decoding.
 - **FR-006**: The Responses API MUST be stateless: `previous_response_id` and item references MUST
@@ -143,7 +145,7 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   The queue deadline covers waiting time only (default 600 s, configurable); while a request
   waits, streaming responses MUST send keepalives (Anthropic `ping`, SSE comments). Full-queue and
   deadline errors MUST be immediate and explicit.
-- **FR-011**: Client disconnect MUST cancel queued or running work promptly (within one chunk or
+- **FR-011**: Client disconnect MUST cancel queued or running work promptly (within 300 ms or one
   token) and release its reservation.
 - **FR-012**: The server MUST bind to loopback by default and accept only loopback `Host` headers
   (`127.0.0.1`, `localhost`, `[::1]` with the server port), reject requests carrying a browser
@@ -159,7 +161,8 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
 - **FR-014**: The server MUST NOT log prompt or completion content by default; request logs contain
   timings, token counts and outcome only.
 - **FR-015**: `GET /v1/models` MUST list served models with their context capacity on this machine
-  (from the memory budget), not just the model's advertised maximum.
+  (from the memory budget) and the server's default output limit, not just the model's advertised
+  maximum.
 - **FR-016**: Reasoning produced in one turn MUST be returnable in the next turn so the model sees
   the same rendered history: as thinking blocks with an opaque signature (Anthropic) or as
   `encrypted_content` on reasoning items (Responses). mrun MUST accept any signature and never
@@ -171,18 +174,21 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   work); responses report the actual model id.
 - **FR-019**: When a request gives no output limit, mrun MUST apply a server default (16,384 tokens,
   configurable); when the requested limit exceeds what fits, mrun MUST clamp it to the available
-  capacity and report the clamp in an `x-mrun-max-tokens` response header. Rejection happens only
-  when the prompt itself does not fit.
+  capacity and report the clamp per FR-022. Rejection happens only when the prompt itself does not
+  fit.
 - **FR-020**: Images, audio and files in user messages MUST be rejected naming the JSON path. Images
   inside tool results MUST, by default, be replaced with the text `[image omitted: model has no
-  vision input]` and an `x-mrun-warning: image-omitted` header, so sessions that read an image file
-  stay usable; `--reject-tool-images` restores strict rejection.
+  vision input]` and an `image-omitted` warning reported per FR-022, so sessions that read an image
+  file stay usable; `--reject-tool-images` restores strict rejection.
 - **FR-021**: `mrun serve --record <dir>` (debug aid for feature 005) MAY write request bodies to
   disk only when given on the command line (never via config or environment), only on loopback,
   with files mode 0600, a startup warning, and a visible flag in `/mrun/status`.
-- **FR-022**: Every response MUST carry `x-mrun-cache-cached`, `x-mrun-cache-processed` and, on a
-  miss, `x-mrun-cache-cause` / `x-mrun-cache-divergence` headers (populated by feature 003; zero and
-  `disabled` until then).
+- **FR-022**: Every response MUST report mrun metadata (cached and processed tokens, miss cause and
+  divergence from feature 003, effective output limit, warnings such as `tool-args-invalid`,
+  `image-omitted`, `max-tokens-clamped`). Non-streaming responses carry it in `x-mrun-*` headers;
+  streaming responses carry it in SSE comment lines (`: mrun {json}`) emitted before the first
+  content event and before the final event, because headers are sent before the result is known.
+  Bodies stay strictly standard. The last request's metadata is also in `/mrun/status`.
 
 ### Key Entities
 

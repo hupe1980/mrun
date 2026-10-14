@@ -26,8 +26,8 @@ insta 1.49 snapshots for `--help`, `connect` output and error messages
 **Project Type**: CLI (part of the single `mrun` binary)
 **Performance Goals**: CLI commands other than `pull`, `verify` and `serve` finish in under 200 ms;
 `ls` with 20 models under 500 ms (fast checks only; full hashing only in `verify`)
-**Constraints**: No network except `pull` (FR-011); never overwrite user client config without a
-diff and backup (FR-005); offline-first
+**Constraints**: No network except `pull` (FR-013); never overwrite user client config without a
+diff and backup (FR-006); offline-first
 **Scale/Scope**: Tens of models, each 5–60 GB
 
 ## Constitution Check

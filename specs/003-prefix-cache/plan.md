@@ -14,7 +14,7 @@ stored. Lookup walks tokens; then admission (with lazy eviction), then restore b
 prefill of the remainder. Every node owns a segment for exactly its edge; edge splits copy slices;
 only leaves are evicted (LRU, assistant before user/tool before system). Memory-pressure events
 reach the worker between steps and evict before running work is touched. Every request yields a
-`MissReport` exposed through 002's `x-mrun-cache-*` headers and `mrun ps`.
+`MissReport` exposed through 002's mrun metadata (headers or SSE comments) and `mrun ps`.
 
 ## Technical Context
 

@@ -253,7 +253,7 @@ wire_api = "responses"
 - **Qwen3-Coder XML calls:** synthesize JSON fragments incrementally.
   - At `<parameter=k>` emit `{"k": ` (or `, "k": ` after the first parameter).
   - For a schema `string`, stream JSON-escaped characters, holding back up to `\n</parameter>`.
-  - For other types, buffer until close, then emit the parsed JSON value. If it fails to parse, report a parse error and do not repair (FR-004).
+  - For other types, buffer until close, then emit the parsed JSON value. If it fails to parse, apply the FR-004 policy (raw arguments for Chat/Responses, plain text for Anthropic) and never repair.
   - Unknown types fall back to the string rule.
 - **Malformed or truncated calls:** a call that fails to parse becomes an error event; at `Length` it becomes "incomplete". Never report it as a completed call.
 
@@ -306,17 +306,17 @@ wire_api = "responses"
    - OpenAI `prompt_tokens` and Responses `input_tokens` **include** cached tokens. Anthropic `input_tokens` **excludes** them.
    - Report `cache_creation_input_tokens: 0` until feature 003 defines writes.
    - Reasoning tokens are part of the output tokens in all three APIs.
-3. **Max tokens.** Chat: `max_completion_tokens` takes precedence over `max_tokens`. Anthropic: `max_tokens` is required. Responses: `max_output_tokens`. Each bounds reasoning plus answer. Clamp to `capacity − prompt` and error only if fewer than 1 token remains (spec edge case).
+3. **Max tokens.** Chat: `max_completion_tokens` takes precedence over `max_tokens`. Anthropic: `max_tokens` is required. Responses: `max_output_tokens`. Each bounds reasoning plus answer. Absent → server default (16,384); clamp to `capacity − prompt` and report the clamp (FR-019); error only if fewer than 1 token remains.
 4. **Thinking control.**
    - Anthropic `thinking.enabled` and `adaptive` → on; `disabled` and `between_tools` → off. `budget_tokens`: force `</think>` at the budget [U quality].
    - OpenAI `reasoning_effort` / Responses `reasoning.effort`: `none`/`minimal`/absent → off.
-   - Claude Code sends `adaptive` on every request, so an "only when requested" policy will think on Claude Code turns. Qwen3-Coder has no thinking, so the primary model is unaffected; for Qwen3 hybrids `mrun connect` can set `MAX_THINKING_TOKENS=0` [U effect behind a base URL].
+   - Claude Code sends `adaptive` on every request, so an "only when requested" policy will think on Claude Code turns. Qwen3-Coder has no thinking, so the primary model is unaffected; for Qwen3 hybrids `mrun launch`/`connect` can set `MAX_THINKING_TOKENS=0` (or use `--thinking off`) [U effect behind a base URL].
 5. **Reasoning in history.** The Qwen3 template re-renders reasoning only inside the current tool loop. Replay it from Anthropic `thinking` blocks, Chat `reasoning_content`/`reasoning`, and Responses `reasoning.encrypted_content`. Codex never sends `reasoning_text` back, so mrun must put the reasoning text (versioned and base64-encoded) into `encrypted_content`. Signatures and encrypted blobs are opaque, unsigned, and never rejected.
 6. **Arguments round-trip.**
    - OpenAI and Responses history carries `arguments` as a JSON string; Anthropic `input` is an object.
    - Qwen3 renders a string verbatim; Qwen3-Coder needs an object.
    - Return the model's **raw** argument text as `arguments` and re-render it unchanged, so the prompt prefix is byte-stable. For Anthropic, also keep `serde_json` key order (`preserve_order`).
-   - Invalid JSON arguments in history → 400 naming `messages[i].tool_calls[j]`.
+   - Arguments in Chat/Responses history are accepted as raw strings without JSON validation (they are re-rendered verbatim, which also keeps prefixes exact); Anthropic `input` is always an object by construction.
 7. **Parallel calls and results.**
    - Anthropic: several `tool_use` blocks in one assistant message; the results come as `tool_result` blocks in the **next user message**, which may also contain text.
    - OpenAI: one `tool` message per call.
@@ -335,9 +335,9 @@ wire_api = "responses"
    - `required`/named are enforced by grammar.
 9. **Ids.** The model emits no ids. Generate `call_…` (Chat), `toolu_…` (Anthropic), and `fc_…` item id + `call_…` call_id (Responses). Ids never enter the Qwen prompt, so they cannot hurt the cache.
 10. **Rejections** (name the JSON path):
-    - Anthropic `image`/`document` blocks, including inside `tool_result`.
-    - OpenAI `image_url`/`input_audio`/`file` parts.
-    - Responses `input_image`/`input_file`, including in Codex `function_call_output` arrays.
+    - Anthropic `image`/`document` blocks in user content (inside `tool_result`: replaced by a placeholder per FR-020 unless `--reject-tool-images`).
+    - OpenAI `image_url`/`input_audio`/`file` parts in user content.
+    - Responses `input_image`/`input_file` in user content (in Codex `function_call_output` arrays: placeholder per FR-020).
     - `n>1`, `logprobs`, and `previous_response_id`.
     - Accept and ignore `metadata`, `service_tier`, `context_management`, `output_config.effort` (it maps to thinking), `prompt_cache_key`, and betas.
 11. **Stop sequences.**
@@ -408,7 +408,7 @@ enum Finish { Stop, StopSequence, Length, ContextFull, ToolCalls, Cancelled }
   - `chat_basic_nonstream`, `chat_basic_stream_done_terminator`, `chat_stream_role_first_chunk`, `chat_include_usage_chunk_empty_choices`
   - `chat_usage_cached_tokens_inclusive`, `chat_tool_call_stream_first_fragment_has_id_name`, `chat_tool_call_args_fragments_concat_valid_json`, `chat_parallel_tool_calls_distinct_index_and_id`
   - `chat_tool_result_roundtrip`, `chat_tool_result_unknown_id_400`, `chat_tool_choice_none_no_calls`, `chat_tool_choice_required_forces_call`
-  - `chat_tool_choice_named`, `chat_strict_tool_args_validate_schema`, `chat_nonstrict_invalid_json_reports_parse_error`, `chat_response_format_json_schema_strict`
+  - `chat_tool_choice_named`, `chat_strict_tool_args_validate_schema`, `chat_nonstrict_invalid_args_returned_raw_with_warning`, `chat_response_format_json_schema_strict`
   - `chat_response_format_json_object`, `chat_reasoning_content_separate_from_content`, `chat_reasoning_effort_none_no_think`, `chat_reasoning_replay_accepts_reasoning_and_reasoning_content`
   - `chat_max_completion_tokens_precedence`, `chat_length_mid_tool_call_not_complete`, `chat_stop_sequence_holdback`, `chat_no_delta_after_finish_reason`
   - `chat_image_part_rejected_with_path`, `chat_unknown_field_ignored`, `chat_context_length_exceeded_400_code`, `chat_empty_tools_array_with_history`
@@ -417,7 +417,7 @@ enum Finish { Stop, StopSequence, Length, ContextFull, ToolCalls, Cancelled }
   - `msg_basic_nonstream`, `msg_stream_full_event_order`, `msg_ping_during_silence`, `msg_query_beta_true_path`
   - `msg_x_api_key_and_bearer_auth`, `msg_system_string_and_blocks`, `msg_midconversation_system_message`, `msg_cache_control_ignored`
   - `msg_usage_input_excludes_cache_read`, `msg_message_delta_usage_cumulative`, `msg_tool_use_input_json_delta`, `msg_parallel_tool_use_blocks`
-  - `msg_tool_result_blocks_with_text`, `msg_tool_result_is_error`, `msg_tool_result_image_rejected`, `msg_tool_choice_any_and_tool`
+  - `msg_tool_result_blocks_with_text`, `msg_tool_result_is_error`, `msg_tool_result_image_placeholder`, `msg_reject_tool_images_flag`, `msg_nonstrict_invalid_args_as_text`, `msg_tool_choice_any_and_tool`
   - `msg_disable_parallel_tool_use`, `msg_thinking_enabled_blocks_with_signature`, `msg_thinking_adaptive_maps_on`, `msg_thinking_disabled_no_think`
   - `msg_signature_not_validated`, `msg_thinking_replay_in_tool_loop`, `msg_assistant_prefill_continues`, `msg_stop_sequence_reports_value`
   - `msg_max_tokens_stop_reason`, `msg_context_overflow_prompt_too_long`, `msg_overloaded_529_retry_after_int`, `msg_stream_error_event_shape`
@@ -425,7 +425,7 @@ enum Finish { Stop, StopSequence, Length, ContextFull, ToolCalls, Cancelled }
   - `msg_head_api_hello_ok`
 - **responses:**
   - `resp_basic_nonstream`, `resp_stream_event_order_and_sequence_numbers`, `resp_developer_message_as_system`, `resp_function_call_item_done_parsable_by_codex`
-  - `resp_function_call_output_string`, `resp_function_call_output_array_text`, `resp_function_call_output_image_rejected`, `resp_reasoning_item_has_summary_array`
+  - `resp_function_call_output_string`, `resp_function_call_output_array_text`, `resp_function_call_output_image_placeholder`, `resp_reject_tool_images_flag`, `resp_reasoning_item_has_summary_array`
   - `resp_encrypted_content_roundtrip_restores_think`, `resp_reasoning_present_without_effort_no_think`, `resp_previous_response_id_rejected`, `resp_item_reference_rejected`
   - `resp_store_true_accepted_not_persisted`, `resp_usage_cached_tokens`, `resp_incomplete_max_output_tokens`, `resp_failed_context_length_exceeded_code`
   - `resp_text_format_json_schema`, `resp_web_search_tool_dropped_with_warning`, `resp_custom_tool_rejected`

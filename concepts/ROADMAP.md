@@ -14,7 +14,8 @@ route and the gates between milestones.
 | **M4 Models & DX** | `mrun pull/ls/rm/launch/connect/doctor/ps`; Qwen3-Coder-30B-A3B as the default model | 004 | Fresh Mac to working Claude Code session in under 5 minutes |
 | **M5 Bench** | `mrun bench` with agent-trace replay against llama.cpp, Ollama, oMLX, mlx-lm | 005 | First dated public comparison published, losing cells included |
 
-M4 and M5 can start in parallel with M3; 005's harness is useful as soon as M1 lands.
+M4 and M5 can start in parallel with M3. M1's gates use 001's in-repo engine benchmark; 005's HTTP
+harness becomes useful once M2 lands.
 
 ## Later (spec when evidence justifies)
 

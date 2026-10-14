@@ -14,13 +14,13 @@ description: "Tasks for 003 Prefix Cache"
 
 - [ ] T002 Verify 001's `Engine::snapshot/restore/drop_segment/trim` meet the contract on CPU (tiny model): restore + continue equals uninterrupted within 1e-3; snapshot buffers never alias the active cache; append after restore does not copy the whole buffer (memory counters)
 - [ ] T003 `ScriptedEngine` segment tracking (which token ranges each segment holds) for structural tests
-- [ ] T004 `cache/tree.rs`: radix tree (insert with edge split by segment copy, longest-match walk incl. live path, pin/unpin, leaf removal) + proptest invariants from the data model in `crates/mrun/tests/prefix_tree_props.rs`; lookup microbench (≤ 1 ms at 100K tokens)
+- [ ] T004 `cache/tree.rs`: radix tree (insert with edge split by segment copy, longest-match walk incl. live path, pin/unpin, leaf removal, `state_checkpoint` field always None and preserved by all operations — FR-012) + proptest invariants from the data model in `crates/mrun/tests/prefix_tree_props.rs`; lookup microbench (≤ 1 ms at 100K tokens)
 
 ## Phase 3: US1 — Fast repeated turns (P1) 🎯 MVP
 
 - [ ] T005 [US1] `cache/mod.rs` lookup / evict_for / prepare / finish / release per contract, live-path materialization on replacement, boundaries from 002's renderer, periodic 4,096-token cuts
-- [ ] T006 [US1] Integrate in `runtime/worker.rs` in contract order (lookup → admission → prepare → prefill → decode with lazy eviction → finish → release); test: admission failure after a hit leaves the store unchanged
-- [ ] T007 [US1] Supply cached/processed counts to 002's usage mapping and `x-mrun-cache-*` headers; `--no-cache` and per-request opt-out
+- [ ] T006 [US1] Integrate in `runtime/worker.rs` in contract order (lookup → admission → prepare → release → prefill → decode with lazy eviction → finish); tests: admission failure after a hit leaves the store unchanged; restore at exactly-full capacity never exceeds capacity (materialization bounded, restored segments unpinned)
+- [ ] T007 [US1] Supply cached/processed counts and miss data to 002's usage mapping and mrun metadata (headers / `: mrun` SSE comments, 002 FR-022); `--no-cache` and per-request opt-out
 - [ ] T008 [US1] Full-prompt hit reprocesses exactly the last token (FR-004); divergence inside the live path trims without copying (FR-003) — tests
 
 ## Phase 4: US2 — Branches share safely (P1)

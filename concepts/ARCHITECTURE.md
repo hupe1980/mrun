@@ -29,13 +29,13 @@ client ──HTTP──▶ api (parse: chat|messages|responses ─▶ ChatReques
                  ▼
           chat::render (template ─▶ token ids) ── count_tokens answers here
                  ▼
-          runtime::queue (FIFO, 8 waiting, 30 s deadline, cancel on disconnect)
+          runtime::queue (FIFO, 8 waiting, 600 s wait deadline, keepalives, cancel on disconnect)
                  ▼  (one at a time)
           engine worker thread (owns MLX, the active sequence and the prefix store)
              1. prefix lookup: longest exact token match (pins nodes)
              2. admission: prompt + max_tokens must fit; evict unpinned cache as needed
              3. prepare: trim the live path (zero copy) or restore matched segments (copy)
-             4. prefill remaining tokens in 2,048-token chunks (cancel check after every layer)
+             4. prefill remaining tokens in 2,048-token chunks (≤ 2 layers in flight, cancel check per layer)
              5. decode: sample on device (+ grammar mask if strict; unpipelined then),
                 async-eval pipelined, cancel check per token, lazy cache eviction as KV grows
              6. finish: trim to committed tokens; record the live path and its boundaries
@@ -54,7 +54,7 @@ client ──HTTP──▶ api (parse: chat|messages|responses ─▶ ChatReques
   remainder. `set_memory_limit` and `set_cache_limit` back the budget; `set_wired_limit` is set to
   the budget for the engine's lifetime (no privileged tuning).
 - **KV cache**: per layer, K and V arrays allocated at admission (prompt + min(output, 4K), rounded
-  to 256) and grown in 4,096-token steps; `offset` marks the valid length; trim = move `offset`.
+  to 256) and grown in 4,096-token steps one layer at a time (transient ≤ one layer, budgeted); `offset` marks the valid length; trim = move `offset`.
   Appends use in-place slice updates on solely-owned buffers.
 - **Snapshots** are explicit deep copies (MLX may share buffers on `slice`/`copy`, and a shared
   buffer makes every later append copy the whole cache). Restore drops the active cache first,

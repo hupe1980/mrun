@@ -34,8 +34,9 @@ Implementations: `MlxEngine` (feature `mlx`), `ScriptedEngine` (deterministic to
 tracking of which token ranges each segment holds; used by `mrun` tests on any OS).
 
 Guarantees:
-- No method blocks longer than one layer of one chunk without checking `cancel` (prefill) or one
-  token (decode).
+- Prefill keeps at most two layers in flight and checks `cancel` before each new layer; decode
+  checks after every token.
+- Active-cache growth happens one layer at a time (transient ≤ one layer's K/V).
 - `snapshot` never shares buffers with the active cache; `restore` never aliases segments.
 - Engines are created on the worker thread by `EngineHandle::spawn(factory)` and never move.
 

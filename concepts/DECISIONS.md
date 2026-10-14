@@ -77,4 +77,5 @@ A radix tree keyed by token IDs, rooted per model identity. Nodes own immutable 
 token ranges (segments). Restoring a prefix copies matched segments into the active cache; the hot
 path (same conversation continuing) reuses the active cache with zero copy. Every lookup confirms
 tokens, not just hashes. For hybrid models, nodes additionally hold recurrent-state checkpoints at
-chosen boundaries. Eviction weighs recompute cost saved per byte with recency.
+chosen boundaries. Eviction starts as LRU by turn type (assistant, then user/tool, then system);
+cost-aware eviction is a later optimization if benchmarks show it matters.

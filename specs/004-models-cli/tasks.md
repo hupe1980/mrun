@@ -40,7 +40,8 @@ description: "Tasks for 004 Models and CLI Experience"
 ## Phase 6: Polish
 
 - [ ] T017 [P] `crates/mrun/tests/offline.rs`: all commands except `pull` succeed with network denied (FR-013)
-- [ ] T018 Fresh-Mac walkthrough timing (SC-001) and README "Quick start"
+- [ ] T018 Real-client validation (SC-004): Claude Code, Codex and OpenCode (pinned versions) run the scripted read-edit-test task 5× each via `mrun launch` and via `mrun connect --write`; record versions
+- [ ] T019 Fresh-Mac walkthrough timing (SC-001) and README "Quick start"
 
 ## Dependencies
 

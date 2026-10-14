@@ -47,7 +47,8 @@
     id), `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `CLAUDE_CODE_AUTO_COMPACT_WINDOW` from capacity,
     `CLAUDE_CODE_ATTRIBUTION_HEADER=0`.
   - Codex: provider `mrun` with `base_url`, `wire_api = "responses"`, `env_key` (when keyed),
-    `model_context_window` and `model_auto_compact_token_limit` from capacity.
+    `model_context_window` and `model_auto_compact_token_limit` from capacity (output limit from
+    `/v1/models` `max_output_tokens`).
   - OpenCode: provider using `@ai-sdk/openai-compatible` with `baseURL`, model
     `limit.context`/`limit.output`.
 - **Rationale**: Analysis I3 (all model slots, else background/subagent requests use `claude-*`

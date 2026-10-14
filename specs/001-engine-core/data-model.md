@@ -23,7 +23,7 @@
 | fraction, reserve | f32, bytes | defaults 0.75, 8 GiB (other apps + mrun host heap) |
 | budget | bytes | `min(fraction × physical, recommended) − reserve` (≥ 0) |
 | weights | bytes | estimated from files before load, measured after |
-| scratch | bytes | probed peak × 1.25 (margin applied only here), cached per identity/machine/version |
+| scratch | bytes | (probed peak + per-layer KV growth transient) × 1.25 (margin applied only here), cached per identity/machine/version |
 | kv_capacity_tokens | u32 | `min(max_position, (budget − weights − scratch) / kv_bytes_per_token)` |
 
 Load refused (exit 4) if `weights + scratch + 4,096 × kv_bytes_per_token > budget`.
@@ -32,11 +32,13 @@ Worked example: [research R6](research.md#r6-memory-budget).
 ## KV accounting (shared with 003)
 
 - `active_tokens`: tokens of the active conversation in the active cache (allocated `cap ≥ active`).
-- `pinned_tokens`: cached segments in use by the active request (003).
-- `evictable_tokens`: cached segments not in use (003).
-- Admission: `prompt + max_output ≤ kv_capacity_tokens − pinned_tokens(other)`; memory held by
-  evictable segments counts as available and is reclaimed on demand when the active cache grows
-  (FR-009). Without 003, `evictable = pinned = 0`.
+- `cached_tokens`: owned segments in the prefix store (003); pinned only while being copied into
+  the active cache, otherwise evictable.
+- Admission (one request at a time): `prompt + max_output ≤ kv_capacity_tokens`. Memory held by
+  cached segments counts as available and is reclaimed on demand: at admission for the initial
+  allocation, and later whenever the active cache grows (FR-009). Without 003, `cached = 0`.
+- Invariant: `active cap bytes + cached bytes + one-layer growth transient ≤ KV budget` at all
+  times.
 
 ## KvCache (active)
 
@@ -44,7 +46,7 @@ Worked example: [research R6](research.md#r6-memory-budget).
 | --- | --- | --- |
 | keys, values | per-layer arrays `[1, kv_heads, cap, head_dim]` | solely owned (no other handle) |
 | offset | u32 | ≤ cap; tokens `[0, offset)` valid |
-| cap | u32 | multiple of 256; grows in 4,096-token steps |
+| cap | u32 | multiple of 256; grows in 4,096-token steps, one layer at a time (transient ≤ one layer's K/V, inside the scratch envelope) |
 
 ## KvSegmentId
 

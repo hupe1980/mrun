@@ -22,8 +22,9 @@ MRUN_TEST_MODELS=qwen3-8b cargo test -p mrun-engine --test conformance -- --igno
 1. **Chat** (US1): `mrun run mlx-community/Qwen3-8B-4bit` → type a question → streamed answer and
    a stats line; follow-up reuses state (stats show cached tokens).
 2. **Budget** (US3): `mrun run mlx-community/Qwen3-8B-4bit --info` → weights, scratch, KV capacity
-   in tokens and bytes. With `--memory-fraction 0.2 --prompt "$(cat big.txt)"` → up-front
-   rejection naming requested and available tokens.
+   in tokens and bytes. With `--memory-fraction 0.3 --max-tokens 4096 --prompt "$(cat big.txt)"`
+   (≈ 6.4 GiB budget, ≈ 1.5 GiB KV) and a 20K-token prompt → up-front rejection naming requested and
+   available tokens; with `--memory-fraction 0.2` → load refusal (exit 4) because weights don't fit.
 3. **Cancel** (US2): paste a 16K-token prompt, press Ctrl-C during processing → prompt returns
    within 300 ms; ask again → normal answer.
 4. **Conformance** (US4): `mrun run mlx-community/Qwen3-8B-4bit --check` → "20/20 prompts match";

@@ -30,8 +30,8 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 
 ## Phase 3: US1 — Chat in the terminal (P1) 🎯 MVP
 
-- [ ] T012 [P] [US1] `crates/mrun-engine/src/kv.rs` [mlx]: per-layer K/V, cap = round_up(prompt + min(max_output, 4096), 256), 4,096-token growth, append, trim, snapshot (deep copy), restore (drop active first); tests: no copy on append (memory counters), snapshot independence, restore + continue equals uninterrupted within 1e-3
-- [ ] T013 [P] [US1] `crates/mrun-engine/src/models/qwen3.rs` [mlx]: port mlx-lm `qwen3.py` (`ba8a08f`) with per-layer `async_eval` + cancel hook during prefill; tiny random config tests (prefill vs step-by-step logits within 1e-3)
+- [ ] T012 [P] [US1] `crates/mrun-engine/src/kv.rs` [mlx]: per-layer K/V, cap = round_up(prompt + min(max_output, 4096), 256), 4,096-token growth one layer at a time, append, trim, snapshot (deep copy), restore (drop active first); tests: no copy on append (memory counters), growth peak ≤ cache + one layer, snapshot independence, restore + continue equals uninterrupted within 1e-3
+- [ ] T013 [P] [US1] `crates/mrun-engine/src/models/qwen3.rs` [mlx]: port mlx-lm `qwen3.py` (`ba8a08f`) with layer-by-layer prefill (`async_eval`, at most two layers in flight, cancel check before each layer); tiny random config tests (prefill vs step-by-step logits within 1e-3; cancel stops within two layers)
 - [ ] T014 [US1] `crates/mrun-engine/src/sample.rs` [mlx]: temperature/top-k/top-p/min-p/categorical with per-request seed key, argmax at T=0, optional mask; determinism and filter tests
 - [ ] T015 [US1] `crates/mrun-engine/src/mlx_engine.rs`: `MlxEngine` implementing `Engine` (reserve, prefill in 2,048 chunks with per-layer cancel checks, pipelined decode unless masked, trim, snapshot/restore/drop)
 - [ ] T016 [US1] `crates/mrun/src/cli/run.rs`: REPL (`/clear`, `/info`, `/exit`), `--prompt`, sampling flags, `--think`, stats line, model resolution (path or HF cache repo id), input caps (FR-016)
@@ -46,7 +46,7 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 ## Phase 5: US3 — Never overcommit memory (P1)
 
 - [ ] T021 [P] [US3] `crates/mrun-engine/src/budget.rs`: physical memory (`sysctl hw.memsize`, `/proc/meminfo`), recommended working set, budget formula and overrides; unit tests
-- [ ] T022 [US3] Pre-load check from file sizes; scratch probe at `P = min(max_position, …)` with cache in `~/.mrun/probe.toml`; `kv_capacity_tokens` capped by max position; MLX memory/cache/wired limits; refusal with all numbers (exit 4)
+- [ ] T022 [US3] Pre-load check from file sizes; scratch probe per research R6 (incl. per-layer growth transient) with cache in `~/.mrun/probe.toml`; `kv_capacity_tokens` capped by max position; MLX memory/cache/wired limits; refusal with all numbers (exit 4)
 - [ ] T023 [US3] Admission: prompt + max_output vs capacity (minus others' pinned, plus evictable); boundary tests (= capacity passes, +1 rejected) on ScriptedEngine and tiny model
 - [ ] T024 [US3] `mrun run --info` breakdown incl. current free memory (snapshot test)
 

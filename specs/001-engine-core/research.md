@@ -36,7 +36,10 @@ Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [candle-capabilities](
 
 - **Decision**: Per layer K and V `[1, n_kv, cap, head_dim]` in the activation dtype (bf16/f16 per
   config). Allocate `cap = round_up(prompt + min(max_output, 4096), 256)` at admission and grow in
-  4,096-token steps (one copy per step: 60K × 96 KiB ≈ 5.6 GiB at ~200 GB/s ≈ 30 ms, rare);
+  4,096-token steps, **one layer at a time** (allocate the layer's larger K/V, copy, free the old
+  pair before the next layer), so the transient is one layer's K/V (≈ 1/48 of the cache: ≈ 190 MiB
+  at 96K tokens on the MoE model) and the whole growth costs ≈ 30 ms at 60K tokens. The scratch
+  probe adds this per-layer transient at full capacity to the scratch envelope (Principle III);
   `offset` is the valid length; trim = set `offset`; append = `slice_update` on solely-owned
   buffers. Snapshots use an explicit deep copy (allocate `zeros` of the segment shape, then
   `slice_update` the source range into it, then `eval`), never `slice` or `copy`, because MLX may
@@ -51,18 +54,20 @@ Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [candle-capabilities](
 ## R5: Prefill chunking and cancellation
 
 - **Decision**: Mirror mlx-lm's schedule: all but the last prompt token in 2,048-token chunks, the
-  last token processed by the first decode step. Within a chunk, `async_eval` after every layer and
-  check the cancel flag before building the next layer, so cancellation latency ≈ one layer of one
-  chunk (2,048-token chunk ≈ 2.7 s at ~768 tok/s on the MoE model → ≈ 56 ms per layer; deeper
-  positions are slower but stay well under 300 ms). Decode uses `async_eval` pipelining with a
-  cancel check per token; when a token mask is required (constrained decoding, 002) pipelining is
-  disabled for that request because the mask for step n+1 depends on token n.
+  last token processed by the first decode step. Within a chunk, layers are submitted with
+  `async_eval` but the CPU keeps at most two layers in flight: before building layer i+1 it waits
+  for layer i−1 to complete, then checks the cancel flag. Cancellation latency is therefore at most
+  about two layers of one chunk (2,048-token chunk ≈ 2.7 s at ~768 tok/s on the MoE model → ≈ 56 ms
+  per layer, ≈ 115 ms bound; deeper positions are slower but stay under 300 ms). Decode uses
+  `async_eval` pipelining with a cancel check per token; when a token mask is required
+  (constrained decoding, 002) pipelining is disabled for that request because the mask for step
+  n+1 depends on token n.
 - **Rationale**: Analysis finding T1: with cancel checks only between chunks, 300 ms would need
   ~150-token chunks, which cuts MoE prefill throughput far below mlx-lm. Per-layer eval keeps
   mlx-lm's chunk size (fair SC-003) and bounds cancellation independently.
 - **Risk**: Per-layer eval adds 36–48 sync points per chunk; measured with the engine benchmark
   (FR-017). Fallback: eval every 4 layers (cancel ≈ 225 ms per chunk-layer group on the MoE model).
-- **Conformance**: references are generated with the same chunk size and schedule (T025 after T019).
+- **Conformance**: references are generated with the same chunk size and schedule (T026 after T020).
 
 ## R6: Memory budget
 
@@ -71,9 +76,10 @@ Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [candle-capabilities](
   mrun's host heap; host-side work is bounded by input caps (FR-016, 002 FR-009).
   1. Pre-load check from safetensors file sizes (≈ weights) against budget (FR-007).
   2. Load weights; read `get_active_memory` as measured weights.
-  3. Scratch: run one 2,048-token chunk at position `P = min(max_position, (budget − weights) /
-     kv_bytes_per_token)` with a temporary KV of P tokens; `scratch = (peak − active_before) ×
-     1.25` (the only place the margin is applied). Cache in `~/.mrun/probe.toml` keyed by (model
+  3. Scratch: run one 2,048-token chunk at position `P = min(max_position, (budget − weights −
+     scratch_estimate) / kv_bytes_per_token)` (`scratch_estimate` = 2 GiB) with a temporary KV of P
+     tokens; `scratch = (peak − active_before + kv_bytes_at_P / layers) × 1.25`, which includes the
+     per-layer KV growth transient (the only place the margin is applied). Cache in `~/.mrun/probe.toml` keyed by (model
      identity, machine model, macOS, mrun version) so later starts skip it (SC-007).
   4. `kv_capacity_tokens = min(max_position, (budget − weights − scratch) / kv_bytes_per_token)`.
   5. `set_memory_limit(budget)`, `set_cache_limit(scratch)`, `set_wired_limit(min(budget,

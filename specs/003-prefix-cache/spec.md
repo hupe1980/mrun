@@ -14,7 +14,7 @@
 
 - Q: How much memory may the cache use? → A: All attention-state capacity not occupied by the active request's tokens; there is no separate cache budget to tune.
 - Q: Do miss explanations include prompt text? → A: Positions, counts and cause only; text excerpts only with `--debug-cache` (loopback only), printed to the server terminal, never on disk or in responses.
-- Q: Should mrun strip known volatile client content (opt-in normalization)? → A: Deferred (analysis 2026-10-14): `mrun connect` fixes the known Claude Code case via environment; revisit if diagnostics show misses `connect` cannot fix.
+- Q: Should mrun strip known volatile client content (opt-in normalization)? → A: Deferred (analysis 2026-10-14): `mrun launch`/`connect` fix the known Claude Code case via environment; revisit if diagnostics show misses they cannot fix.
 - Q: How does the cache share memory with large output limits? → A: Cached state may occupy capacity reserved for output until the output needs it, then it is evicted lazily; admission always happens before restore.
 - Q: How do concurrent subagents share? → A: Requests are serialized (feature 002); a queued request that shares a prefix with the active one reuses it once that prefix is cached. (Maintainer decision: queue now, batch later.)
 
@@ -78,7 +78,8 @@ content (timestamps, per-request headers) that silently destroys reuse; explaini
 differentiator.
 
 **Independent Test**: Send prompts with injected volatile content at known positions and confirm
-the reported divergence position, surrounding text excerpt and cause category.
+the reported divergence position and cause category (and, with `--debug-cache`, the excerpt on
+the server terminal).
 
 **Acceptance Scenarios**:
 
@@ -109,8 +110,8 @@ request and simulate memory pressure; verify eviction order and that requests su
    not in use is evicted until the request fits.
 2. **Given** OS memory pressure, **When** signaled, **Then** the cache shrinks before any running
    request is affected.
-3. **Given** a cached prefix in use by a running request, **When** eviction runs, **Then** that
-   prefix is not freed until the request finishes.
+3. **Given** a cached prefix being restored for a request, **When** eviction runs, **Then** that
+   prefix is not freed until the copy completes; afterwards it is an ordinary evictable entry.
 
 ### Edge Cases
 
@@ -144,8 +145,8 @@ request and simulate memory pressure; verify eviction order and that requests su
   the prompt length exactly (per-API fields owned by feature 002).
 - **FR-006**: For every request, mrun MUST record the divergence position against the closest
   cached prompt and classify misses (new, edit, template, volatile, evicted, capacity, model,
-  disabled); the result MUST be returned in feature 002's `x-mrun-cache-*` response headers (all
-  three APIs) and shown in `mrun ps`.
+  disabled); the result MUST be returned in feature 002's mrun metadata (headers for non-streaming,
+  `: mrun` SSE comments for streaming, all three APIs) and shown in `mrun ps`.
 - **FR-007**: Cache memory MUST come only from attention-state capacity not needed by the active
   request; admission happens before any restore. Cached state may occupy capacity reserved for a
   request's output until that output needs it, and is then evicted. Eviction removes the least
@@ -166,7 +167,7 @@ request and simulate memory pressure; verify eviction order and that requests su
 
 - **Cache Key**: Model identity (weights hash, tokenizer hash, template hash, state format).
 - **Prefix Node**: A token range within a tree of token sequences, holding an immutable state
-  segment, byte size, recompute-cost estimate, last use and active-use count.
+  segment, byte size, turn type, last use and active-use count.
 - **Miss Report**: Divergence position, closest cached length, cause category.
 
 ## Success Criteria *(mandatory)*
@@ -181,7 +182,8 @@ request and simulate memory pressure; verify eviction order and that requests su
   tokens under the same model identity). On real weights for 30 of those cases, under teacher
   forcing the log-probability of the reference next token differs from cache-off by at most 1e-2
   at every position, and the first 32 greedy tokens are identical for at least 95% of cases.
-- **SC-003**: Restoring a 30K-token prefix from cache takes under 10% of the time to compute it.
+- **SC-003**: With Qwen3-Coder-30B-A3B 4-bit on the target Mac (M4 Pro, 48 GB), restoring a
+  30K-token prefix from cache takes under 10% of the time to compute it.
 - **SC-004**: 100% of injected volatile-content cases in the diagnostics suite (at least 20) report
   the correct divergence position and cause category.
 - **SC-005**: Under a simulated memory-pressure warning, cached bytes and MLX cache memory drop
