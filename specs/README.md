@@ -15,7 +15,7 @@ mrun is a local inference server for coding agents on Apple Silicon. See
 | PR-3 | Memory is budgeted at startup; requests that cannot fit are refused up front; the Mac never swaps because of mrun. |
 | PR-4 | Interruptions take effect immediately; abandoned work never delays the next request. |
 | PR-5 | Offline and private by default: loopback only, no telemetry, no prompt logging. |
-| PR-6 | First-run to working agent in minutes: pull, serve, connect, doctor. |
+| PR-6 | First-run to working agent in minutes: pull, serve, launch, doctor. |
 | PR-7 | Performance claims are reproducible with `mrun bench` against competitors with their caches on. |
 
 ## Features

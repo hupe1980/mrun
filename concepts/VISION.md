@@ -33,10 +33,11 @@ mrun has to be better on the dimensions agents feel, and prove it with a publish
    fix their setup instead of guessing.
 3. **Predictable memory.** Weights, KV and cache are budgeted at startup. Requests that cannot fit
    are rejected up front with the numbers. Pressure sheds cache, never swaps.
-4. **Instant interruption.** Cancellation takes effect at the next prefill chunk or decode step.
+4. **Instant interruption.** Cancellation is checked after every model layer during prompt
+   processing and after every generated token: well under 300 ms.
 5. **All three agent APIs, natively.** OpenAI Chat Completions, Anthropic Messages and stateless
    OpenAI Responses from one binary, so Claude Code, Codex and OpenCode all work.
-6. **Delightful DX.** `mrun pull`, `mrun serve`, `mrun connect claude-code`, `mrun doctor`. One
+6. **Delightful DX.** `mrun pull`, `mrun serve`, `mrun launch claude-code`, `mrun doctor`. One
    binary, zero config, clear errors.
 7. **Fast engine.** MLX: the fastest Apple Silicon kernels, including MoE and quantized models.
 

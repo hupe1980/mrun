@@ -14,7 +14,7 @@ loops, tells you why when it can't, and never pushes your Mac into swap.
 ```sh
 mrun pull qwen3-coder            # Qwen3-Coder-30B-A3B, 4-bit MLX, verified download
 mrun serve                       # http://127.0.0.1:8484
-mrun connect claude-code         # or: codex, opencode
+mrun launch claude-code          # or: codex, opencode (connect writes persistent config)
 mrun ps                          # model, memory budget, cache hit rate, last cache miss
 mrun doctor                      # diagnose the machine and client setup
 ```
