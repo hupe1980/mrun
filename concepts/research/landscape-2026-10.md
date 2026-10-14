@@ -1,8 +1,8 @@
 # Local Runtime and Coding-Agent Landscape, October 2026
 
 **Date**: 2026-10-14. **Scope**: This document verifies, corrects and extends
-[MARKET_LANDSCAPE.md](../MARKET_LANDSCAPE.md) and the
-[mistral.rs study](../../specs/001-agent-runtime/mistralrs-study.md). It does not repeat them.
+the former MARKET_LANDSCAPE.md (removed in the 2026-10-14 redesign) and the
+[mistral.rs study](mistralrs-study.md). It does not repeat them.
 Candle model coverage is in [candle-capabilities.md](candle-capabilities.md).
 
 **Method**: Each project was shallow-cloned at its default branch on 2026-10-14, and its README, docs

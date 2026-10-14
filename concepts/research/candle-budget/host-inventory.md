@@ -1,5 +1,7 @@
 # Host Allocation/Work Inventory (T115)
 
+> **Historical**: Candle was dropped on 2026-10-14 (D010). Kept as evidence for that decision and for D012.
+
 Status: **source review only**. No tests, builds of mrun code, or allocation measurements were run.
 Every byte figure below is derived from reading source, not measured; T118 must reproduce or refute it.
 The two ceilings remain **targets, not established capabilities**:

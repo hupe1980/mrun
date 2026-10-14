@@ -2,7 +2,7 @@
 
 **Status**: Learning reference only, 2026-10-14. mistral.rs is a competitor, benchmark comparator
 and design reference for mrun. It is **not** a dependency, embedded runtime or source of copied code,
-and this study is not a dependency decision (see [plan.md](plan.md#current-direction)).
+and this study is not a dependency decision (written against the superseded Candle plan; see [DECISIONS](../DECISIONS.md)).
 **Method**: Static reading of the source only. Nothing was built, run or benchmarked. Statements
 about runtime behavior are inferred from code and docs and are **unverified** until exercised.
 Paths are relative to the mistral.rs repository root. `core/` abbreviates `mistralrs-core/src/`.

@@ -1,5 +1,7 @@
 # Candle capabilities audit for mrun (Metal, Apple Silicon)
 
+> **Historical**: Candle was dropped on 2026-10-14 (D010). Kept as evidence for that decision and for D012.
+
 - **Audited rev:** `c68b24997319b8d76e5a4e775dab197c7f26322a` (2026-10-02, workspace version 0.11.0, `Cargo.toml:24`).
 - **Upstream main (fetched 2026-10-14):** `12bb5d1f` "Pin GitHub Actions to commit SHAs (#4039)". It is the **only** commit after the pinned rev and touches only `.github/workflows/rust-ci.yml`. For the purposes of this audit, the pinned rev is the same as main.
 - **Paths** are relative to the candle repo root.

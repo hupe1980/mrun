@@ -1,5 +1,7 @@
 # Candle Metal GPU/Backing Allocation Inventory (T114)
 
+> **Historical**: Candle was dropped on 2026-10-14 (D010). Kept as evidence for that decision and for D012.
+
 - Candle revision: `c68b24997319b8d76e5a4e775dab197c7f26322a` (workspace 0.11.0)
 - Date: 2026-10-14
 - Scope: `candle-core` Metal backend, quantized Metal storage, sort, safetensors, `candle-nn`

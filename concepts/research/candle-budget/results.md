@@ -1,5 +1,7 @@
 # Feasibility Results: Enforceable Allocation Bounds for Candle
 
+> **Historical**: Candle was dropped on 2026-10-14 (D010). Kept as evidence for that decision and for D012.
+
 **Date**: 2026-10-14 · **Tasks**: T112..T120 (results), T124 (handoff) · **Disposition**: **BLOCKED**
 (no gate pass). The experiment produced enforcement mechanisms and decisive counterexamples, not a
 complete bound. Planning gate *Principle III / FR-014 enforceable allocation bounds* stays closed.

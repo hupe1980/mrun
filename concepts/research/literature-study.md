@@ -1,7 +1,7 @@
 # Literature and Systems Study: Making the Agent Runtime Better
 
 **Feature**: `001-agent-runtime` | **Date**: 2026-10-14 | **Status**: Research input, not a decision.
-**Authority**: [spec.md](spec.md) and the constitution govern. Nothing here amends an FR/SC, the
+**Authority**: Written for the superseded 001-agent-runtime spec (2026-10-14); the constitution and current specs govern. Nothing here amends an FR/SC, the
 Assumptions' exclusions, or the approved Principle V exception. All benefit figures are the cited
 authors' own claims under their own conditions (mostly datacenter GPUs, batched serving); none is
 an mrun measurement or a prediction for the M4 Pro.
