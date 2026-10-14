@@ -15,9 +15,9 @@ Detailed field mapping per API is in [research §1, §5](research.md); this is t
 | parallel_tool_calls | bool | Chat/Responses flag; Anthropic `disable_parallel_tool_use` inverted |
 | response_format | Text \| JsonObject \| JsonSchema{schema, strict} | Chat `response_format`, Responses `text.format`, Anthropic `output_config.format` |
 | sampling | {temperature, top_p, top_k, min_p, seed} | defaults from model generation_config |
-| max_output_tokens | Option<u32> | `max_completion_tokens` > `max_tokens`; `max_tokens`; `max_output_tokens` |
+| max_output_tokens | u32 | `max_completion_tokens` > `max_tokens`; `max_tokens`; `max_output_tokens`; absent → server default 16,384; clamped to capacity (reported) |
 | stop | Vec<String> (≤ 4 × 256 B) | `stop` / `stop_sequences` |
-| reasoning | Off \| On{budget} | thinking enabled/adaptive; `reasoning_effort` ≠ none; Responses `reasoning.effort` present (a bare `reasoning` object does not enable); overridden by `--thinking` |
+| reasoning | Off \| On{budget} | Anthropic thinking enabled/adaptive; `reasoning_effort` / `reasoning.effort` not in {none, minimal}; a bare `reasoning` object does not enable; overridden by `--thinking` |
 | prefill | bool | Anthropic trailing assistant message |
 | stream, include_usage | bool | |
 
@@ -25,9 +25,10 @@ Assistant parts: `Text`, `Reasoning{text}` (restored from signature/encrypted_co
 `ToolCall{id, name, raw_args}` — raw argument text is kept verbatim so re-rendered history is
 byte-identical (prefix reuse).
 
-Validation (before queuing): body ≤ 8 MiB; messages ≤ 4,096; tools ≤ 128; each schema ≤ 64 KiB and
-depth ≤ 16; tool result call ids must match a prior tool call; images/audio/files rejected with the
-JSON path.
+Validation (before queuing), configurable: body ≤ 8 MiB; messages ≤ 4,096; tools ≤ 256; each schema
+≤ 64 KiB and depth ≤ 16; tool result call ids must match a prior tool call; images/audio/files in
+user content rejected with the JSON path; images inside tool results replaced by a placeholder
+(FR-020). The `model` field is informational when one model is served (FR-018).
 
 ## GenEvent (engine → encoders)
 
@@ -48,12 +49,12 @@ Finish mapping: see [research Design recommendations](research.md#design-recomme
 
 ## QueueEntry
 
-`{request, rendered_tokens, arrived, deadline (arrived + 30 s), cancel: CancelToken, events: Sender}`;
+`{request, rendered_tokens, arrived, deadline (arrived + 600 s, waiting time only), cancel: CancelToken, events: Sender}`;
 states `Queued → Running → Done`; `Queued → Expired | Cancelled`.
 
 ## Reasoning round-trip
 
 - Anthropic: thinking block text returned as-is; `signature = "mrun1." + base64(sha256(text))[..16]`;
   any signature accepted on input.
-- Responses: reasoning item `{summary: [], encrypted_content: "mrun1." + base64(zstd(text))}`;
-  decoded on input to restore reasoning text (not encrypted: content stays on the client's machine).
+- Responses: reasoning item `{summary: [], encrypted_content: "mrun1." + base64(text)}`; decoded on
+  input to restore reasoning text (not encrypted: content stays on the client's machine).

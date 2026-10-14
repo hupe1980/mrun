@@ -9,9 +9,11 @@
 Run Qwen3 dense and Qwen3-MoE MLX-quantized models from the `mrun` binary on Apple Silicon. We
 build our own `mlx-sys` bindings over vendored mlx-c/MLX, a thin safe array layer, and 1:1 ports
 of mlx-lm's `qwen3` and `qwen3_moe` graphs. One engine thread owns all MLX state: weights, the
-active KV cache (step-preallocated, trim by offset), chunked prefill (512 tokens, cancellable per
-chunk), on-device sampling with async-eval pipelining, and a startup memory budget that measures
-weights and worst-case scratch before sizing KV capacity. `mrun run` provides an interactive
+active KV cache (allocated at admission, trim by offset, deep-copy snapshots), chunked prefill
+(2,048 tokens like mlx-lm, cancellable after every layer), on-device sampling with async-eval
+pipelining, and a startup memory budget that pre-checks file sizes, measures weights and a cached
+worst-case scratch probe, then sizes KV capacity (capped by max position). The `Engine` trait is
+primitive-based and MLX-free so the generation loop, 002 and 003 are testable everywhere. `mrun run` provides an interactive
 streaming chat; `mrun run --check` runs the greedy conformance set against stored mlx-lm outputs.
 
 ## Technical Context
@@ -19,7 +21,8 @@ streaming chat; `mrun run --check` runs the greedy conformance set against store
 **Language/Version**: Rust 1.94.0 (edition 2024); C/C++17 for vendored MLX built via CMake
 **Primary Dependencies**: MLX v0.32.3 + mlx-c v0.7.0 (`a341b49`), vendored and hash-checked;
 bindgen output checked in (no libclang at build time); `tokenizers` 0.23 (HF tokenizer.json);
-`minijinja` 3 + `minijinja-contrib` (pycompat) for chat templates; `safetensors` via MLX loader;
+`minijinja` 3 + `minijinja-contrib` (pycompat) for chat templates (tokenizers built without its
+`http` feature: no network, FR-015); `safetensors` via MLX loader;
 tokio 1.53 (async side), crossbeam-channel (engine command/event channels); clap 4.6
 **Storage**: Model files in the HF cache (feature 004 resolves paths); reference outputs for
 conformance in `crates/mrun-engine/tests/reference/*.json`
@@ -30,19 +33,19 @@ mlx-lm on real 4-bit weights (`MRUN_TEST_MODELS=...`), `mrun bench` speed cells 
 **Project Type**: Rust workspace producing one CLI/server binary
 **Performance Goals**: ≥ 90% of mlx-lm decode and prefill tok/s on the same weights (SC-002/003);
 cancellation ≤ 300 ms p95 at 16K (SC-004); first token ≤ 15 s cold start for 8B (SC-007)
-**Constraints**: Memory budget by construction (Principle III); no downloads (FR-015); exact match
-with mlx-lm greedy output when run with the same chunk size (SC-001)
+**Constraints**: Memory budget by construction (Principle III); no network (FR-015); input caps
+(FR-016); exact match with mlx-lm greedy output under the same chunk size and schedule (SC-001)
 **Scale/Scope**: 2 model families, 1 active sequence, contexts up to the budgeted capacity
-(typically 64K+ tokens for Qwen3-Coder-30B-A3B at 96 KiB/token)
+(≈ 100–110K tokens for Qwen3-Coder-30B-A3B on 48 GB; Qwen3-8B capped at 40,960)
 
 ## Constitution Check
 
 | Principle | Gate | Status |
 | --- | --- | --- |
-| I Agent latency | TTFT, prefill/decode tok/s and cancel latency measured per SC | Pass |
-| II Exactness | Conformance vs mlx-lm; KV trim/restore tested; no approximate methods | Pass |
-| III Memory budget | Startup budget, measured scratch, per-request KV reservation, MLX limits set | Pass |
-| IV Local, private | No network, no prompt logging; content-hash identity from 004 manifests | Pass |
+| I Agent latency | Gates measured with the in-repo engine benchmark (FR-017) on named models | Pass |
+| II Exactness | Conformance vs mlx-lm (same schedule); deep-copy snapshots; trim to committed tokens | Pass |
+| III Memory budget | Pre-load check, measured scratch, admission before execution, input caps, MLX limits | Pass |
+| IV Local, private | No network, no prompt logging; content-hash identity computed in 001 (R10) | Pass |
 | V Own runtime, reuse kernels | MLX kernels only; graphs ported from mlx-lm; no new kernels | Pass |
 | VI Simple | One engine thread, one sequence, no batching, no paging | Pass |
 
@@ -69,26 +72,30 @@ crates/
 │   ├── build.rs               # cmake vendored mlx-c/MLX; Metal on macOS, CPU+OpenBLAS on Linux
 │   ├── vendor/                # mlx-c (submodule @a341b49) + MLX source tarball sha256-pinned
 │   └── src/bindings.rs        # checked-in bindgen output
-├── mrun-engine/
+├── mrun-engine/               # features: mlx (default) pulls in mlx-sys
 │   ├── src/
-│   │   ├── mlx/               # safe layer: Array (RAII, !Send outside engine), ops, fast, memory, device
+│   │   ├── engine.rs          # Engine trait, ModelInfo, MemoryBudget, Segment, errors (no MLX)
+│   │   ├── identity.rs        # model identity (R10), shared with 004
+│   │   ├── mlx/               # [mlx] safe layer: Array (RAII, !Send, !Sync), ops, fast, memory, device
 │   │   ├── load.rs            # config.json + safetensors, quantization (mode/bits/group, per-path overrides)
 │   │   ├── models/{qwen3.rs, qwen3_moe.rs, common.rs}
 │   │   ├── kv.rs              # per-layer K/V, step 256 preallocation, offset/trim, snapshot/restore copies
 │   │   ├── sample.rs          # temperature, top-k, top-p, min-p, seed (on device), optional mask
-│   │   ├── budget.rs          # budget computation + scratch probe
-│   │   └── lib.rs             # MlxEngine: load, prefill, decode_step, snapshot, restore, stats
+│   │   ├── budget.rs          # budget formula (no MLX) + [mlx] scratch probe with cache
+│   │   └── mlx_engine.rs      # [mlx] MlxEngine implementing Engine
+│   ├── examples/{spike.rs, bench_engine.rs}
 │   └── tests/                 # tiny random models (CPU), reference conformance (macOS, opt-in)
 └── mrun/
     └── src/
-        ├── main.rs  cli/run.rs
+        ├── main.rs  cli/run.rs           # features: mlx (default) → mrun-engine/mlx
         ├── chat/{tokenizer.rs, template.rs, stop.rs, utf8.rs}
-        └── runtime/{engine.rs (trait + worker thread), session.rs, scripted.rs}
+        └── runtime/{handle.rs (worker thread), generate.rs (loop), session.rs, scripted.rs}
 ```
 
 **Structure Decision**: Three crates (see [ARCHITECTURE](../../concepts/ARCHITECTURE.md)): `mlx-sys`
-isolates the C/C++ build, `mrun-engine` isolates all MLX usage on one thread, `mrun` holds
-everything engine-agnostic and the `Engine` test seam.
+isolates the C/C++ build, `mrun-engine` holds the MLX-free `Engine` contract plus the MLX
+implementation behind a feature, `mrun` holds everything engine-agnostic. `cargo test -p mrun
+--no-default-features` never builds MLX.
 
 ## Complexity Tracking
 

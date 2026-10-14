@@ -86,8 +86,9 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
    within one chunk or token and the next queued request starts.
 2. **Given** a full queue, **When** another request arrives, **Then** it is rejected immediately
    with a retry-after hint.
-3. **Given** a queued request waiting past its deadline, **When** the deadline passes, **Then** it
-   is rejected with a timeout error and never starts.
+3. **Given** a queued request waiting past its deadline (default 600 s), **When** the deadline
+   passes, **Then** it is rejected with a timeout error and never starts; while it waits, streaming
+   clients receive keepalives.
 
 ### Edge Cases
 
@@ -98,8 +99,10 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
 - Assistant prefill (Anthropic trailing assistant message): continued, not restarted.
 - Thinking/reasoning content from the model: returned in the API's reasoning field or omitted per
   request, never mixed into the answer text.
-- `max_tokens` above the model limit: clamped to capacity with a clear error if the prompt does
-  not leave room.
+- `max_tokens` above capacity or absent: clamped / defaulted per FR-019; rejected only when the
+  prompt itself does not fit.
+- Images inside tool results (Claude Code reading a PNG, Codex `view_image`): replaced per FR-020.
+- A browser page on the same machine calling the server: rejected by the Host/Origin policy.
 - Non-loopback bind requested: refused unless an explicit flag and an API key are configured.
 
 ## Requirements *(mandatory)*
@@ -108,45 +111,78 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
 
 - **FR-001**: `mrun serve` MUST expose OpenAI Chat Completions (`POST /v1/chat/completions`),
   Anthropic Messages (`POST /v1/messages`, `POST /v1/messages/count_tokens`) and stateless OpenAI
-  Responses (`POST /v1/responses`), plus model listing (`GET /v1/models`) and health
-  (`GET /health`).
+  Responses (`POST /v1/responses`), plus model listing (`GET /v1/models`), health (`GET /health`)
+  and server status (`GET /mrun/status`, versioned JSON: model, budget, active/queued requests,
+  cache stats, last miss).
 - **FR-002**: All three APIs MUST support streaming (server-sent events in each API's native event
   format) and non-streaming responses.
 - **FR-003**: All three APIs MUST support tool definitions, tool calls (including parallel calls)
   and tool results, translated through one internal request model so behavior is identical.
 - **FR-004**: Tool-call arguments MUST be valid JSON matching the declared schema when the client
-  requests strict tools (`strict: true` or equivalent), using constrained decoding; non-strict tool
-  calls MUST at least be valid JSON or be reported as a parse error, never silently repaired.
+  requests strict tools (`strict: true` or equivalent), using constrained decoding. Non-strict
+  arguments are never modified: if they are not valid JSON, the call is returned with its raw
+  arguments and the response carries an `x-mrun-warning: tool-args-invalid` header. The tool-call
+  envelope (for example a missing `<tool_call>` opener before a declared function) MAY be
+  recognized, because it does not change argument content.
 - **FR-005**: Structured output (JSON schema response format) MUST be supported with the same
   constrained decoding.
-- **FR-006**: The Responses API MUST be stateless: requests that depend on stored server state
-  (`previous_response_id`, `store: true` retrieval) MUST be rejected with a clear error.
-- **FR-007**: Usage MUST report input, cached input and output tokens accurately in each API's
-  fields; finish/stop reasons MUST map exactly (stop, length, tool calls, cancelled, error).
-- **FR-008**: Errors MUST use each API's native error shape and status codes, with a message that
-  names the cause and, where possible, the fix.
-- **FR-009**: Requests MUST be validated before queuing: body size (default 8 MiB), message count,
-  tool count and schema size/depth limits, all reported in errors when exceeded.
-- **FR-010**: The server MUST run one generation at a time with a FIFO queue (default 8 waiting,
-  30 s queue deadline); full-queue and deadline errors MUST be immediate and explicit.
+- **FR-006**: The Responses API MUST be stateless: `previous_response_id` and item references MUST
+  be rejected with a clear error; `store: true` is accepted and nothing is stored.
+- **FR-007**: Usage MUST report input, cached input and output tokens with each API's semantics
+  (Anthropic `input_tokens` excludes cache reads; OpenAI totals include them;
+  `cache_creation_input_tokens` is always 0). Finish reasons MUST follow the mapping table in
+  [research](research.md#design-recommendations) (stop, stop sequence, length, context full, tool
+  calls); errors are error events, never finish reasons.
+- **FR-008**: Errors MUST use each API's native error shape, with a message that names the cause
+  and, where possible, the fix. Queue-full and queue-timeout statuses follow
+  [contracts/api.md](contracts/api.md#status-codes).
+- **FR-009**: Requests MUST be validated before queuing against configurable limits (defaults: body
+  8 MiB, 4,096 messages, 256 tools, schema 64 KiB and depth 16); errors name the limit and the
+  setting that raises it.
+- **FR-010**: The server MUST run one generation at a time with a FIFO queue (default 8 waiting).
+  The queue deadline covers waiting time only (default 600 s, configurable); while a request
+  waits, streaming responses MUST send keepalives (Anthropic `ping`, SSE comments). Full-queue and
+  deadline errors MUST be immediate and explicit.
 - **FR-011**: Client disconnect MUST cancel queued or running work promptly (within one chunk or
   token) and release its reservation.
-- **FR-012**: The server MUST bind to loopback by default; binding elsewhere MUST require an explicit
-  flag and an API key, and requests MUST then authenticate.
-- **FR-013**: Reasoning/thinking output MUST be separated from answer text according to each API's
-  conventions, and thinking MUST be controllable per request where the model supports it. A
-  server-side `--thinking client|off|on` setting (default `client`) lets users override clients
-  that always request thinking.
+- **FR-012**: The server MUST bind to loopback by default and accept only loopback `Host` headers
+  (`127.0.0.1`, `localhost`, `[::1]` with the server port), reject requests carrying a browser
+  `Origin` other than the server's own, and send no CORS headers. Binding elsewhere MUST require an
+  explicit flag and an API key read from `MRUN_API_KEY` or `--api-key-file` (never a command-line
+  value), compared in constant time.
+- **FR-013**: Reasoning/thinking output MUST be separated from answer text per each API's
+  conventions. Thinking is on only when the request asks for it (Anthropic `thinking` enabled or
+  adaptive; OpenAI `reasoning_effort` / Responses `reasoning.effort` not in {none, minimal}; a bare
+  `reasoning` object does not count). A server setting `--thinking client|off|on` (default
+  `client`) overrides clients. Anthropic `budget_tokens` is honored by closing the thinking block
+  when the budget is reached.
+- **FR-014**: The server MUST NOT log prompt or completion content by default; request logs contain
+  timings, token counts and outcome only.
+- **FR-015**: `GET /v1/models` MUST list served models with their context capacity on this machine
+  (from the memory budget), not just the model's advertised maximum.
 - **FR-016**: Reasoning produced in one turn MUST be returnable in the next turn so the model sees
   the same rendered history: as thinking blocks with an opaque signature (Anthropic) or as
   `encrypted_content` on reasoning items (Responses). mrun MUST accept any signature and never
   reject a request because of one.
 - **FR-017**: Compatibility probes used by supported clients (for example `HEAD /api/hello`,
   `?beta=true` query strings, `anthropic-beta` headers) MUST be accepted.
-- **FR-014**: The server MUST NOT log prompt or completion content by default; request logs contain
-  timings, token counts and outcome only.
-- **FR-015**: `GET /v1/models` MUST list available models with their context capacity on this
-  machine (from the memory budget), not just the model's advertised maximum.
+- **FR-018**: A request naming a model that is not loaded MUST be served by the loaded model when
+  only one model is served (clients send names such as `claude-*` for background and subagent
+  work); responses report the actual model id.
+- **FR-019**: When a request gives no output limit, mrun MUST apply a server default (16,384 tokens,
+  configurable); when the requested limit exceeds what fits, mrun MUST clamp it to the available
+  capacity and report the clamp in an `x-mrun-max-tokens` response header. Rejection happens only
+  when the prompt itself does not fit.
+- **FR-020**: Images, audio and files in user messages MUST be rejected naming the JSON path. Images
+  inside tool results MUST, by default, be replaced with the text `[image omitted: model has no
+  vision input]` and an `x-mrun-warning: image-omitted` header, so sessions that read an image file
+  stay usable; `--reject-tool-images` restores strict rejection.
+- **FR-021**: `mrun serve --record <dir>` (debug aid for feature 005) MAY write request bodies to
+  disk only when given on the command line (never via config or environment), only on loopback,
+  with files mode 0600, a startup warning, and a visible flag in `/mrun/status`.
+- **FR-022**: Every response MUST carry `x-mrun-cache-cached`, `x-mrun-cache-processed` and, on a
+  miss, `x-mrun-cache-cause` / `x-mrun-cache-divergence` headers (populated by feature 003; zero and
+  `disabled` until then).
 
 ### Key Entities
 
@@ -168,10 +204,11 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   validate against their schemas.
 - **SC-004**: Serving overhead is small: time to first token through the API is within 50 ms of
   the engine's own time to first token, and generation speed through the API is at least 97% of the
-  engine's.
+  engine's (measured by this feature's overhead test).
 - **SC-005**: After a client disconnect, the next queued request starts within 300 ms (p95).
-- **SC-006**: Default configuration exposes nothing beyond loopback and writes no prompt content to
-  disk or logs (verified by an audit test).
+- **SC-006**: Default configuration exposes nothing beyond loopback, rejects non-loopback `Host`
+  and foreign `Origin` headers, and writes no prompt content to disk or logs; `--record` cannot be
+  enabled by config or environment (verified by an audit test).
 
 ## Assumptions
 
@@ -180,8 +217,11 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   be zero.
 - `mrun connect <client>` (feature 004) prints client configuration; for testing here, client
   configs are written by hand.
-- Claude Code adds a per-request attribution header to its system prompt that changes every turn;
-  feature 004's `connect` sets `CLAUDE_CODE_ATTRIBUTION_HEADER=0`. This feature does not rewrite
-  prompts.
-- Image, audio and file inputs are out of scope and rejected.
+- Claude Code adds an attribution block to its system prompt; since v2.1.181 it is stable per
+  conversation for custom base URLs (earlier versions change it every turn). Feature 004's
+  `connect`/`launch` set `CLAUDE_CODE_ATTRIBUTION_HEADER=0` as hygiene. This feature does not
+  rewrite prompts.
+- Vision input is out of scope (see FR-020 for how images are handled).
+- Real-client smoke tests (SC-001) use hand-written client configs; serving overhead (SC-004) is
+  measured by an engine-vs-API timing test in this feature, so 002's gates do not depend on 004/005.
 - Ollama's native `/api` endpoints and stateful Responses storage are non-goals.

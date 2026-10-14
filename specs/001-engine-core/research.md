@@ -34,37 +34,55 @@ Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [candle-capabilities](
 
 ## R4: KV cache
 
-- **Decision**: Per layer K and V `[1, n_kv, cap, head_dim]` in the model's activation dtype
-  (bf16/f16 per config), grown in 256-position steps up to the request's reservation; `offset` is the
-  valid length; trim = set `offset`; append = `slice_update` on solely-owned buffers. Snapshots are
-  materialized slice copies; restore copies into fresh buffers.
+- **Decision**: Per layer K and V `[1, n_kv, cap, head_dim]` in the activation dtype (bf16/f16 per
+  config). Allocate `cap = round_up(prompt + min(max_output, 4096), 256)` at admission and grow in
+  4,096-token steps (one copy per step: 60K × 96 KiB ≈ 5.6 GiB at ~200 GB/s ≈ 30 ms, rare);
+  `offset` is the valid length; trim = set `offset`; append = `slice_update` on solely-owned
+  buffers. Snapshots use an explicit deep copy (allocate `zeros` of the segment shape, then
+  `slice_update` the source range into it, then `eval`), never `slice` or `copy`, because MLX may
+  share the source buffer; debug builds assert the snapshot's data pointer differs from the
+  source. Restore drops or trims the active cache first, then copies segments into newly
+  allocated buffers (no transient doubling).
 - **Rationale**: mlx-lm `KVCache` design; MLX donation semantics make shared handles copy on every
-  write ([mlx-rust §7.3](../../concepts/research/mlx-rust.md)).
+  write ([mlx-rust §7.3](../../concepts/research/mlx-rust.md)); analysis finding T5.
 - **Sizes**: Qwen3-Coder-30B-A3B: 48 layers × 2 × 4 kv heads × 128 × 2 B = 96 KiB/token.
   Qwen3-8B: 36 × 2 × 8 × 128 × 2 B = 144 KiB/token.
 
 ## R5: Prefill chunking and cancellation
 
-- **Decision**: 512-token chunks (configurable 128–2048); `eval` per chunk, cancel flag checked
-  between chunks; `clear_cache` after prefill like mlx-lm. Decode uses `async_eval` pipelining (next
-  step graph built while the current one runs) with a cancel check per token.
-- **Rationale**: SC-004 (300 ms) vs prefill speed: at ~768 tok/s (30B-A3B on M4 Pro, community
-  numbers) a 512 chunk is ~0.67 s worst case; 256 may be required for the MoE model. The chunk size
-  is tuned with `mrun bench --suite cancel` and recorded; conformance references are generated
-  with the same chunk size.
-- **Risk**: Smaller chunks lower prefill speed; SC-003 compares against mlx-lm at its default
-  (2048). If both cannot hold, the spec's SC-004 or SC-003 gets an explicit amendment.
+- **Decision**: Mirror mlx-lm's schedule: all but the last prompt token in 2,048-token chunks, the
+  last token processed by the first decode step. Within a chunk, `async_eval` after every layer and
+  check the cancel flag before building the next layer, so cancellation latency ≈ one layer of one
+  chunk (2,048-token chunk ≈ 2.7 s at ~768 tok/s on the MoE model → ≈ 56 ms per layer; deeper
+  positions are slower but stay well under 300 ms). Decode uses `async_eval` pipelining with a
+  cancel check per token; when a token mask is required (constrained decoding, 002) pipelining is
+  disabled for that request because the mask for step n+1 depends on token n.
+- **Rationale**: Analysis finding T1: with cancel checks only between chunks, 300 ms would need
+  ~150-token chunks, which cuts MoE prefill throughput far below mlx-lm. Per-layer eval keeps
+  mlx-lm's chunk size (fair SC-003) and bounds cancellation independently.
+- **Risk**: Per-layer eval adds 36–48 sync points per chunk; measured with the engine benchmark
+  (FR-017). Fallback: eval every 4 layers (cancel ≈ 225 ms per chunk-layer group on the MoE model).
+- **Conformance**: references are generated with the same chunk size and schedule (T025 after T019).
 
 ## R6: Memory budget
 
 - **Decision**: `budget = min(0.75 × hw.memsize, device_info.max_recommended_working_set_size) −
-  8 GiB` (user can lower; raise only with `--allow-over`). Load weights, read `get_active_memory`;
-  run one prefill chunk at the maximum capacity position with a scratch KV to read
-  `get_peak_memory − active` as scratch; `kv_capacity_tokens = (budget − weights − scratch ×
-  1.25) / kv_bytes_per_token`. Set `set_memory_limit(budget)`, `set_cache_limit(scratch)`,
-  `set_wired_limit(min(budget, recommended))` for the engine's lifetime.
-- **Rationale**: D012; mlx-lm's `wired_limit` pattern; no privileged OS changes.
-- **Alternatives**: Per-allocation hooks (proven infeasible in the Candle experiment).
+  8 GiB` (user can lower; raise only with `--allow-over`). The 8 GiB reserve covers other apps and
+  mrun's host heap; host-side work is bounded by input caps (FR-016, 002 FR-009).
+  1. Pre-load check from safetensors file sizes (≈ weights) against budget (FR-007).
+  2. Load weights; read `get_active_memory` as measured weights.
+  3. Scratch: run one 2,048-token chunk at position `P = min(max_position, (budget − weights) /
+     kv_bytes_per_token)` with a temporary KV of P tokens; `scratch = (peak − active_before) ×
+     1.25` (the only place the margin is applied). Cache in `~/.mrun/probe.toml` keyed by (model
+     identity, machine model, macOS, mrun version) so later starts skip it (SC-007).
+  4. `kv_capacity_tokens = min(max_position, (budget − weights − scratch) / kv_bytes_per_token)`.
+  5. `set_memory_limit(budget)`, `set_cache_limit(scratch)`, `set_wired_limit(min(budget,
+     recommended))` for the engine's lifetime; `clear_cache()` after prefill and after evictions.
+- **Worked example (M4 Pro 48 GB, Qwen3-Coder-30B-A3B 4-bit)**: budget ≈ min(36, ~36) − 8 = 28 GiB;
+  weights ≈ 17 GiB; scratch ≈ 1–2 GiB; KV ≈ 9–10 GiB ≈ 100–110K tokens at 96 KiB/token, shared
+  between the active conversation and the prefix cache. Qwen3-8B: weights ≈ 4.3 GiB, memory allows
+  ≈ 160K tokens, capped at max_position 40,960.
+- **Rationale**: D012; analysis findings T3, T4, C5, F4, A1.
 
 ## R7: Sampling
 
@@ -82,11 +100,35 @@ Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [candle-capabilities](
 - **Rationale**: Same files as mlx-lm; template parity is tested by comparing rendered token IDs with
   mlx-lm's `apply_chat_template` on the reference prompts.
 
-## R9: Threading
+## R9: Threading and layering
 
-- **Decision**: `MlxEngine` lives on one dedicated OS thread; `runtime::engine::EngineHandle` sends
-  commands (Load, Generate, Cancel, Snapshot/Restore for 003, Stats) over crossbeam channels and
-  receives `Event`s on a bounded channel (capacity 64). A consumer that stops reading for the stall
-  timeout (default 10 s) cancels the request.
-- **Rationale**: MLX objects and streams are not safe to share across threads; matches mlx-lm's
-  dedicated generation stream.
+- **Decision**: The `Engine` trait and its types live in `mrun-engine` with no MLX dependency;
+  `MlxEngine` is behind the `mlx` cargo feature (default on). The engine exposes primitives
+  (reserve, prefill, decode, trim, snapshot, restore); the generation loop (stop sequences, UTF-8
+  hold-back, events, stats) lives in `mrun::runtime` and is generic over `Engine`, so it is tested
+  with `ScriptedEngine` without building MLX (`cargo test -p mrun --no-default-features`). The
+  engine is constructed on the worker thread (`EngineHandle::spawn(factory)`), so MLX arrays never
+  cross threads and the trait needs no `Send` bound.
+- **Rationale**: Analysis findings F1, F3, F6, F12; MLX objects and streams must stay on one thread.
+
+
+## R10: Model identity without feature 004
+
+- **Decision**: `identity = sha256` over the sorted list of `(relative path, file sha256)` for every
+  file that determines output (`*.safetensors`, `config.json`, `tokenizer.json`,
+  `tokenizer_config.json`, `chat_template.jinja` if present). In the HF cache, LFS blob file names
+  are already their sha256, so weights need no hashing; small files are hashed (milliseconds).
+  Other local paths are hashed once and cached in `~/.mrun/identity.toml` keyed by (canonical path,
+  size, mtime, inode); `mrun verify <model>` (004) re-hashes everything. A changed hash for a known
+  path is reported at load. Feature 004 reuses this exact function.
+- **Rationale**: Constitution IV and 003 cache keys need identity from the first feature (analysis
+  D1, 004 C2).
+
+## R11: Engine benchmark (until feature 005)
+
+- **Decision**: `crates/mrun-engine/examples/bench_engine.rs` measures prefill tok/s, decode tok/s
+  and cancellation latency (50 random interrupt points) at configurable contexts in-process and
+  writes JSON with machine info (chip, memory, macOS, power) and model identity. The reference
+  numbers come from pinned mlx-lm `mlx_lm.benchmark`/`generate` with `--prefill-step-size 2048` on
+  the same weights, run by `scripts/bench_reference.sh`. Feature 005 later absorbs these cells.
+- **Rationale**: Constitution I requires reproducible in-repo measurement for 001's gates (analysis D3).

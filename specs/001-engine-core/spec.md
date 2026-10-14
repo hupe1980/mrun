@@ -12,7 +12,7 @@
 
 ### Session 2026-10-14
 
-- Q: What prompt-processing chunk size meets the 300 ms interruption target? → A: Default 512 tokens (configurable 128–2048); the plan validates it against SC-004 and prompt speed (SC-003) with `mrun bench`.
+- Q: What prompt-processing chunk size meets the 300 ms interruption target? → A: Chunk size and cancellation are decoupled: 2,048-token chunks (the reference's default, so speed compares fairly) with a cancellation check after every layer. Revised after analysis on 2026-10-14 (an earlier 512-token answer could not meet SC-004 on the MoE model).
 - Q: Should Qwen3 hybrid models think by default in `mrun run`? → A: No thinking unless requested (`--think`); Qwen3-Coder has no thinking mode. (Maintainer decision.)
 - Q: How many conversations run at once? → A: One active generation; others queue (feature 002). Parallel decoding is a later feature. (Maintainer decision.)
 - Q: Where do models come from? → A: The shared Hugging Face cache (honoring `HF_HOME`), plus explicit local paths. (Maintainer decision; pulling is feature 004.)
@@ -57,7 +57,7 @@ and again during generation, and measure the time until mrun is ready for the ne
 **Acceptance Scenarios**:
 
 1. **Given** a long prompt being processed, **When** the developer interrupts, **Then** processing
-   stops after at most one processing chunk and no answer is emitted for that prompt.
+   stops within 300 ms and no answer is emitted for that prompt.
 2. **Given** an answer streaming, **When** the developer interrupts, **Then** streaming stops after
    at most one more token and the conversation keeps the tokens already shown.
 3. **Given** an interrupted request, **When** the developer submits the next prompt, **Then** it
@@ -82,7 +82,8 @@ and just above the computed token capacity, and confirm acceptance and a clear r
    refuses before loading, stating model size, budget and how to change the budget.
 2. **Given** a loaded model, **When** a prompt plus requested output exceeds the token capacity,
    **Then** mrun rejects it before processing, stating requested tokens and capacity.
-3. **Given** a prompt exactly at the capacity, **When** submitted, **Then** it runs to completion.
+3. **Given** a prompt plus output limit exactly at the capacity, **When** submitted, **Then** it
+   runs to completion.
 4. **Given** `mrun run --info`, **When** the model loads, **Then** mrun prints the budget breakdown:
    weights, attention-state capacity in tokens and bytes, scratch reserve, and headroom.
 
@@ -111,7 +112,7 @@ model and compare token IDs against stored reference outputs.
 ### Edge Cases
 
 - Empty prompt, or max tokens of zero: rejected with a clear message.
-- Prompt that fills the capacity exactly, leaving room for the requested output: accepted.
+- Prompt plus output limit exactly at capacity: accepted; one token more: rejected.
 - A stop sequence split across two tokens: detected; partial matches are not emitted early.
 - Output that ends mid-way through a multi-byte character: no invalid text is shown.
 - Interrupt arriving just as generation completes: exactly one outcome is reported.
@@ -125,39 +126,53 @@ model and compare token IDs against stored reference outputs.
 
 ### Functional Requirements
 
-- **FR-001**: `mrun run <model>` MUST load a supported model from a local path or a pulled model
-  name and start an interactive streaming chat session.
+- **FR-001**: `mrun run <model>` MUST load a supported model from a local path, a Hugging Face cache
+  repo id, or (with feature 004) an alias, and start an interactive streaming chat session.
 - **FR-002**: The engine MUST support the Qwen3 dense family (reference: Qwen3-8B, 4-bit) and the
   Qwen3 MoE family (primary: Qwen3-Coder-30B-A3B-Instruct, 4-bit) in the standard community
   quantized format, and MUST reject other architectures with a named reason.
-- **FR-003**: The engine MUST keep each conversation's attention state between turns so a follow-up
-  processes only the new tokens.
-- **FR-004**: Prompt processing MUST run in fixed-size chunks (default 512 tokens) so that
-  cancellation and memory peaks are bounded per chunk.
-- **FR-005**: Cancellation MUST stop prompt processing within one chunk and generation within one
-  token, and MUST leave the engine ready for the next request.
+- **FR-003**: Every loaded model MUST have a content identity: a hash over the content hashes of all
+  files that determine output (weights, configuration, tokenizer, chat template). Files whose
+  content no longer matches a previously recorded identity MUST be reported at load.
+- **FR-004**: The engine MUST keep the conversation's attention state between turns so a follow-up
+  processes only new tokens; after a stop, cancel or error, the state MUST be trimmed to exactly
+  the tokens committed to the conversation (shown output included, held-back or pipelined tokens
+  excluded).
+- **FR-005**: Prompt processing MUST run in chunks (default 2,048 tokens, configurable) and MUST
+  check for cancellation at least after every layer of every chunk, so cancellation latency does
+  not grow with chunk size; generation MUST check after every token.
 - **FR-006**: At startup the engine MUST compute a memory budget as the lesser of a fraction of
-  physical memory (default 75%) and the GPU's recommended working set, minus a host reserve
-  (default 8 GiB), overridable downward by the user and upward only with an explicit flag.
-- **FR-007**: The engine MUST refuse to load a model whose weights plus minimum attention state plus
-  scratch reserve exceed the budget, and MUST state each number.
-- **FR-008**: The engine MUST measure peak scratch memory with a worst-case processing chunk at
-  startup and size attention-state capacity from what remains.
-- **FR-009**: Each request MUST reserve attention state for its full prompt plus requested output
-  before processing, and MUST be rejected up front if that reservation cannot be made.
+  physical memory (default 75%) and the GPU's recommended working set, minus a reserve (default
+  8 GiB) that covers other applications and mrun's own host-side memory; users may lower it, and
+  raise it only with an explicit flag.
+- **FR-007**: Before loading weights, the engine MUST estimate weights size from file metadata and
+  refuse to load a model whose weights plus scratch estimate plus 4,096 tokens of attention state
+  exceed the budget, stating each number; after loading it MUST verify with measured sizes.
+- **FR-008**: The engine MUST determine peak scratch memory with a worst-case processing chunk at
+  the deepest supported position, cache the result per (model identity, machine, mrun version),
+  and size attention-state capacity from what remains. Capacity MUST also be capped by the model's
+  maximum position.
+- **FR-009**: Each request MUST be admitted only if its prompt plus output limit fits the
+  attention-state capacity (counting memory that cached state can give back as available), and
+  MUST be rejected up front otherwise, stating requested tokens and capacity.
 - **FR-010**: Sampling MUST support temperature, top-p, top-k, min-p, seed, stop sequences and max
   tokens; temperature 0 MUST be greedy (argmax).
 - **FR-011**: The engine MUST run model work off the async runtime on a dedicated worker and deliver
-  tokens through a bounded channel; a slow consumer MUST NOT block other engine work indefinitely
-  (generation for that request is cancelled after a configurable stall timeout, default 10 s).
-- **FR-012**: Every completed request MUST report prompt tokens, generated tokens, time to first
-  token, prompt-processing speed, generation speed and finish reason (stop, length, cancelled,
-  error).
+  tokens through a bounded channel; a consumer that stops reading for the stall timeout (default
+  10 s) cancels its request.
+- **FR-012**: Every completed request MUST report prompt tokens, cached tokens, generated tokens,
+  time to first token, prompt-processing speed, generation speed and finish reason (stop, length,
+  cancelled, error).
 - **FR-013**: A conformance command MUST compare greedy token IDs against stored reference outputs
-  for each supported model and report the first mismatch position.
+  for each supported model and report the first mismatch position with the logit margin there.
 - **FR-014**: Streamed text MUST always be valid UTF-8; incomplete characters are held until
   complete.
-- **FR-015**: The engine MUST NOT download anything, send telemetry, or write prompts to disk.
+- **FR-015**: The engine MUST NOT use the network, send telemetry, or write prompts to disk.
+- **FR-016**: Interactive input MUST be bounded before tokenization (default prompt 8 MiB, at most
+  4 stop sequences of 256 bytes each), with errors naming the limit.
+- **FR-017**: An in-repo engine benchmark MUST measure prompt-processing speed, generation speed and
+  cancellation latency at configurable context lengths and write results with machine and model
+  identity, so this feature's speed gates are reproducible before feature 005 exists.
 
 ### Key Entities
 
@@ -174,20 +189,22 @@ model and compare token IDs against stored reference outputs.
 ### Measurable Outcomes
 
 - **SC-001**: For both supported models, greedy outputs match the reference implementation token
-  for token on 100% of the reference prompt set (at least 20 prompts, up to 8K tokens).
+  for token on 100% of the reference prompt set (at least 20 prompts, up to 8K tokens), with both
+  run on the same weights, the same processing chunk size and the same schedule (all but the last
+  prompt token in chunks, the last token processed alone).
 - **SC-002**: Generation speed on the same weights is at least 90% of the reference
-  implementation's, measured on the target Mac at 1K and 16K context.
-- **SC-003**: Prompt-processing speed on the same weights is at least 90% of the reference
-  implementation's at 16K context.
-- **SC-004**: Interrupting a 16K-token prompt makes mrun ready for the next prompt within 300 ms
-  (p95 over 50 trials) on the target Mac.
-- **SC-005**: Prompts at exactly the computed capacity complete; prompts one token over are rejected
-  before processing, in 100% of boundary tests.
-- **SC-006**: During a 30-minute session alternating 1K and 30K-token prompts, the process never
-  exceeds its reported budget by more than the scratch reserve, and the system does not swap
-  because of mrun.
-- **SC-007**: A developer with the model on disk goes from `mrun run` to the first streamed token in
-  under 15 seconds for the 8B model on the target Mac.
+  implementation's, measured on the target Mac at 1K and 16K context, for both models.
+- **SC-003**: Prompt-processing speed on the same weights and chunk size (2,048) is at least 90% of
+  the reference implementation's at 16K context, for both models.
+- **SC-004**: For both models, interrupting a 16K-token prompt at a random point makes mrun ready
+  for the next prompt within 300 ms (p95 over 50 trials) on the target Mac.
+- **SC-005**: Requests whose prompt plus output limit equals the computed capacity complete;
+  requests one token over are rejected before processing, in 100% of boundary tests.
+- **SC-006**: During a 30-minute session alternating 1K and 30K-token prompts with no other heavy
+  applications running, mrun's physical footprint stays at or below its budget plus 1 GiB, and the
+  system's swap-out count does not increase.
+- **SC-007**: With the model on disk and the scratch probe cached, a developer goes from `mrun run`
+  to the first streamed token in under 15 seconds for the 8B model on the target Mac.
 
 ## Assumptions
 

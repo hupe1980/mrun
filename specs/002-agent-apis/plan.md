@@ -19,7 +19,7 @@ and OpenCode (`13afea6`) are handled explicitly ([research](research.md)).
 **Language/Version**: Rust 1.94.0 (edition 2024)
 **Primary Dependencies**: axum 0.8, tokio 1.53, tower-http (limits, trace), serde/serde_json
 (`preserve_order`), llguidance 1.9.1 + toktrie 1.9.1, minijinja 3 (via 001's chat layer),
-uuid/ulid for ids, base64
+ulid (ids), base64, subtle (constant-time key compare)
 **Storage**: None (stateless; reasoning round-trips inside client-held `encrypted_content`/signature)
 **Testing**: cargo test with `ScriptedEngine` (deterministic token scripts incl. tool-call text) for
 ~95 named conformance cases (`crates/mrun/tests/api_conformance/`), insta snapshots of SSE streams,
@@ -28,8 +28,10 @@ real-client smoke tests on macOS (Claude Code, Codex, OpenCode pinned) as part o
 **Project Type**: HTTP server inside the `mrun` binary
 **Performance Goals**: API overhead ≤ 50 ms TTFT, ≥ 97% engine decode speed (SC-004); llguidance
 mask ≤ 2 ms typical, computed on CPU while the GPU runs the next step
-**Constraints**: Loopback default; no prompt logging; one generation at a time; queue 8 / 30 s
-**Scale/Scope**: 1 active + 8 queued requests; bodies ≤ 8 MiB; tools ≤ 128; schema depth ≤ 16
+**Constraints**: Loopback default with Host/Origin checks; no prompt logging; one generation at a
+time; queue 8 waiting / 600 s wait deadline
+**Scale/Scope**: 1 active + 8 queued requests; configurable limits (bodies 8 MiB, tools 256, schema
+depth 16)
 
 ## Constitution Check
 
