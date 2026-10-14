@@ -30,10 +30,10 @@ rustc-ice-*.txt
 
 # Internal architecture notes and local Spec Kit planning.
 # Public documentation and packages must not depend on these paths.
-/concepts/
-/specs/
-/.specify/
-/.github/skills/speckit-*/
+#/concepts/
+#/specs/
+#/.specify/
+#/.github/skills/speckit-*/
 
 # Local compiled artifacts
 /build/
