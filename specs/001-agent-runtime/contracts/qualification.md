@@ -1,5 +1,9 @@
 # Qualification Contract and Fixture Catalog
 
+**Candle replan notice (2026-10-14)**: Case catalogs remain useful, but native geometry/adapter stages below assume llama.cpp. Superseded for Candle by the
+[active plan](../plan.md#current-planning-status) and pending replacement in task T122; do not implement
+from it. Retained as historical llama.cpp design context.
+
 **Status**: Case identities and assertions frozen by this plan; fixture bytes/hashes not generated.
 No case has run. Materialize redistributable inputs/expected results, licenses and SHA-256 manifest
 before capability/acceptance runs; missing entries block the gate. Changes require reviewed versioning.

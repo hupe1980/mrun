@@ -1,5 +1,9 @@
 # Data Model: Interactive Runtime
 
+**Candle replan notice (2026-10-14)**: Cell/sequence-ID geometry, FP16 KV and native ownership below are llama.cpp-specific. Superseded for Candle by the
+[active plan](plan.md#current-planning-status) and pending replacement in task T122; do not implement
+from it. Retained as historical llama.cpp design context.
+
 **Status**: Planned entities and invariants; no implementation or qualified model yet.
 **Authority**: [spec.md](spec.md), [research decisions](research.md), [HTTP contract](contracts/http.md).
 All sizes use bytes or binary KiB/MiB/GiB; tokens are rendered backend token IDs, not characters.

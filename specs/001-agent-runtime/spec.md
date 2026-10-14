@@ -183,7 +183,8 @@ cross-check first-output timing with an independent client clock and token count
   MUST additionally respect the device's reported recommended working set where available.
   Users MAY lower the budget; raising it requires explicit opt-in and a warning. No privileged OS
   tuning is permitted. This is admission/accounting policy, not a promised hard process-RSS cap.
-- **FR-016**: Inactive state MUST be evictable within a finite sub-budget; active state MUST be
+- **FR-016**: Inactive state MUST be evictable within a finite retained-state sub-budget whose byte
+  value the plan's data model freezes before implementation; active state MUST be
   pinned until safe cleanup. Pressure MUST stop new admissions, evict unpinned state, then fail
   affected work explicitly if safety cannot be restored, without silent context truncation.
 - **FR-017**: Model lifecycle MUST avoid duplicate simultaneous loads and unnecessary reloads,
@@ -242,7 +243,7 @@ model. A failed gate remains visible and prevents performance qualification unle
   growth as defined by the protocol; after explicit cache clear and unload, live resource counts return to baseline and
   process footprint is within 512 MiB of its post-initialization unloaded baseline.
 - **SC-006**: In matched no-reuse warm runs, median generation throughput is at least 95% of the
-  same pinned engine's direct serving baseline, and median first-generated-output latency is no
+  same-core direct-serving baseline for the pinned model (the plan's matched full-chat harness), and median first-generated-output latency is no
   more than 10% worse. A short-prompt and an 8,192-token prompt cell must both pass.
 - **SC-007**: Across 20 frozen coding tasks with three paired seeded runs per task, the optimized
   path loses no more than one success out of 60 versus its reference, introduces no new systematic

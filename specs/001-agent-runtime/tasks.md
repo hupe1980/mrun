@@ -17,7 +17,10 @@ the Candle design without new evidence.
 comparator only. Preserve the approved Principle V exception, derived-pressure policy and
 same-core full-chat baseline. No new kernels, model downloads, tool execution, branch creation,
 commits, publication or production dependency migration is authorized by these tasks.
-**Numbering**: T001..T111 below remain historical, including their 17 completed markers. Continue
+**Numbering**: T001..T111 below remain historical, including their 17 completed markers. Those
+markers record past completion only: T004/T017 native artifacts were later removed from the tree and
+T001/T002/T005 Rust 1.85 pins were superseded by 1.94.0. Portable foundation contracts overlapping
+historical T019/T021/T022/T026 pass as of 2026-10-14 without reopening those tasks. Continue
 with T112..T124 to avoid ID reuse or claiming old completion as Candle evidence. All 13 new tasks
 start unchecked. Only the new queue is active; do not resume historical T018 or later backend tasks.
 **Tests**: Feasibility requires positive and rejected controls, written before the experimental
@@ -29,7 +32,7 @@ evidence that third-party allocations are bounded.
 **Purpose**: Isolate the smallest experiment from the old Rust/native runtime. The experimental
 package is not a second production backend, a public model or a serving bypass.
 
-- [ ] T112 Record the baseline and experiment boundaries in `experiments/candle-budget/README.md`: preserve the current runtime manifests, existing source and historical T001..T111 completion evidence; state Rust 1.94.0, Candle candidate `c68b24997319b8d76e5a4e775dab197c7f26322a`, no model weights and no serving, and define a maximum 64 MiB experimental GPU backing reservation with per-test cleanup baselines. Record missing tools/hardware as blocked, never silently install or substitute a different backend.
+- [ ] T112 Record the baseline and experiment boundaries in `experiments/candle-budget/README.md`: preserve the current runtime manifests, existing source, the passing portable suite and the historical T001..T111 task text (removed native artifacts stay removed); state Rust 1.94.0, Candle candidate `c68b24997319b8d76e5a4e775dab197c7f26322a`, no model weights and no serving, and define a maximum 64 MiB experimental GPU backing reservation with per-test cleanup baselines. Record missing tools/hardware as blocked, never silently install or substitute a different backend.
 - [ ] T113 Create the isolated experimental package in `experiments/candle-budget/Cargo.toml`, `experiments/candle-budget/Cargo.lock`, `experiments/candle-budget/rust-toolchain.toml` and `experiments/candle-budget/src/lib.rs`; pin Rust 1.94.0 and the candidate Candle revision, keep Metal feature-gated, freeze the resolved dependency graph and verify locked CPU/Metal builds on the stated targets. Do not change root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, native code or CI to make the experiment pass; missing compiler/source provisioning remains an explicit blocker.
 
 ## Phase 2: Allocation Feasibility Foundation
@@ -109,16 +112,17 @@ files once schemas are frozen; shared instrumentation and status integration is 
 sequence. These are planning handoff tasks, not feature completion or production authorization.
 
 - [ ] T121 Reconcile T120's explicit outcome into `specs/001-agent-runtime/research.md` and `specs/001-agent-runtime/plan.md`: accept only complete reviewed pre-allocation/work enforcement with pinned patch and dependency identities; retain counterexamples and missing coverage as blockers. Preserve Rust 1.94.0, Candle ownership, the dated/expiring Principle V exception, approved derived-pressure semantics, full-chat same-core baseline and all FR/SC thresholds. Do not mark Phase 0 complete from an experiment checkbox, a mock ledger or a sampled peak.
-- [ ] T122 Only after T121 records a passing feasibility gate, execute the planning workflow to replace `specs/001-agent-runtime/data-model.md`, `specs/001-agent-runtime/contracts/backend.md`, `specs/001-agent-runtime/contracts/http.md`, `specs/001-agent-runtime/contracts/cli.md`, `specs/001-agent-runtime/contracts/qualification.md`, `specs/001-agent-runtime/benchmark-protocol.md` and `specs/001-agent-runtime/quickstart.md` with consistent Candle entities, enforceable limits, tool/tokenizer identities, evidence invalidation and validation commands; recheck the constitution pre/post design. Leave this task unchecked while the allocation gate is blocked and do not claim model or hardware qualification from document generation.
+- [ ] T122 Only after T121 records a passing feasibility gate, execute the planning workflow to replace `specs/001-agent-runtime/data-model.md`, `specs/001-agent-runtime/contracts/backend.md`, `specs/001-agent-runtime/contracts/http.md`, `specs/001-agent-runtime/contracts/cli.md`, `specs/001-agent-runtime/contracts/qualification.md`, `specs/001-agent-runtime/benchmark-protocol.md` and `specs/001-agent-runtime/quickstart.md` with consistent Candle entities, enforceable limits, the retained-state sub-budget for FR-016, Candle numerical tolerances replacing historical D-07, tool/tokenizer identities, evidence invalidation and validation commands; recheck the constitution pre/post design. Leave this task unchecked while the allocation gate is blocked and do not claim model or hardware qualification from document generation.
 - [ ] T123 After the replacement design passes T122, regenerate production tasks in `specs/001-agent-runtime/tasks.md` using `/speckit-tasks`, preserving completed history and IDs, and run the non-destructive `/speckit-analyze` review against `specs/001-agent-runtime/spec.md` and `specs/001-agent-runtime/plan.md`; require story labels, exact paths, verbatim frozen constraints, acyclic dependencies, disjoint parallel waves and tests before implementation. No production backend task is accepted until that review and the planning gates pass.
 - [ ] T124 Record the final handoff disposition and any residual blockers in `experiments/candle-budget/results.md`: verify the experiment did not mutate production manifests/native code, persist private data, download weights or transfer old report eligibility; report future production-story task counts only from the actually regenerated queue. Keep every empirical SC gate unpassed until its separate frozen-target run and do not publish or commit as part of this task.
 
 ## Current Dependencies and Parallel Execution
 
-T112 -> T113 -> (T114 || T115) -> T116 -> T117 -> T118 -> T119 -> T120 -> T121.
+T112 -> T113 -> (T114 || T115) -> T116 -> T117 -> (T118, T119 in either order) -> T120 -> T121.
 T122 requires a passing T121; T123 requires a passing replacement design; T124 follows the handoff
 or records the blocked disposition without opening downstream gates. Do not run T117/T118 in
-parallel: they may share the experimental budget implementation and dependency lock.
+parallel, nor T118/T119 concurrently: they may share the experimental budget implementation and
+dependency lock. T119 needs only T117, so either may run first.
 Only T114/T115 carry `[P]`, after setup, because their inventory files are disjoint. No subagent
 delegation or parallel writers to shared files is implied by a future story example.
 
@@ -194,7 +198,7 @@ Qualification implementation lives in `tests/support/qualification/` and is shar
 `examples/qualify.rs`; test-only adapters never become externally selectable models.
 Fixtures and their licenses ship under `tests/fixtures/`. Large model artifacts stay in ignored
 `models/`; raw evidence stays in ignored `benchmark-results/`. Public source, builds, fixtures,
-documentation and package tests must not depend on ignored specifications or concepts.
+documentation and package tests must not depend on unpackaged specifications or concepts.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
@@ -401,7 +405,7 @@ US5 base diagnostics work with cache off; hit traces depend on qualified US2 int
 - [ ] T104 Implement same-engine direct and optimized product comparator execution in `tests/support/qualification/comparators.rs`, recording exact commands/binaries/models/settings/quality/resources and Ollama runner identity; require llama.cpp/Ollama, include compatible MLX/Rust-native contenders, label conversion lanes quality-matched and unsupported cells with reasons, never implement a second production adapter for comparison.
 - [ ] T105 Implement ten-turn replay execution in `tests/support/qualification/tasks.rs`, reusing T068's coding runner and foundation evidence/timing/statistics; run R-001..010 with 30 paired observations each, frozen recorded tools and inputs, compute geometric-mean runtime-controlled ratios and publish total wall/tool time separately, retaining all failures and objective output checks.
 - [ ] T106 Integrate the complete acceptance/comparator suites in `examples/qualify.rs` and `tests/hardware.rs`, rebuild/freeze the final runtime target and rerun its seal/capability/protocol/state/numerical/SC-007 authorization before product serving; execute SC-001..009 on physical M4 Pro into `benchmark-results/acceptance/`, requiring SC-006 >=95% decode/<=10% latency overhead in short/8192 cells and SC-008 >=20% geometric-mean loop reduction with protocol confidence, preserving every failed/blocked/inconclusive outcome.
-- [ ] T107 Add executable architecture/fixture/report/privacy governance tests in `tests/governance.rs`, using shipped fixture/config constants rather than ignored docs; reject native public-type leaks, blocking inference on async workers, remote provisioning/persistence, incomplete catalogs/hashes/licenses and unsupported capabilities authorized by incomplete evidence.
+- [ ] T107 Add executable architecture/fixture/report/privacy governance tests in `tests/governance.rs`, using shipped fixture/config constants rather than unpackaged planning docs; reject native public-type leaks, blocking inference on async workers, remote provisioning/persistence, incomplete catalogs/hashes/licenses and unsupported capabilities authorized by incomplete evidence.
 - [ ] T108 Add `.github/workflows/qualify.yml` for explicit physical M4 Pro evidence execution with provisioned pinned native/model/client/comparators and raw/sanitized artifact handling; keep heavy hardware/benchmark lanes out of ordinary PR/push CI and report unavailable hardware as blocked, not a zero-test success.
 - [ ] T109 Update the single public `README.md` with only implemented controls, clean provisioning/build instructions, supported qualified profiles, numerical/memory limitations and reproducible sanitized evidence links; reconcile `specs/001-agent-runtime/quickstart.md` with tested commands but keep public documents independent of ignored planning files and do not announce best-in-class without dated optimized comparisons.
 - [ ] T110 Update root-anchored `Cargo.toml` package inclusions for implementation/native provisioning/shipped fixtures and licenses, then verify portable tests from the extracted `.crate` and the documented clean offline Metal provisioning/build route; exclude concepts/specs/Spec Kit/models/cache/raw results and do not treat cargo package verification alone as fixture-test execution.

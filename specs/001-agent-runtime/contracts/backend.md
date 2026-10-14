@@ -1,5 +1,9 @@
 # Native Backend Contract
 
+**Candle replan notice (2026-10-14)**: This native C/C++ boundary describes the removed llama.cpp adapter. Superseded for Candle by the
+[active plan](../plan.md#current-planning-status) and pending replacement in task T122; do not implement
+from it. Retained as historical llama.cpp design context.
+
 **Status**: Planned narrow ownership boundary; no binding, build or spike has run.
 Pin and source rationale: [research](../research.md). Entities and limits: [data-model](../data-model.md).
 

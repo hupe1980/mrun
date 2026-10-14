@@ -1,12 +1,3 @@
-<!--
-Sync Impact Report
-Version: unratified scaffold -> 1.0.0 (initial project principles)
-Replaced: five placeholder principles with six mrun principles.
-Added: Target and Constraints; Development Workflow.
-Removed: template examples only.
-Deferred placeholders: none. No template source files changed.
-Remove this temporary report before committing the constitution.
--->
 # mrun Constitution
 
 ## Core Principles
