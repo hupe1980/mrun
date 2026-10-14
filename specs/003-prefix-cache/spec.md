@@ -38,7 +38,8 @@ time to first token per turn and processed-token counts.
 2. **Given** a request whose whole prompt was seen before, **When** it arrives, **Then** at most the
    last token is reprocessed and the answer starts immediately.
 3. **Given** the cache disabled for a request, **When** it runs, **Then** the full prompt is
-   processed and the output is identical to the cached run at temperature 0.
+   processed and the output matches the cached run within the numerical tolerance of SC-002
+   (recomputing with different chunking may change the last bits, never the tokens compared).
 
 ---
 
@@ -117,16 +118,15 @@ request and simulate memory pressure; verify eviction order and that requests su
 - The same text tokenized differently because of template changes: treated as a miss with cause
   "template".
 - A model reloaded from changed files: its old cache entries are discarded.
-- Processing chunk size changed by configuration: entries recorded with a different grid are not
-  reused (exactness).
+- Processing chunk size changed by configuration: entries stay valid (they hold stored bytes for
+  exact tokens); only numerical tolerance tests notice the difference.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 - **FR-001**: The cache MUST reuse the longest exactly matching token prefix among cached states
-  for the same model identity (weights, tokenizer, chat template, attention-state format, chunk
-  grid), confirming matches by token comparison, never by hash alone.
+  for the same model identity (weights, tokenizer, chat template, attention-state format), confirming matches by token comparison, never by hash alone.
 - **FR-002**: Reused state MUST be immutable while shared; no request may observe tokens or state
   written by another request beyond the shared prefix.
 - **FR-003**: Continuing the same conversation MUST reuse the active state without copying it.
@@ -149,11 +149,14 @@ request and simulate memory pressure; verify eviction order and that requests su
   read another client's entries without presenting the same token prefix.
 - **FR-012**: The data model MUST allow entries to carry model-state checkpoints at chosen token
   boundaries, so hybrid-attention models can be supported later without redesign.
+- **FR-013**: mrun MAY offer opt-in, per-client "cache-stable" normalization that removes known
+  volatile client content (for example a per-request billing/attribution header) before rendering;
+  it MUST be off by default, listed in `mrun ps`, and reported in the response's miss/normalization
+  extension field, because it changes what the model sees.
 
 ### Key Entities
 
-- **Cache Key**: Model identity (weights hash, tokenizer hash, template hash, state format, chunk
-  grid).
+- **Cache Key**: Model identity (weights hash, tokenizer hash, template hash, state format).
 - **Prefix Node**: A token range within a tree of token sequences, holding an immutable state
   segment, byte size, recompute-cost estimate, last use and active-use count.
 - **Miss Report**: Divergence position, closest cached length, cause category, optional live excerpt.
@@ -165,8 +168,10 @@ request and simulate memory pressure; verify eviction order and that requests su
 - **SC-001**: On a recorded 20-turn agent session at 30K tokens of context, median time to first
   token per turn is at least 5× lower with the cache than without, on the target Mac.
 - **SC-002**: In a mutation suite of at least 100 cases (append, edit, rewind, branch, model or
-  template change), zero outputs differ from cache-off outputs at temperature 0 and zero stale
-  reuses occur.
+  template change), zero stale reuses occur (every reused token range equals the request's tokens
+  under the same model identity), and teacher-forced next-token log-probabilities match cache-off
+  runs within 1e-2 absolute at every checked position, with greedy outputs agreeing on at least 99%
+  of tokens.
 - **SC-003**: Restoring a 30K-token prefix from cache takes under 10% of the time to compute it.
 - **SC-004**: 100% of injected volatile-content misses in the diagnostics suite report the correct
   divergence position and cause category.
@@ -182,4 +187,5 @@ request and simulate memory pressure; verify eviction order and that requests su
 - First release supports full-attention models (Qwen3 dense and MoE); hybrid-model checkpoints are
   designed for but implemented later.
 - SSD persistence and cross-machine sharing are later features.
-- Exactness is defined at the token level for a fixed model identity and processing grid.
+- Exactness means reused state holds the stored bytes computed for exactly the same tokens under
+  the same model identity; recomputation with different chunking may differ in the last bits.

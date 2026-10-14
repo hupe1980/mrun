@@ -6,13 +6,13 @@
 
 **Status**: Draft
 
-**Input**: User description: "Engine core: run a pulled local coding model on an Apple Silicon Mac from the mrun binary. `mrun run <model>` streams generated text in the terminal; the engine owns the model's attention state with fixed-grid chunked prefill so a long prompt can be cancelled within one chunk; a startup memory budget sizes weights + KV + measured scratch and rejects prompts that cannot fit with the numbers; greedy output must match the reference implementation token-for-token; decode speed within 10% of the reference on the same weights. First models: Qwen3-8B-4bit (reference) and Qwen3-Coder-30B-A3B-Instruct-4bit (MoE). Sampling: temperature, top-p, top-k, min-p, seed, stop sequences, max tokens. Engine runs on a dedicated thread; async callers stream tokens through a bounded channel."
+**Input**: User description: "Engine core: run a pulled local coding model on an Apple Silicon Mac from the mrun binary. `mrun run <model>` streams generated text in the terminal; the engine owns the model's attention state with chunked prefill so a long prompt can be cancelled within one chunk; a startup memory budget sizes weights + KV + measured scratch and rejects prompts that cannot fit with the numbers; greedy output must match the reference implementation token-for-token; decode speed within 10% of the reference on the same weights. First models: Qwen3-8B-4bit (reference) and Qwen3-Coder-30B-A3B-Instruct-4bit (MoE). Sampling: temperature, top-p, top-k, min-p, seed, stop sequences, max tokens. Engine runs on a dedicated thread; async callers stream tokens through a bounded channel."
 
 ## Clarifications
 
 ### Session 2026-10-14
 
-- Q: What prompt-processing chunk size meets the 300 ms interruption target? → A: Default 512 tokens on a fixed grid (configurable 128–2048); the plan validates it against SC-004 and prompt speed (SC-003) with `mrun bench`.
+- Q: What prompt-processing chunk size meets the 300 ms interruption target? → A: Default 512 tokens (configurable 128–2048); the plan validates it against SC-004 and prompt speed (SC-003) with `mrun bench`.
 - Q: Should Qwen3 hybrid models think by default in `mrun run`? → A: No thinking unless requested (`--think`); Qwen3-Coder has no thinking mode. (Maintainer decision.)
 - Q: How many conversations run at once? → A: One active generation; others queue (feature 002). Parallel decoding is a later feature. (Maintainer decision.)
 - Q: Where do models come from? → A: The shared Hugging Face cache (honoring `HF_HOME`), plus explicit local paths. (Maintainer decision; pulling is feature 004.)
@@ -132,8 +132,8 @@ model and compare token IDs against stored reference outputs.
   quantized format, and MUST reject other architectures with a named reason.
 - **FR-003**: The engine MUST keep each conversation's attention state between turns so a follow-up
   processes only the new tokens.
-- **FR-004**: Prompt processing MUST run in fixed-size chunks aligned to absolute token positions
-  (a fixed grid), and the chunk size MUST be recorded with the attention state.
+- **FR-004**: Prompt processing MUST run in fixed-size chunks (default 512 tokens) so that
+  cancellation and memory peaks are bounded per chunk.
 - **FR-005**: Cancellation MUST stop prompt processing within one chunk and generation within one
   token, and MUST leave the engine ready for the next request.
 - **FR-006**: At startup the engine MUST compute a memory budget as the lesser of a fraction of

@@ -1,54 +1,97 @@
-# Architecture and Ownership
+# Architecture
 
-**Status**: Intended architecture, not implemented or native-capability-qualified.
-The [implementation plan](../specs/001-agent-runtime/plan.md) owns concrete technical commitments.
+**Status**: Target design for features 001–005 (2026-10-14). Nothing below is implemented yet.
 
-## Layers
+## Shape
 
-| Layer | Owns | Must not own |
-| --- | --- | --- |
-| CLI/configuration | Explicit local model and policy inputs, controls, readiness | Hidden model downloads or privileged OS tuning |
-| HTTP boundary | Bounded parsing, schema/history validation, truthful stream/error encoding | Native context mutation or tool execution |
-| Runtime scheduler | FIFO admission, reservations, lifecycle, cancellation arbitration | Blocking native work on async executor threads |
-| Prefix index | Exact identity/tokens, immutable entries, pin/eviction decisions | Sampler/RNG state or approximate text matches |
-| Resource ledger | Unique backing ownership, finite growth, pressure disposition | Treating CPU/GPU views as separate memory pools |
-| Backend adapter | Template/tokenizer, prefill/decode, grammar/parser, GPU-safe lifetime | Publicly exposed native handles or independent admission policy |
-| Evidence boundary | Stage/token/resource metadata and reviewed public-fixture results | Private content logging or performance claims without comparisons |
+One binary, two crates plus a sys crate:
 
-## Control Flow
+```text
+crates/
+├── mlx-sys/     # bindgen over vendored mlx-c v0.7.0 + MLX v0.32.3 (cmake); checked-in bindings
+├── mrun-engine/ # safe MLX layer (~60 fns), model graphs (qwen3, qwen3_moe), KV cache, sampler,
+│                # weight loading, memory probe. Everything MLX lives here, on one thread.
+└── mrun/        # the binary: cli, config, hub, chat (tokenizer, template, tool parsing,
+                 # constraints), runtime (worker, queue, admission), cache (prefix store),
+                 # api (chat completions, messages, responses), bench
+```
 
-Validate bounded input and tool-result linkage; reserve waiting demand; enter the finite queue.
-The native owner prepares a qualified model, rerenders/tokenizes the complete request, checks
-context/output demand, and attaches only an exact compatible retained prefix. It evaluates the
-unmatched suffix and counted boundary replay, then generates with fresh request-local state.
-The owner publishes only synchronized, validated prompt checkpoints. Output crosses a bounded
-byte-leased bridge and is encoded without inventing usage or a successful interrupted tool call.
+`mrun` talks to the engine through one internal trait, `Engine`, implemented by `MlxEngine` and by
+`ScriptedEngine` (a deterministic test double for API, cache and scheduler tests on any OS). This
+is a test seam, not a plugin system (Principle VI).
 
-Cancellation, disconnect, pressure and failure converge on one cleanup arbiter. Storage remains
-alive through submitted GPU work; releasing an HTTP socket is not releasing GPU capacity.
-Native owner serialization and immutable shared membership protect branches from mutation.
-Details and state transitions belong to the [data model](../specs/001-agent-runtime/data-model.md).
+## Request flow
 
-## Backend Strategy
+```text
+client ──HTTP──▶ api (parse: chat|messages|responses ─▶ ChatRequest)
+                 │ validate limits, map tools, reasoning control
+                 ▼
+          chat::render (template ─▶ token ids) ── count_tokens answers here
+                 ▼
+          runtime::queue (FIFO, 8 waiting, 30 s deadline, cancel on disconnect)
+                 ▼  (one at a time)
+          engine worker thread (owns MLX, the active sequence and the prefix store)
+             1. prefix lookup: longest exact token match ─▶ restore (copy) or hot path
+             2. admission: reserve KV for prompt + max_tokens, evicting cache if needed
+             3. prefill remaining tokens in 512-token chunks (cancel check per chunk)
+             4. decode: sample on device (+ grammar mask if strict), async-eval pipelined,
+                cancel check per token, publish snapshot boundaries for the prefix store
+                 ▼ bounded channel of Events (token text, tool deltas, usage, finish)
+          api encoder (per API SSE format) ──▶ client
+```
 
-The current plan selects one pinned llama.cpp/Metal integration behind a private C ABI/C++ shim
-for an initial capability spike. It is neither permanent nor proof of engine superiority.
-If a required capability cannot be safely exposed, the choice must be revised before production
-runtime work. Do not disguise a subprocess HTTP wrapper as ownership of fine-grained native state.
+## Engine thread and memory
 
-Evaluate alternatives without building multiple production adapters or a speculative plugin
-framework. Public runtime types must not leak engine types, so a future evidence-backed replacement
-does not require redefining client behavior. Rust-native engines remain candidates; a fully custom
-engine is a separate investment, not implied by the project's language.
+- MLX objects are not shared across threads: one engine thread owns the device, weights, the active
+  KV cache and the prefix store, and a single GPU stream. Async code sends commands over a channel
+  and receives events over a bounded channel (stall timeout cancels).
+- **Budget by construction** (D012): `budget = min(fraction × physical, recommended_working_set) −
+  reserve`. Load weights (measured with `get_active_memory`), run one worst-case prefill chunk at
+  maximum context to measure peak scratch (`get_peak_memory`), then size KV capacity from the
+  remainder. `set_memory_limit` and `set_cache_limit` back the budget; `set_wired_limit` is set to
+  the budget for the engine's lifetime (no privileged tuning).
+- **KV cache**: per layer, preallocated K and V arrays grown in 256-token steps up to the session's
+  reservation; `offset` marks the valid length; trim = move `offset`. Appends use in-place slice
+  updates on solely-owned buffers.
+- **Snapshots** are materialized slice copies (MLX copies a shared buffer on write, so sharing would
+  make every later append copy the whole cache). Restore copies into the active buffers.
 
-## Unified Memory and Failure
+## Prefix store (003)
 
-Count each unique backing allocation once, including physical pools, scratch and serving demand.
-Reclaiming cache cells does not necessarily reclaim a preallocated device buffer. Observe process,
-OS pressure and Metal allocations separately; accounted limits are not a hard RSS guarantee.
-When pressure cannot be relieved safely, stop admission, cancel affected work, synchronize and
-teardown rather than truncate context silently.
+Radix tree over token ids, one tree per model identity (weights, tokenizer, template, KV dtype).
+Nodes hold immutable KV segments covering token ranges, created at message boundaries (end of
+system prompt, end of each user/tool turn, end of each assistant turn) and at most every 4,096
+tokens. Lookup walks tokens (never hashes alone), restores the matched segments into the active
+cache, then prefills the remainder. The hot path (same conversation continuing) keeps the active
+cache and only appends. Eviction scores segments by recompute seconds saved per byte, decayed by
+age, and never evicts segments referenced by the running request. Memory pressure (dispatch source)
+shrinks the store first. Every lookup produces a miss report: divergence token, closest cached
+length, cause.
 
-If native work leaves validity uncertain, invalidate affected state or the entire context.
-An unobservable asynchronous driver failure is a qualification gap, not proof of safe recovery.
-The [native contract](../specs/001-agent-runtime/contracts/backend.md) owns those stop conditions.
+Exactness definition: a reused segment holds the stored bytes computed for exactly those tokens
+under the same model identity. Recomputing the same tokens with different chunking may differ in
+the last bits (MLX selects kernels by shape), so tests compare cache-on to cache-off with a logit
+tolerance and greedy agreement, while staleness tests are structural (token prefix equality).
+
+## Chat layer
+
+- Tokenizer: `tokenizers` (HF `tokenizer.json`); template: `minijinja` with the model's own
+  `chat_template`, rendered with tools and reasoning flags; only templates from pulled, hashed
+  models are rendered.
+- Tool calls: streaming parsers for the model's native syntax (Qwen3 `<tool_call>{json}`,
+  Qwen3-Coder XML `<function=…><parameter=…>`). Strict tools and JSON response formats use
+  `llguidance` masks computed on the CPU while the GPU runs the next step.
+- One internal `ChatRequest` / `Event` model; three thin encoders map it to Chat Completions,
+  Anthropic Messages and Responses wire formats.
+
+## Testing strategy
+
+- Linux CI (every PR): fmt, clippy, unit and integration tests with `ScriptedEngine`; `mlx-sys`
+  and `mrun-engine` build with MLX's CPU backend and run tiny random-weight model tests.
+- macOS (nightly or on demand): Metal build, logits oracle against mlx-lm on pinned weights,
+  conformance (greedy tokens), `mrun bench` cells.
+
+## What is deliberately absent
+
+No paged attention, no continuous batching, no multi-model router, no plugin system, no on-disk
+cache, no server-side tools. Each has a roadmap slot if evidence demands it.

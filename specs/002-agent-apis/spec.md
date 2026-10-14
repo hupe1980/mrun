@@ -134,7 +134,15 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
 - **FR-012**: The server MUST bind to loopback by default; binding elsewhere MUST require an explicit
   flag and an API key, and requests MUST then authenticate.
 - **FR-013**: Reasoning/thinking output MUST be separated from answer text according to each API's
-  conventions, and thinking MUST be controllable per request where the model supports it.
+  conventions, and thinking MUST be controllable per request where the model supports it. A
+  server-side `--thinking client|off|on` setting (default `client`) lets users override clients
+  that always request thinking.
+- **FR-016**: Reasoning produced in one turn MUST be returnable in the next turn so the model sees
+  the same rendered history: as thinking blocks with an opaque signature (Anthropic) or as
+  `encrypted_content` on reasoning items (Responses). mrun MUST accept any signature and never
+  reject a request because of one.
+- **FR-017**: Compatibility probes used by supported clients (for example `HEAD /api/hello`,
+  `?beta=true` query strings, `anthropic-beta` headers) MUST be accepted.
 - **FR-014**: The server MUST NOT log prompt or completion content by default; request logs contain
   timings, token counts and outcome only.
 - **FR-015**: `GET /v1/models` MUST list available models with their context capacity on this
