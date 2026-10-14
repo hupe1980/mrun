@@ -12,7 +12,8 @@
 
 ### Session 2026-10-14
 
-- Q: Where do agent traces come from? → A: Recorded by mrun maintainers running the supported clients on public open-source repositories, with mrun's request recorder (opt-in, debug only), then reviewed and redacted before bundling.
+- Q: Where do agent traces come from? → A: Recorded by maintainers running OpenCode and Codex on public open-source repositories with `mrun serve --record` (002 FR-021), then automatically redacted, secret-scanned and reviewed. Claude Code traces stay local (its system prompt is proprietary). Revised after analysis on 2026-10-14.
+- Q: How does replay treat assistant turns? → A: Teacher-forced: each system is first given the recorded previous turn including the recorded reply (untimed), so caches hold identical history.
 - Q: What is the primary comparison metric? → A: Median time to first token per turn and total session time on the agent suite; tok/s cells are secondary.
 - Q: Which competitor versions? → A: The latest stable release of each at measurement time, recorded in the report; profiles document each one's recommended cache flags.
 
@@ -81,7 +82,8 @@ Each run checks output quality so a configuration that is faster but wrong is ca
 ### Edge Cases
 
 - Machine under load or on battery/low-power: recorded, and the report warns.
-- Thermal throttling during long runs: detected via speed drift and flagged.
+- Thermal throttling during long runs: flagged when a cell slows by more than 5% (FR-012).
+- A system without the trace's API (for example Responses traces on oMLX): cell marked "n/a".
 - Competitor not installed: the cell is "not run" with the reason.
 - A trace turn exceeds a system's context: recorded as a failure for that system.
 
@@ -90,24 +92,39 @@ Each run checks output quality so a configuration that is faster but wrong is ca
 ### Functional Requirements
 
 - **FR-001**: `mrun bench` MUST provide suites: `agent` (trace replay), `synthetic` (context and
-  generation cells), `cancel` (interruption latency), `memory` (peak and steady memory), `quality`
-  (coding tasks with tests).
-- **FR-002**: Agent traces MUST be bundled, redistributable recordings of real multi-turn coding
-  sessions including tool results, replayed with their original timing gaps optional.
-- **FR-003**: Every measurement MUST use warm-up runs, at least 5 repetitions and report median,
-  p95 and spread.
-- **FR-004**: Results MUST be written as JSON (stable schema, versioned) and a markdown report.
-- **FR-005**: Results MUST record machine (chip, memory, macOS, power and thermal state), system
-  under test (version, flags, model files with hashes) and suite version.
-- **FR-006**: `--compare` MUST drive OpenAI-compatible or Anthropic-compatible endpoints of other
-  systems; each competitor's recommended cache and performance flags MUST be documented in the
-  bundled profiles and recorded per run.
-- **FR-007**: Systems MUST be measured one at a time with the others idle.
-- **FR-008**: The quality suite MUST run objective coding tasks (supplied tests) and report pass
-  rate per system alongside speed.
-- **FR-009**: A regression mode MUST compare against a stored baseline and fail on configured
-  thresholds (speed, conformance, quality).
-- **FR-010**: Bench MUST NOT upload results anywhere; publishing is a manual step.
+  generation cells at 1K, 8K, 16K, 30K, 64K and the system's maximum), `cancel` (interruption
+  latency), `memory` (peak and steady memory), `quality` (coding tasks with tests).
+- **FR-002**: Bundled agent traces MUST come from open-source clients (OpenCode, Codex with NOTICE
+  attribution) on public repositories, after automated redaction (paths, usernames, emails) and a
+  secret scan. Traces from proprietary clients (Claude Code) MAY be recorded and replayed locally
+  but MUST NOT be committed.
+- **FR-003**: Agent replay MUST use teacher-forced history: before timing turn n, the harness sends
+  turn n−1's request including the recorded assistant reply (output limited to one token, untimed),
+  so every system's cache holds the same history the real client would have produced; the report
+  states this method. Requests are sent in the trace's API style (Chat Completions, Messages or
+  Responses); systems lacking that API are marked "n/a" for the trace.
+- **FR-004**: Repetitions: synthetic and cancel cells use one warm-up and at least 5 repetitions;
+  agent traces use 3 repetitions; quality tasks use 3 seeds. Reports give median, p95 and IQR.
+- **FR-005**: Results MUST be written as JSON (versioned, hand-written schema file) and a markdown
+  report, including per-turn records for agent cells (time to first token, time to first useful
+  token, input, cached and output tokens).
+- **FR-006**: Results MUST record machine state (chip, memory, macOS, power source, low-power mode,
+  thermal state, free memory and swap before each system) and, per system, version, flags, model
+  name, file format, quantization (bits, group size, scheme) and file hashes when local.
+- **FR-007**: `--compare` MUST drive other systems over HTTP with a per-system model name; decode
+  cells use temperature 0, a fixed output length and the system's ignore-EOS option where
+  available, labeling cells that ended early; each competitor's recommended cache and performance
+  flags live in bundled profiles and are recorded per run.
+- **FR-008**: Only the system under test may be running: others MUST be stopped or have no model
+  loaded, verified by the recorded free memory.
+- **FR-009**: The quality suite MUST run objective coding tasks (supplied tests) in a temporary copy
+  with time limits and no network access, and report pass rate per system alongside speed.
+- **FR-010**: A regression mode MUST compare against a stored baseline and fail (exit 7) on
+  configured thresholds (speed, quality); the greedy-conformance check is feature 001's `--check`.
+- **FR-011**: Bench MUST NOT contact any host other than the systems under test; publishing results
+  is a manual step.
+- **FR-012**: A thermal-throttling warning MUST be emitted when a cell's last repetition is more than
+  5% slower than its first.
 
 ### Key Entities
 
@@ -121,12 +138,16 @@ Each run checks output quality so a configuration that is faster but wrong is ca
 
 - **SC-001**: Two consecutive runs of the synthetic suite on an idle target Mac agree within 5% on
   median speeds.
-- **SC-002**: A full comparison of four systems on the agent suite completes unattended in under
-  2 hours.
-- **SC-003**: Every published report contains all cells for all systems, with failures marked
-  (review checklist, 100%).
-- **SC-004**: The regression mode catches a deliberately introduced 10% speed regression and a
-  greedy-output change in 100% of trials.
+- **SC-002**: A full comparison of four systems on the bundled agent suite (3 repetitions)
+  completes unattended in under 4 hours on the target Mac.
+- **SC-003**: Every published report contains all cells for all systems, with failures and "n/a"
+  marked and a "losing cells" section (review checklist, 100%).
+- **SC-004**: The regression mode catches a deliberately introduced 10% speed regression in 100% of
+  trials.
+- **SC-005**: Against llama.cpp server, Ollama and oMLX with their prompt caches enabled, on the
+  agent suite with Qwen3-Coder-30B-A3B (MLX 4-bit for mrun and oMLX, GGUF Q4_K_M for llama.cpp
+  and Ollama, labeled quality-matched), mrun's median time to first token is equal or better;
+  every losing cell is published (moved here from feature 003).
 
 ## Assumptions
 

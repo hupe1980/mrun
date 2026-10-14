@@ -11,15 +11,15 @@
 - **Alternatives**: Own store under `~/.mrun/models` (duplicates); Ollama-style OCI blobs (not
   compatible with MLX community repos).
 
-## R2: Verification
+## R2: Identity and verification
 
-- **Decision**: Verify LFS files against the hub's sha256 (from the API's `lfs.oid`) at download and
-  against the pinned manifest at load; small non-LFS files (config, tokenizer, template) are hashed
-  and pinned in the manifest. Cache verification results keyed by (path, size, mtime) in
-  `~/.mrun/verify-cache.toml` so `ls` stays fast.
-- **Rationale**: Constitution IV (content identity); 003 cache keys need weights/tokenizer/template
-  hashes.
-- **Alternatives**: Re-hash on every load (30 s+ for 18 GB); trust filenames (violates IV).
+- **Decision**: Use feature 001's identity function (sha256 over sorted (path, file sha256)); in the
+  HF cache, LFS blob names are their sha256, so weights need no re-hashing; downloads are verified
+  against the hub's `lfs.oid` as they complete. Fast checks on every use compare (size, mtime,
+  inode) with the recorded values; `mrun verify` re-hashes everything. Path-loaded models get the
+  same identity (hashed once, cached in `~/.mrun/identity.toml`).
+- **Rationale**: Constitution IV; analysis C2/I7: a size+mtime cache cannot catch every in-place
+  edit, so the spec promises full detection only through `verify`.
 
 ## R3: Resumable download
 
@@ -36,32 +36,32 @@
   treated as HF repo ids (`org/name[@revision]`), pinned on first pull.
 - **Rationale**: Short names are the top DX feature of Ollama; pinning keeps identity exact.
 
-## R5: Client integration (`connect`)
+## R5: Client integration (`launch` and `connect`)
 
-- **Decision**: One profile per client with: config location, keys to set, cache-stability hints,
-  and a validation probe.
-  - Claude Code: `~/.claude/settings.json` → `env.ANTHROPIC_BASE_URL=http://127.0.0.1:8484`,
-    `env.ANTHROPIC_AUTH_TOKEN=mrun`, `env.ANTHROPIC_MODEL=<alias>`,
-    `env.CLAUDE_CODE_ATTRIBUTION_HEADER=0`.
-  - Codex: `~/.codex/config.toml` → `[model_providers.mrun]` with `base_url`,
-    `wire_api = "responses"`, plus `[profiles.mrun]`.
-  - OpenCode: `opencode.json` provider using `@ai-sdk/openai-compatible` with `baseURL`.
-- **Rationale**: Landscape study: Codex accepts only Responses; Claude Code's per-request
-  attribution header breaks exact prefix reuse unless disabled.
-- **Validation**: Exact keys are re-verified against the pinned client versions in feature 002's
-  research before release; snapshot tests freeze the generated config.
-- **Write safety**: Parse, merge, show unified diff, back up to `~/.mrun/backups/<client>-<ts>`,
-  write atomically (temp file + rename).
+- **Decision**: `mrun launch <client>` (primary, Ollama-style) execs the client with process-scoped
+  environment and flags; `mrun connect` prints/writes persistent config with diff, 0600 backup and
+  `--undo`. Values come from the running server (`/v1/models` context window, served model id).
+  - Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8484`, `ANTHROPIC_AUTH_TOKEN` (env reference
+    when a key is configured, otherwise a dummy), `ANTHROPIC_MODEL`,
+    `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` (all the served
+    id), `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `CLAUDE_CODE_AUTO_COMPACT_WINDOW` from capacity,
+    `CLAUDE_CODE_ATTRIBUTION_HEADER=0`.
+  - Codex: provider `mrun` with `base_url`, `wire_api = "responses"`, `env_key` (when keyed),
+    `model_context_window` and `model_auto_compact_token_limit` from capacity.
+  - OpenCode: provider using `@ai-sdk/openai-compatible` with `baseURL`, model
+    `limit.context`/`limit.output`.
+- **Rationale**: Analysis I3 (all model slots, else background/subagent requests use `claude-*`
+  ids), I4 (clients default to 200K–272K context; mrun's capacity is ≈ 100–110K on 48 GB), S4
+  (global settings redirect all Claude Code use; launch is scoped). Key names are re-verified
+  against pinned client versions in 002 research before release; snapshot tests freeze output.
 
 ## R6: Doctor checks
 
-- **Decision**: Checks registry, each `fn check(&Ctx) -> Finding { id, status, severity, fix }`:
-  chip/macOS (`sysctl machdep.cpu.brand_string`, `sw_vers`), memory budget and pressure
-  (`vm.memory_pressure`, `host_statistics64`), low-power mode (`pmset -g`), model integrity
-  (verify cache), server reachability (`GET /health`), port conflicts, client config pitfalls
-  (missing attribution setting, wrong wire_api, wrong base URL), HF cache location and free space.
-- **Alternatives**: A monolithic report (hard to test); each check is unit-tested with a fake
-  context.
+- **Decision**: Registry of checks, each `fn check(&Ctx) -> Finding { id, status, severity, fix }`:
+  chip/macOS, memory budget and pressure, low-power mode, model integrity (fast checks), server
+  reachability, port conflicts, HF cache free space, client config pitfalls (wrong base URL or wire
+  API, missing context limits, Claude Code < 2.1.181 without the attribution setting). Each check is
+  unit-tested with a fake context. Exit code 8 when any check fails.
 
 ## R7: Config
 
@@ -72,5 +72,22 @@
 ## R8: Error catalog
 
 - **Decision**: `errors.rs` enumerates user-facing errors with stable codes (`E0xx`), message and
-  next step; exit codes: 0 ok, 1 generic, 2 usage, 3 model not found/invalid, 4 does not fit,
-  5 server unreachable, 6 network/download. A snapshot test lists every error to enforce FR-009.
+  next step; exit codes per the [CLI contract](contracts/cli.md#exit-codes). A snapshot test lists
+  every error to enforce FR-011.
+
+
+## R9: Background server
+
+- **Decision**: `mrun serve --detach` forks a background server writing logs to
+  `~/.mrun/server.log` and its pid to `~/.mrun/server.pid`; `mrun stop` sends SIGTERM (graceful:
+  cancel queue, finish or cancel the active request, exit). launchd integration belongs to the
+  distribution milestone.
+- **Rationale**: Analysis X2; competitors offer background services (oMLX via brew services, Ollama
+  app).
+
+## R10: rm safety in a shared cache
+
+- **Decision**: `rm` deletes the snapshot directory and refs mrun recorded in the manifest, then
+  only blobs no remaining snapshot (of any repo in the cache) links to; it lists shared blobs it
+  kept.
+- **Rationale**: Analysis S7: the HF cache is shared with other tools.

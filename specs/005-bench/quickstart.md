@@ -14,6 +14,6 @@ Optional competitors installed and started per `bench/profiles/*.toml`.
    `mrun bench --compare --system mrun=http://127.0.0.1:8484 --system llama.cpp=http://127.0.0.1:8080 --system ollama=http://127.0.0.1:11434 --suite agent`
    → one report with every system and losing cells listed (SC-003).
 4. **Regression**: `mrun bench --suite synthetic --baseline bench/baselines/m4pro.json`; inject a
-   10% slowdown (debug flag) → exit 1 (SC-004).
+   10% slowdown (debug flag) → exit 7 (SC-004).
 
 Automated: `cargo test -p mrun --test bench_driver` runs the driver against a fake SSE server.

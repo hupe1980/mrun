@@ -14,7 +14,7 @@
 
 - Q: Where are models stored? → A: In the shared Hugging Face hub cache (`HF_HOME` / `HF_HUB_CACHE`), so models downloaded by other MLX tools are reused; mrun keeps aliases, manifests and config in `~/.mrun` (`MRUN_HOME` overrides). (Maintainer decision.)
 - Q: Where is the config file? → A: `~/.mrun/config.toml`; environment variables `MRUN_*` override it; flags override both.
-- Q: Which client config does `connect` write? → A: Claude Code: environment settings in `~/.claude/settings.json` (`ANTHROPIC_BASE_URL`, model, `CLAUDE_CODE_ATTRIBUTION_HEADER=0`); Codex: a provider profile in `~/.codex/config.toml` with `wire_api = "responses"`; OpenCode: a provider in `opencode.json`. Exact keys are verified against pinned client versions in the plan.
+- Q: How do clients get configured? → A: Primary: `mrun launch <client>` sets everything for one process (Ollama-style), leaving global configs untouched. Secondary: `mrun connect` prints or (with `--write`, diff, backup, `--undo`) writes persistent config: Claude Code `~/.claude/settings.json` env, Codex `~/.codex/config.toml` provider with `wire_api = "responses"`, OpenCode `opencode.json`. Revised after analysis on 2026-10-14.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -33,11 +33,14 @@ task using only the commands mrun suggests.
 
 1. **Given** a fresh install, **When** the developer runs `mrun pull qwen3-coder`, **Then** mrun
    shows size, license and progress, verifies the download and reports where it is stored.
-2. **Given** a pulled model, **When** the developer runs `mrun connect claude-code` (or `codex`,
-   `opencode`), **Then** mrun prints the exact configuration and, with `--write`, applies it after
-   showing what will change.
-3. **Given** mrun is not running, **When** the developer runs `mrun connect`, **Then** it explains
-   how to start the server (`mrun serve`).
+2. **Given** a pulled model and a running server, **When** the developer runs
+   `mrun launch claude-code` (or `codex`, `opencode`), **Then** the client starts already pointed
+   at mrun with correct model names and context limits, without changing any global config.
+3. **Given** the developer prefers persistent setup, **When** they run `mrun connect <client>
+   --write`, **Then** mrun shows the diff, backs up the old file, applies it, and `--undo`
+   restores it.
+4. **Given** mrun is not running, **When** the developer runs `mrun launch` or `connect`, **Then**
+   it explains how to start the server (`mrun serve --detach`).
 
 ---
 
@@ -87,36 +90,57 @@ without the attribution-header setting) and check that `mrun doctor` reports eac
 - Disk full during pull: stops with the needed and available space; partial files are cleaned.
 - Alias collision with a local path: explicit paths always win; ambiguity is reported.
 - A model that does not fit the budget: `pull` warns before downloading and requires confirmation.
-- `connect --write` on a client config edited by the user: mrun shows a diff and keeps a backup.
+- `connect --write` on a client config edited by the user: mrun shows a diff and keeps a 0600 backup.
+- `rm` of a model whose blobs are also used by another tool's snapshot: shared blobs are kept and
+  the user is told.
+- A model file edited in place with its size and modification time preserved: detected by
+  `mrun verify`, not by fast checks.
 - Offline machine: every command except `pull` works without network.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: `mrun pull <alias|repo>` MUST download a model from the Hugging Face hub (or a
-  configured mirror), show size and license before downloading, resume interrupted downloads, and
-  verify every file against pinned content hashes.
+- **FR-001**: `mrun pull <alias|repo>` MUST download a model from the Hugging Face hub (honoring
+  `HF_ENDPOINT` for mirrors and `HF_TOKEN` for gated models), show size, license and memory fit
+  before downloading, resume interrupted downloads, and verify every file's content hash.
 - **FR-002**: mrun MUST ship a curated alias list (for example `qwen3-coder` →
   Qwen3-Coder-30B-A3B-Instruct 4-bit, `qwen3-8b` → Qwen3-8B 4-bit) with pinned revisions and hashes.
 - **FR-003**: `mrun ls`, `mrun rm`, `mrun show <model>` MUST manage and describe local models,
-  including disk size, fit in the current memory budget and context capacity.
-- **FR-004**: Models MUST be identified by content hash; a model whose files no longer match is
-  refused until repaired.
-- **FR-005**: `mrun connect <claude-code|codex|opencode>` MUST print correct client configuration
-  for the running server, and with `--write` MUST apply it after showing a diff and saving a backup.
-  For Claude Code it MUST include settings that keep prompts cache-stable (attribution header off).
-- **FR-006**: `mrun doctor` MUST check: macOS and chip, memory budget and current pressure, low-power
-  mode, model integrity, server reachability, client configuration pitfalls, and print fixes.
-- **FR-007**: `mrun ps` MUST show loaded model, budget breakdown, active and queued requests, cache
-  size and hit rate, and the most recent miss explanation.
-- **FR-008**: Configuration MUST work with zero files; an optional config file (one location,
-  documented) and environment variables override defaults; `mrun config` prints the effective
-  configuration and where each value came from.
-- **FR-009**: Every error MUST say what failed and what to do next; exit codes MUST be documented.
-- **FR-010**: mrun MUST provide shell completions (bash, zsh, fish) and `--help` with examples for
-  every command.
-- **FR-011**: Only `pull` may use the network; all other commands MUST work offline.
+  including disk size, fit in the current memory budget and context capacity (computed with the
+  same budget function as feature 001). `rm` MUST remove only what mrun downloaded (snapshot refs
+  and blobs no other snapshot references) and warn before touching anything shared.
+- **FR-004**: Models MUST be identified by content hash using feature 001's identity function,
+  whether pulled or given as a path. Fast checks (size, modification time) run on every use;
+  `mrun verify <model>` re-hashes every file; a mismatch is refused until repaired.
+- **FR-005**: `mrun launch <claude-code|codex|opencode> [args]` MUST start the client with mrun
+  configured for that process only (environment and per-invocation flags), including: base URL,
+  model names for every model slot the client uses (for Claude Code `ANTHROPIC_MODEL`,
+  `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`), the context window and output
+  limit from the running server's `/v1/models`, cache-stability settings
+  (`CLAUDE_CODE_ATTRIBUTION_HEADER=0`), and the API key by environment reference when one is
+  configured.
+- **FR-006**: `mrun connect <client>` MUST print the equivalent persistent configuration; with
+  `--write` it MUST show a diff, back up the original (mode 0600), write atomically, and
+  `mrun connect <client> --undo` MUST restore the backup.
+- **FR-007**: `mrun doctor` MUST check: macOS and chip, memory budget and current pressure,
+  low-power mode, model integrity, server reachability, port conflicts, free space in the model
+  cache, client configuration pitfalls (wrong base URL or wire API, missing context limits, Claude
+  Code older than 2.1.181 without the attribution setting), and print fixes.
+- **FR-008**: `mrun ps` MUST show loaded model, budget breakdown, active and queued requests (with
+  prompt-processing progress), cache size and hit rate, recording state and the most recent miss
+  explanation.
+- **FR-009**: `mrun serve --detach` MUST run the server in the background with logs in `~/.mrun/`,
+  and `mrun stop` MUST stop it gracefully.
+- **FR-010**: Configuration MUST work with zero files; an optional `~/.mrun/config.toml` and
+  `MRUN_*` environment variables override defaults (except settings that are command-line only,
+  such as `--record`); `mrun config` prints the effective configuration and each value's source.
+- **FR-011**: Every error MUST say what failed and what to do next; exit codes MUST be documented
+  and distinct for usage, model, fit, server, network, benchmark-regression and doctor failures.
+- **FR-012**: mrun MUST provide shell completions (bash, zsh, fish) and `--help` with examples for
+  every command; this CLI contract is the single source for all commands and flags.
+- **FR-013**: Only `pull` may use the network; all other commands MUST work offline.
 
 ### Key Entities
 
@@ -133,8 +157,10 @@ without the attribution-header setting) and check that `mrun doctor` reports eac
   in under 5 minutes plus model download time, using only commands mrun suggests.
 - **SC-002**: 100% of injected doctor scenarios (at least 10) are detected with the correct fix.
 - **SC-003**: Interrupted downloads resume without re-downloading completed bytes in 100% of tests;
-  corrupted files are always detected.
-- **SC-004**: `mrun connect` output works unmodified for each supported client version (pinned).
+  corruption that changes size or modification time is detected on every use, and any corruption
+  is detected by `mrun verify`.
+- **SC-004**: `mrun launch` and `mrun connect` configurations work unmodified for each supported
+  client version (pinned), validated by feature 002's real-client runs (002 T015).
 - **SC-005**: Every CLI error in the error catalog includes a next step (review checklist, 100%).
 
 ## Assumptions

@@ -11,7 +11,8 @@
 | license | string | SPDX id or "other" with URL |
 | architecture | string | from `config.json` `model_type` (e.g. `qwen3`, `qwen3_moe`) |
 | quantization | {bits, group_size, mode} | from `config.json` |
-| identity | string | sha256 over sorted (path, sha256) pairs; used by 001/003 |
+| identity | string | 001 identity function: sha256 over sorted (path, sha256); used by 001/003 |
+| fast_check | list of {path, size, mtime, inode} | compared on every use |
 
 States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (hash mismatch) → (pull) →
 `ready`.
@@ -23,7 +24,8 @@ States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (has
 | name | `claude-code` \| `codex` \| `opencode` |
 | config_path | path template (`~/.claude/settings.json`, ...) |
 | format | json \| toml |
-| settings | key path → value template (base URL, model, auth token, cache hints) |
+| launch_env | env vars and flags for `mrun launch` (base URL, all model slots, context limits, auth reference, cache hints) |
+| settings | key path → value template for `connect` (same values, persistent form) |
 | probe | how to verify the client sees mrun (where possible) |
 
 ## Diagnostic
@@ -39,10 +41,12 @@ States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (has
 ## Config (`~/.mrun/config.toml`)
 
 ```toml
-[server]  host = "127.0.0.1"  port = 8484  queue = 8  queue_deadline_s = 30
-[memory]  fraction = 0.75  reserve_gib = 8  allow_over = false
-[engine]  chunk = 512  default_model = "qwen3-coder"
+[server]  host = "127.0.0.1"  port = 8484  queue = 8  queue_wait_s = 600  thinking = "client"
+          max_output = 16384  reject_tool_images = false
+[memory]  fraction = 0.75  reserve_gib = 8
+[engine]  chunk = 2048  default_model = "qwen3-coder"
 [cache]   enabled = true
+[limits]  body_mib = 8  messages = 4096  tools = 256  schema_kib = 64  schema_depth = 16
 ```
 
 Every key is optional; `mrun config` shows effective values and sources.

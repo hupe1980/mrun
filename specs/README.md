@@ -23,12 +23,14 @@ mrun is a local inference server for coding agents on Apple Silicon. See
 | # | Feature | Priority | Depends on | Covers | Status |
 | --- | --- | --- | --- | --- | --- |
 | 001 | [Engine core](001-engine-core/spec.md) | P1 | — | PR-3, PR-4, PR-5 | Planned |
-| 002 | [Agent APIs](002-agent-apis/spec.md) | P1 | 001 | PR-1, PR-4, PR-5 | Specified |
-| 003 | [Prefix cache](003-prefix-cache/spec.md) | P1 | 001, 002 | PR-2, PR-3 | Specified |
-| 004 | [Models and CLI experience](004-models-cli/spec.md) | P2 | 001 | PR-6 | Specified |
-| 005 | [Benchmark harness](005-bench/spec.md) | P2 | 002 | PR-7 | Specified |
+| 002 | [Agent APIs](002-agent-apis/spec.md) | P1 | 001 | PR-1, PR-4, PR-5 | Planned |
+| 003 | [Prefix cache](003-prefix-cache/spec.md) | P1 | 001, 002 (SC-001 trace from 005) | PR-2, PR-3 | Planned |
+| 004 | [Models and CLI experience](004-models-cli/spec.md) | P2 | 001; 002 for `launch`/`connect`/`ps` | PR-6 | Planned |
+| 005 | [Benchmark harness](005-bench/spec.md) | P2 | 002 (003 for SC-005) | PR-7 | Planned |
 
-Order: 001 → 002 → 003, with 004 and 005 in parallel once 001 lands. Milestones and gates are in
+Order: 001 → 002 → 003; 004 and 005 start once 001 lands and finish after 002. Each feature has a
+spec, clarifications, plan, research, data model, contracts, quickstart and tasks; all five were
+analyzed with `/speckit-analyze` on 2026-10-14 and the findings fixed. Milestones and gates are in
 [concepts/ROADMAP](../concepts/ROADMAP.md).
 
 ## Later candidates (not specified yet)
