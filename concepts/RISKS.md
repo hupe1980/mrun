@@ -1,21 +1,12 @@
-# Risk Register
+# Risks
 
-Risk IDs are stable. This register names failure modes and mitigations, not another task backlog.
-Discharge requires evidence; design text does not close a risk. Work sequencing belongs to the
-[roadmap entry point](ROADMAP.md) and owning feature plan/tasks.
-
-| ID | Risk and impact | Mitigation/evidence boundary | Status |
+| ID | Risk | Mitigation | Status |
 | --- | --- | --- | --- |
-| R001 | Nonpreemptible Metal calls miss interactive cancellation | Bounded synchronized chunks and measured safe release | Open: native trials unrun |
-| R002 | Sharing mutates another branch or restores stale state | Exact identities/tokens, immutable membership and fault cases | Open: native state proof unrun |
-| R003 | Native scratch escapes accounting; cell eviction does not free physical buffers | Unique ledger, preallocation gate, allocator peaks and OS/device observations | Open: peaks/cleanup unrun |
-| R004 | Template, grammar and actual client schemas disagree | Pinned client capture, native rendering and independent final validation | Open: interoperability unrun |
-| R005 | Batch/precision changes harm numerics or coding quality | Exact reference, preregistered tolerances and paired task outcomes | Open: quality lanes unrun |
-| R006 | A fast small model fails useful coding tasks | Objective tasks and quality-matched competitors; no size-only admission | Open: coding quality unrun |
-| R007 | GPU faults leave unsafe state or unobservable cleanup | Invalidate uncertain contexts and qualify truthful unavailable/restart behavior | Open: fault behavior unrun |
-| R008 | Cache-off wins are presented as product leadership | Optimized comparison matrix retaining losing cells | Open: comparisons unrun |
-| R009 | Ignored planning disappears on clone/workstation loss | Explicit local backup/provisioning; no public/build dependency | Ongoing operational risk |
-
-R001..R008 identify what source inspection cannot prove, not demonstrated defects in the candidate.
-R009 is a deliberate consequence of local-only planning. Close a row only when the adverse
-scenario is covered by identified evidence and its limits are stated.
+| R01 | MLX Rust bindings immature, lag MLX releases, or lack ops we need | 001 opens with a binding spike and a go/no-go; thin own safe layer over the C API if needed | Open |
+| R02 | Competitors (llama.cpp, Ollama MLX, oMLX) already match the cache story | Win on explainability, memory predictability, cancellation and API fidelity; publish a fair benchmark with their caches on | Open |
+| R03 | Exact reuse breaks because clients inject volatile content (Claude Code attribution header) or templates re-render history differently | Miss diagnostics with first divergent token; `mrun connect` sets known client env (`CLAUDE_CODE_ATTRIBUTION_HEADER=0`); template round-trip tests | Open |
+| R04 | Chunked vs one-shot prefill not bit-identical | Reuse stored KV, never recompute a cached prefix; fixed chunk grid recorded in cache key | Open |
+| R05 | MoE model port slower than mlx-lm | Port from mlx-lm reference, compare tok/s in `mrun bench` against mlx-lm on the same weights | Open |
+| R06 | Unified memory pressure from other apps after admission | Pressure observer sheds prefix store first; explicit failure if active work cannot continue | Open |
+| R07 | Hybrid-attention models dominate new releases | Prefix store nodes carry state checkpoints from day one (D017) | Open |
+| R08 | Scope creep toward a general-purpose server | Non-goals in [VISION](VISION.md); constitution Principle VI | Ongoing |

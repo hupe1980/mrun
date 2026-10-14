@@ -1,47 +1,80 @@
-# Design Decisions
+# Decisions
 
-Stable concepts identifiers record rationale, not task completion. Never reuse or renumber them;
-mark superseded decisions and name their replacements. Research D-01 through D-08 are separate
-feature-local records; concepts identifiers use D001 format.
+Architecture decision records. IDs are stable; superseded entries name their replacement.
 
-## D001: Optimize Coding-Agent Outcomes
+| ID | Decision | Status |
+| --- | --- | --- |
+| D001 | Optimize agent latency (TTFT on repeated turns, tool-loop turnaround), not chat tok/s | Accepted |
+| D002 | ~~llama.cpp/Metal behind a C++ shim~~ | Superseded by D003, then D010 |
+| D003 | ~~Candle as the tensor core~~ | Superseded by D010 (2026-10-14) |
+| D004 | Exact prefix reuse only; approximate methods opt-in and quality-gated | Accepted |
+| D005 | ~~Planning stays local (gitignored)~~ | Superseded by D013 |
+| D010 | Engine: Apple MLX, called from Rust | Accepted 2026-10-14 |
+| D011 | mrun owns the runtime: scheduler, KV state, prefix store, memory budget, APIs | Accepted |
+| D012 | Memory budgeted by construction, not per-allocation hooks | Accepted |
+| D013 | Specs, concepts and Spec Kit tooling are tracked in git | Accepted |
+| D014 | Ship OpenAI Chat Completions, Anthropic Messages and stateless Responses together | Accepted 2026-10-14 |
+| D015 | Model format: MLX safetensors (mlx-community layout); Qwen3 family first | Accepted |
+| D016 | Drop the qualification-report/evidence-gating machinery; use `mrun bench` results | Accepted |
+| D017 | Prefix store is a radix tree of KV snapshots, designed for hybrid-model state too | Accepted |
 
-**Basis**: Original product request and [product contract](../specs/README.md).
-Own repeated-context latency, correct client handoff, safe interruption and shared-memory behavior.
-Do not substitute isolated token throughput or language prestige for successful tasks. Separate
-runtime/tool clocks and independently test state, numerical and task-quality outcomes.
+## D010: Engine is MLX
 
-## D002: Reuse Engines Before New Kernels
+**Context.** The Candle audit ([candle-capabilities](research/candle-capabilities.md)) found no
+Metal quantized MoE path, an open Metal corruption bug past 8,192 KV tokens (#3705), F16 RoPE
+tables, and no published Metal performance data. The landscape ([landscape](research/landscape-2026-10.md))
+shows the strongest local competitors moving to MLX (Ollama's MLX engine, oMLX, LM Studio).
 
-**Basis**: [Constitution principle V](../.specify/memory/constitution.md#v-reuse-engines-own-the-agent-contract).
-Rust owns orchestration and a narrow backend boundary. Engine replacement or new kernels require
-profiling, reference correctness and measured end-to-end benefit. This is not a permanent C++
-mandate: Rust-native engines are eligible when evidence favors them.
+**Decision.** Build on MLX through Rust bindings (pin and binding layer chosen in the 001 plan
+after [mlx-rust](research/mlx-rust.md)). mrun ports model graphs (Qwen3 dense, Qwen3 MoE) to Rust
+on MLX ops, owns KV state, and reuses MLX kernels (quantized matmul, gather-qmm, SDPA, RoPE).
 
-## D003: Treat the Initial Adapter as Conditional
+**Consequences.** MoE models (Qwen3-Coder-30B-A3B) are reachable without new kernels. Build needs
+MLX's C/C++ library; Linux CI runs MLX's CPU backend if the bindings support it, otherwise CI
+covers everything except the engine crate. The engine sits behind one internal module boundary,
+not a plugin system.
 
-**Basis**: [Plan](../specs/001-agent-runtime/plan.md) and
-[native stop conditions](../specs/001-agent-runtime/contracts/backend.md#stop-conditions).
-The plan selects a pinned llama.cpp/Metal spike, not a measured winner. Prove required controls
-before production work. Failure requires revised design, not unsafe shims, hidden fallback,
-weaker requirements or an automatic second production adapter.
+## D011: Own the runtime
 
-## D004: Separate State Correctness from Speed
+The differentiator is the runtime around the engine: exact reuse, explainable misses, memory
+admission, cancellation and API fidelity. These are written in Rust in mrun; model graphs are thin
+ports of mlx-lm reference implementations, tested against them.
 
-**Basis**: [Feature requirements](../specs/001-agent-runtime/spec.md).
-Match exact rendered tokens and complete identity, keep shared prefixes immutable, and reset
-request-local sampler/grammar/RNG state. Invalidate uncertain native state. Exact-reference token
-replay, precision-dependent numerics and coding-task outcomes establish different properties.
+## D012: Budget by construction
 
-## D005: Keep Planning Local
+The 2026-10-14 Candle experiment ([results](research/candle-budget/results.md)) showed that
+per-allocation enforcement inside third-party code is not achievable: op scratch, template
+intermediates and grammar construction allocate before any limit trips. mrun instead (1) computes a
+budget at startup from physical memory and the GPU working-set recommendation, (2) loads weights,
+(3) measures peak scratch with a worst-case prefill chunk, (4) sizes the KV arena and prefix store
+from the remainder, (5) admits requests by exact KV bytes, and (6) caps inputs (body, schema,
+template) so host-side work stays inside a measured envelope. MLX memory limits and cache limits
+back this up at runtime.
 
-**Basis**: User-directed convention matching billing, sepa and agentplane.
-Ignore concepts, numbered specifications, Spec Kit machinery and generated skills while leaving
-source and normal GitHub workflows trackable. Public artifacts cannot cite ignored paths.
-Local backup/provisioning is explicit: Git does not preserve or restore these notes.
+## D014: Three APIs at once
 
-## Unaccepted Product Choice
+Codex CLI only speaks Responses; Claude Code only speaks Anthropic Messages; OpenCode and most
+others speak Chat Completions. All three map onto one internal request model (messages, tools,
+sampling, stream). Responses is stateless (`store=false` semantics); no server-side conversation
+storage (Principle IV).
 
-Whether the first feature must beat strong optimized competitors remains under clarification.
-Neither baseline completion nor a new competitor-win gate has been accepted in that discussion.
-Current specification gates remain authoritative; do not record a decision by inference.
+## D015: Models
+
+- Reference: Qwen3-8B (dense, full attention) for correctness and engineering.
+- Primary: Qwen3-Coder-30B-A3B-Instruct, 4-bit (MoE, full attention, ~17–19 GB).
+- Next: hybrid-attention coders (Qwen3.6/3.8-27B class) once the prefix store supports state
+  checkpoints. Models are pulled explicitly and identified by content hash.
+
+## D016: Drop evidence-gating machinery
+
+The previous design gated serving on hashed qualification reports, staged candidate binaries and
+100-case fixture catalogs. That machinery delivered no user value and blocked progress. Correctness
+lives in tests; performance lives in reproducible `mrun bench` runs with recorded settings.
+
+## D017: Prefix store design
+
+A radix tree keyed by token IDs, rooted per model identity. Nodes own immutable KV snapshots of
+token ranges (segments). Restoring a prefix copies matched segments into the active cache; the hot
+path (same conversation continuing) reuses the active cache with zero copy. Every lookup confirms
+tokens, not just hashes. For hybrid models, nodes additionally hold recurrent-state checkpoints at
+chosen boundaries. Eviction weighs recompute cost saved per byte with recency.

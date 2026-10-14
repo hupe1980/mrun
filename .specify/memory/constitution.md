@@ -36,10 +36,11 @@ name alone.
 
 ### V. Own the Runtime, Reuse the Kernels
 
-mrun owns scheduling, KV state, memory, APIs and model execution order, built on Candle tensors and
-its Metal kernels. New GPU kernels or forks of upstream crates require a profile showing the
+mrun owns scheduling, KV state, memory, APIs and model execution order, built on Apple MLX arrays
+and kernels called from Rust. Model graphs are ports of reference implementations (mlx-lm) and are
+tested against them. New GPU kernels or forks of upstream libraries require a profile showing the
 bottleneck, a reference implementation for correctness tests, and a measured end-to-end win.
-Prefer small, upstreamable patches. Backend types MUST NOT leak into the public API.
+Prefer small, upstreamable patches. Engine types MUST NOT leak into the public API.
 
 ### VI. Simple Over Clever, Developer Experience First
 
@@ -51,8 +52,9 @@ do not serve a current requirement. No speculative plugin frameworks or multi-ba
 
 - Primary target: Apple Silicon Macs with Metal, qualified first on an M4 Pro with 48 GB unified
   memory. Linux/CPU builds MUST compile and run portable tests; they are not performance targets.
-- Rust stable (pinned in `rust-toolchain.toml`), Tokio + Axum for serving, Candle for tensors.
-- API compatibility is a product feature: OpenAI Chat Completions and Anthropic Messages first.
+- Rust stable (pinned in `rust-toolchain.toml`), Tokio + Axum for serving, MLX for tensors.
+- API compatibility is a product feature: OpenAI Chat Completions, Anthropic Messages and
+  stateless OpenAI Responses.
 - No automatic privileged OS tuning (for example raising the GPU wired-memory limit).
 - Licensing: MIT OR Apache-2.0. Model licenses are shown to the user at pull time.
 
@@ -73,4 +75,4 @@ removed or redefined; minor: principle added; patch: wording) and reconcile affe
 Numerical targets in specs are acceptance gates; changing one after a failed run requires a note
 in the spec explaining why.
 
-**Version**: 2.0.0 | **Ratified**: 2026-10-13 | **Last Amended**: 2026-10-14
+**Version**: 3.0.0 | **Ratified**: 2026-10-13 | **Last Amended**: 2026-10-14

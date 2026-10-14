@@ -1,35 +1,32 @@
-# Roadmap Entry Point
+# Roadmap
 
-The [spec of specs](../specs/README.md#feature-sequence) owns feature sequence, product IDs and
-reserved slots. This explains the route through that work, not another backlog, new thresholds
-or completion claims. Implementation items belong in their numbered feature's tasks.
+The canonical feature order lives in the [spec index](../specs/README.md). This page explains the
+route and the gates between milestones.
 
-## Immediate Direction
+## Milestones
 
-1. Finish the product clarification: qualified baseline versus mandatory optimized-competitor win
-   for first-feature completion. Do not choose on the user's behalf.
-2. Reconcile [001's spec](../specs/001-agent-runtime/spec.md),
-   [plan](../specs/001-agent-runtime/plan.md), contracts and tasks with the accepted choice.
-3. Prove required native capabilities before production runtime work. Stop or revise selection
-   if sharing, bounded allocation, tools, cancellation or faults cannot meet the contract.
-   Rust-native alternatives are eligible; a full rewrite is not the default remedy for a failed spike.
-4. Qualify the complete client/runtime slice and evidence layers in [VERIFICATION.md](VERIFICATION.md).
-   Publish scoped comparisons, retaining failures and competitor-winning cells.
+| Milestone | Outcome | Specs | Gate to move on |
+| --- | --- | --- | --- |
+| **M0 Foundation** | Hard cut done; MLX binding spike on a Mac (load, matmul, SDPA, quantized matmul, memory APIs) | 001 (phase 1) | Go/no-go on the binding layer within one week |
+| **M1 Engine** | `mrun run` streams Qwen3-8B-4bit locally with owned KV cache, chunked prefill, cancellation and a startup memory budget | 001 | Greedy output matches mlx-lm token-for-token on reference prompts; decode tok/s within 10% of mlx-lm |
+| **M2 Agent APIs** | Claude Code, Codex and OpenCode complete a real tool loop against `mrun serve` (cache off) | 002 | Client conformance suite green for all three APIs |
+| **M3 Prefix store** | Exact radix reuse across turns, branches and tool loops, with miss diagnostics | 003 | Repeated-turn TTFT ≥ 5× faster than cache-off at 30K context; zero stale reuse in the mutation suite |
+| **M4 Models & DX** | `mrun pull/ls/rm/connect/doctor`; Qwen3-Coder-30B-A3B as the default model | 004 | Fresh Mac to working Claude Code session in under 5 minutes |
+| **M5 Bench** | `mrun bench` with agent-trace replay against llama.cpp, Ollama, oMLX, mlx-lm | 005 | First dated public comparison published, losing cells included |
 
-## Later Work
+M4 and M5 can start in parallel with M3; 005's harness is useful as soon as M1 lands.
 
-Durable checkpoints, scheduling, quality-preserving acceleration, model/backend expansion and
-distribution/hardening have reserved slots in the canonical sequence. They are not already
-specified features or promised production adapters. Promote work when evidence identifies
-its benefit and prerequisites, not because a mechanism is fashionable.
+## Later (spec when evidence justifies)
 
-Custom kernels/engines need reviewed scope, a profiled bottleneck, reference correctness,
-safety/fallback consequences and measurable user benefit. Broader contexts, speculation and
-KV precision changes also require their own quality and memory evidence.
+- **Hybrid-attention models** (Qwen3.6/3.8-27B class): state checkpoints in the prefix store.
+- **SSD cache tier**: opt-in, content-addressed, model-bound; survives restarts.
+- **Speculative decoding**: MTP or prompt-lookup for code edits; opt-in and quality-gated.
+- **Parallel sessions**: small-batch decode for concurrent subagents.
+- **Distribution**: Homebrew formula, signed release binaries, launchd service.
+- **Linux / CUDA**: Linux builds compile and pass portable tests from day one (CI). Running models
+  on Linux (MLX CPU, MLX CUDA backend) is evaluated only after the Mac release; no performance
+  commitments there. Competing with vLLM/SGLang on CUDA servers is not a goal.
 
-## Completion Rule
+## Explicitly not planned
 
-Implementation requires code and checks that distinguish correct behavior from adverse cases.
-Performance qualification additionally requires the physical-host evidence in the owning spec.
-Best-in-class needs a dated optimized-comparator result, not feature completion or self-cache gains.
-Preserve original failed evidence when proposed targets are formally amended.
+See the [vision non-goals](VISION.md#non-goals).
