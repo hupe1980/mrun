@@ -40,8 +40,8 @@ All commands accept `--help` (with examples) and `-q/--quiet`; tabular commands 
 | `mrun --version` | 008 | Version, commit, MLX and mlx-c versions |
 
 Added by post-0.1 features (listed here so the CLI stays one surface): `serve --speculation
-auto\|on\|off` and `pull --no-mtp` (006); `serve --persist` and `mrun cache [clear --disk\|--all]`
-(007).
+auto\|off\|ngram` (006; `mtp` only after its gated follow-up); `serve --persist` / `--no-persist`,
+`mrun cache [--json]` and `mrun cache clear [--disk\|--all] [--model M]` (007).
 
 ## Configuration sources
 
