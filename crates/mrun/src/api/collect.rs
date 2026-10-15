@@ -1,6 +1,7 @@
 //! Folds a `GenEvent` stream into one result, for non-streaming responses of every API.
 
 use crate::api::model::{ApiError, Finish, GenEvent, Usage};
+use crate::cache::miss::MissReport;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Call {
@@ -25,6 +26,7 @@ pub struct Collected {
     pub input: u32,
     pub cached: u32,
     pub max_tokens: u32,
+    pub miss: Option<MissReport>,
     pub finish: Option<(Finish, Option<String>, Usage)>,
     pub error: Option<ApiError>,
 }
@@ -36,7 +38,9 @@ impl Collected {
                 input,
                 cached,
                 max_tokens,
+                miss,
             } => {
+                self.miss = miss;
                 self.input = input;
                 self.cached = cached;
                 self.max_tokens = max_tokens;

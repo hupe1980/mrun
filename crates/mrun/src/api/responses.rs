@@ -1346,6 +1346,7 @@ mod tests {
                 input: 10,
                 cached: 4,
                 max_tokens: 100,
+                miss: None,
             },
             GenEvent::ReasoningDelta("a".into()),
             GenEvent::ReasoningDelta("b".into()),

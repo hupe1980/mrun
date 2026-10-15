@@ -2,6 +2,8 @@
 //! reuse, prefill of all but the last prompt token, pipelined decode with a decode hook, stop and
 //! UTF-8 handling, and a finish that leaves the state holding committed tokens only.
 
+use crate::cache::miss::MissReport;
+use crate::cache::{CacheStats, ClearReport};
 use crate::chat::prompt::RenderedPrompt;
 use crate::chat::stop::{Fed, StopMatcher};
 use crate::chat::tokenizer::StreamDecoder;
@@ -97,6 +99,8 @@ pub struct Stats {
     pub ttft: Option<Duration>,
     pub prefill_tps: f64,
     pub decode_tps: f64,
+    /// The policy's miss report, when it keeps a cache.
+    pub miss: Option<MissReport>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +109,7 @@ pub enum Event {
         prompt: u32,
         cached: u32,
         max_tokens: u32,
+        miss: Option<MissReport>,
     },
     Progress {
         done: u32,
@@ -154,6 +159,8 @@ pub struct Prepared {
     /// Prompt tokens the state holds; prefill starts here.
     pub resume: u32,
     pub chunks: ChunkPlan,
+    /// Why the request was not fully served from cache (`None` for `Session`).
+    pub miss: Option<MissReport>,
 }
 
 /// Memory-pressure level reported by the system.
@@ -230,6 +237,14 @@ pub trait ReusePolicy {
     ) -> u32;
     /// Forgets all state (after an engine error or a panic).
     fn clear(&mut self, engine: &mut dyn Engine);
+    /// Cache statistics, for policies that keep a cache.
+    fn stats(&self) -> Option<CacheStats> {
+        None
+    }
+    /// `mrun cache clear`: drops stored state; the live state too when `idle`.
+    fn clear_cache(&mut self, _engine: &mut dyn Engine, _idle: bool) -> Option<ClearReport> {
+        None
+    }
 }
 
 /// Progress of one request, used to decide what is committed at the finish.
@@ -415,10 +430,12 @@ fn run<E: Engine, P: ReusePolicy>(
     let keep = prepared.resume;
     turn.prefilled = keep;
     turn.stats.cached_tokens = keep;
+    turn.stats.miss = prepared.miss;
     if !sink.send(Event::Started {
         prompt: len,
         cached: keep,
         max_tokens: limit,
+        miss: prepared.miss,
     }) {
         return Ok(FinishReason::Cancelled);
     }
@@ -712,7 +729,8 @@ mod tests {
             Event::Started {
                 prompt: 5,
                 cached: 0,
-                max_tokens: 50
+                max_tokens: 50,
+                miss: None
             }
         );
         // The pipelined EOS step was trimmed; prompt and reply stay.
@@ -735,7 +753,8 @@ mod tests {
             Event::Started {
                 prompt: prompt.len() as u32,
                 cached: 5,
-                max_tokens: 10
+                max_tokens: 10,
+                miss: None
             }
         );
         assert!(second.engine.processed.starts_with(&prompt[5..]));
@@ -754,7 +773,8 @@ mod tests {
             Event::Started {
                 prompt: 6,
                 cached: 2,
-                max_tokens: 1
+                max_tokens: 1,
+                miss: None
             }
         );
     }
@@ -1042,7 +1062,8 @@ mod tests {
             Event::Started {
                 prompt: prompt.len() as u32,
                 cached: 8,
-                max_tokens: 1
+                max_tokens: 1,
+                miss: None
             }
         );
         assert!(second.engine.processed.starts_with(&prompt[8..]));

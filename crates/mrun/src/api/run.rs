@@ -337,6 +337,7 @@ impl Relay {
                             prompt,
                             cached,
                             max_tokens,
+                            miss,
                         } => {
                             started = true;
                             let (id, api) = (self.id, self.api);
@@ -354,6 +355,7 @@ impl Relay {
                                 input: prompt,
                                 cached,
                                 max_tokens,
+                                miss,
                             };
                             if !self.send(vec![started]).await {
                                 return;

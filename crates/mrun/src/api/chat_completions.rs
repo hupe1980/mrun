@@ -540,6 +540,7 @@ mod tests {
                 input: 5,
                 cached: 2,
                 max_tokens: 9,
+                miss: None,
             },
             GenEvent::ToolStart {
                 idx: 0,

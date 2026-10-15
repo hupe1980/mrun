@@ -33,7 +33,8 @@ fn capacity_minus_one_prompt_tokens_completes_with_one_token() {
         Event::Started {
             prompt: CAPACITY - 1,
             cached: 0,
-            max_tokens: 1
+            max_tokens: 1,
+            miss: None
         }
     );
 }
@@ -105,6 +106,7 @@ fn cached_state_counts_as_available() {
             prompt: CAPACITY - 1,
             cached: 101,
             max_tokens: 1,
+            miss: None,
         }
     );
     // The old checkpoint was evicted (a session otherwise keeps two).

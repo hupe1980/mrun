@@ -844,6 +844,7 @@ mod tests {
                     input: 50,
                     cached: 40,
                     max_tokens: 100,
+                    miss: None,
                 },
                 GenEvent::ReasoningDelta("Need it.".into()),
                 GenEvent::ToolStart {
@@ -911,6 +912,7 @@ mod tests {
                     input: 5,
                     cached: 0,
                     max_tokens: 100,
+                    miss: None,
                 },
                 GenEvent::ToolStart {
                     idx: 0,

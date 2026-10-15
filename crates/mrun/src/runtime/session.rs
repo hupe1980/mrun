@@ -153,6 +153,7 @@ impl ReusePolicy for Session {
                 boundaries: Vec::new(),
                 checkpoints,
             },
+            miss: None,
         })
     }
 

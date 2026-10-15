@@ -5,6 +5,7 @@ use crate::api::collect::Collected;
 use crate::api::model::{ApiError, ApiKind, ErrorKind, GenEvent, Warning};
 use crate::api::run::{self, Tick, Turn};
 use crate::api::sse;
+use crate::cache::miss::{MissReport, role_str};
 use crate::cli::serve::{Loaded, Readiness, ServerState};
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -150,6 +151,26 @@ pub fn json_response(body: Value, collected: &Collected, warnings: &[Warning]) -
         HeaderValue::from(collected.input - collected.cached.min(collected.input)),
     );
     headers.insert("x-mrun-max-tokens", HeaderValue::from(collected.max_tokens));
+    if let Some(miss) = &collected.miss {
+        if let Some(cause) = miss.cause {
+            headers.insert(
+                "x-mrun-cache-cause",
+                HeaderValue::from_static(cause.as_str()),
+            );
+        }
+        if let Some(at) = miss.divergence {
+            headers.insert("x-mrun-cache-divergence", HeaderValue::from(at));
+        }
+        if let Some(message) = miss.message
+            && let Ok(value) =
+                HeaderValue::from_str(&format!("{}:{}", message.index, role_str(message.role)))
+        {
+            headers.insert("x-mrun-cache-message", value);
+        }
+        if miss.gap > 0 {
+            headers.insert("x-mrun-cache-gap", HeaderValue::from(miss.gap));
+        }
+    }
     if !warnings.is_empty() {
         let list = warnings
             .iter()
@@ -163,10 +184,19 @@ pub fn json_response(body: Value, collected: &Collected, warnings: &[Warning]) -
     response
 }
 
-/// The `: mrun` comment opening a stream: reuse and the applied output limit.
-fn start_comment(input: u32, cached: u32, max_tokens: u32) -> String {
-    let meta = json!({"cached": cached, "processed": input - cached.min(input),
+/// The `: mrun` comment opening a stream: reuse, the miss report and the applied limit.
+fn start_comment(input: u32, cached: u32, max_tokens: u32, miss: Option<&MissReport>) -> String {
+    let mut meta = json!({"cached": cached, "processed": input - cached.min(input),
         "max_tokens": max_tokens});
+    if let Some(miss) = miss {
+        meta["cause"] = miss.cause.map(|c| c.as_str()).into();
+        meta["divergence"] = miss.divergence.into();
+        meta["message"] = miss
+            .message
+            .map(|m| json!({"index": m.index, "role": role_str(m.role)}))
+            .unwrap_or(Value::Null);
+        meta["gap"] = miss.gap.into();
+    }
     sse::comment(&format!("mrun {meta}"))
 }
 
@@ -202,9 +232,15 @@ pub fn stream_response(turn: Turn, mut encoder: impl StreamEncode) -> Response {
                         input,
                         cached,
                         max_tokens,
+                        miss,
                     } = &event
                     {
-                        frames.push_str(&start_comment(*input, *cached, *max_tokens));
+                        frames.push_str(&start_comment(
+                            *input,
+                            *cached,
+                            *max_tokens,
+                            miss.as_ref(),
+                        ));
                     }
                     let done = event.is_terminal();
                     if done && !warnings.is_empty() {

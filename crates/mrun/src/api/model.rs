@@ -3,6 +3,7 @@
 //! Decoders turn each wire format into a [`ChatRequest`]; the generation worker turns engine
 //! events into [`GenEvent`]s; encoders fold those into each API's native body or SSE stream.
 
+use crate::cache::miss::MissReport;
 use axum::http::StatusCode;
 use mrun_engine::Sampling;
 use serde_json::Value;
@@ -282,6 +283,8 @@ pub enum GenEvent {
         input: u32,
         cached: u32,
         max_tokens: u32,
+        /// The cache's miss report (003), when the server keeps a cache.
+        miss: Option<MissReport>,
     },
     ReasoningDelta(String),
     TextDelta(String),
