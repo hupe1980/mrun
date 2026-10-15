@@ -102,6 +102,13 @@ pub fn render(result: &RunResult) -> String {
             c.malformed_tool_calls
         );
     }
+    agent_section(&mut out, result);
+    if !result.comparability.is_empty() {
+        out.push_str("\n## Comparability\n\n");
+        for c in &result.comparability {
+            let _ = writeln!(out, "- {} ({} vs mrun): {}", c.cell, c.system, c.kind);
+        }
+    }
     out.push_str("\n## Warnings\n\n");
     if result.warnings.is_empty() {
         out.push_str("none\n");
@@ -120,6 +127,58 @@ pub fn render(result: &RunResult) -> String {
         }
     }
     out
+}
+
+/// Agent cells: session time, quality signals, mrun's template re-renders and the per-turn
+/// TTFT of the first repetition.
+fn agent_section(out: &mut String, result: &RunResult) {
+    let agent: Vec<&Cell> = result
+        .cells
+        .iter()
+        .filter(|c| c.cell.starts_with("agent/") && c.turns.is_some())
+        .collect();
+    if agent.is_empty() {
+        return;
+    }
+    out.push_str("\n## Agent suite\n");
+    for c in agent {
+        let _ = writeln!(
+            out,
+            "\n### {} on {}\n\nSession {}, malformed tool calls {}, early EOS {}",
+            c.cell,
+            c.system,
+            fmt_value(c.session_s, "s"),
+            c.malformed_tool_calls,
+            c.early_eos
+        );
+        if let Some(r) = &c.template_rerenders {
+            let _ = writeln!(
+                out,
+                "Template re-renders: {} turns, {} tokens",
+                r.turns, r.tokens
+            );
+        }
+        out.push_str("\n| Turn | Conversation | Kind | TTFT | TFUT | Input | Cached | Output | Cause |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+        for t in c.turns.iter().flatten().filter(|t| t.rep.unwrap_or(1) == 1) {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {:.1} ms | {:.1} ms | {} | {} | {} | {} |",
+                t.n,
+                t.conversation,
+                format!("{:?}", t.kind).to_lowercase(),
+                t.ttft_ms,
+                t.tfut_ms,
+                t.input,
+                t.cached,
+                t.output,
+                match (&t.cause, t.message_index) {
+                    (Some(cause), Some(i)) => format!("{cause} @{i}"),
+                    (Some(cause), None) => cause.clone(),
+                    _ => "–".into(),
+                }
+            );
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,15 @@
+# The reference MLX server (mlx_lm.server), latest stable release, prompt cache defaults.
+name = "mlx-lm"
+url = "http://127.0.0.1:8080"
+apis = ["chat"]
+health = "/v1/models"
+ignore_eos = "none"
+flags = []
+start = "mlx_lm.server --model <model> --port 8080"
+manual_reset = "Restart mlx_lm.server"
+
+[model]
+name = ""
+format = "mlx"
+bits_per_weight = 4.5
+kv_format = "bf16"

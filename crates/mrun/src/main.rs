@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use mrun::bench::BenchArgs;
 use mrun::chat::limits::MAX_PROMPT_BYTES;
 use mrun::cli::cache::CacheCommand;
 use mrun::cli::connect::{self, ConnectArgs};
@@ -80,6 +81,12 @@ enum Command {
     /// Re-hash every file of a pulled model against its manifest.
     #[command(after_help = "Examples:\n  mrun verify qwen3.6")]
     Verify(VerifyArgs),
+    /// Measure mrun (and, with --compare, other local servers): agent replay, synthetic cells
+    /// and cancellation; writes result.json and report.md.
+    #[command(
+        after_help = "Examples:\n  mrun bench --suite agent\n  mrun bench --compare --system mrun=http://127.0.0.1:8484 --system llama.cpp=http://127.0.0.1:8080,model=qwen3-coder"
+    )]
+    Bench(BenchArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -153,6 +160,7 @@ fn main() -> ExitCode {
         Command::Show(args) => ExitCode::from(show::run(args)),
         Command::Rm(args) => ExitCode::from(rm::run(args)),
         Command::Verify(args) => ExitCode::from(verify::run(args)),
+        Command::Bench(args) => ExitCode::from(mrun::bench::run(args)),
     }
 }
 

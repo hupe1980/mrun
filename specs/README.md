@@ -1,7 +1,7 @@
 # mrun Specs
 
 **Updated**: 2026-10-15 (design sprint 3, lean 0.1 cut, D025; implementation sprint) · **Status**:
-the portable (Linux-testable) parts of 002, 003, 004 and 008 are implemented on the scripted
+the portable (Linux-testable) parts of 002, 003, 004, 005 and 008 are implemented on the scripted
 engine; the MLX engine (001) and every gate measured on the target Mac are open.
 
 mrun is a local inference server for coding agents on Apple Silicon. See

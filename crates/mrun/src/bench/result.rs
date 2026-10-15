@@ -37,6 +37,9 @@ pub struct SystemMemory {
     pub system: String,
     pub free_memory_before: u64,
     pub swap: u64,
+    /// 1-minute load average before the system ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_average: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -102,6 +105,9 @@ pub struct Turn {
     pub cause: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_index: Option<u32>,
+    /// Repetition (1-based).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rep: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -165,6 +171,9 @@ impl Cell {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Comparability {
     pub cell: String,
+    /// The system compared with mrun on this cell.
+    #[serde(default)]
+    pub system: String,
     /// `same-weights`, `different-quantization`, `lossy-kv`, `n/a`.
     pub kind: String,
 }
@@ -183,14 +192,15 @@ pub struct Reps {
     pub agent: u32,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// The hand-written schema and a validator for the keywords it uses, for tests here and in
+/// `tests/bench_driver.rs`.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
     use serde_json::Value;
 
     /// The keywords `bench/result.schema.json` uses: type, const, enum, properties, required,
     /// items, minimum.
-    fn validate(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    pub fn validate(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
         if let Some(c) = schema.get("const")
             && c != value
         {
@@ -248,9 +258,15 @@ mod tests {
         Ok(())
     }
 
-    fn schema() -> Value {
+    pub fn schema() -> Value {
         serde_json::from_str(include_str!("../../../../bench/result.schema.json")).unwrap()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_support::{schema, validate};
 
     #[test]
     fn emitted_results_validate_against_the_schema() {
@@ -266,7 +282,19 @@ mod tests {
             output: 40,
             cause: Some("changed".into()),
             message_index: Some(4),
+            rep: Some(1),
         }]);
+        result.comparability.push(Comparability {
+            cell: "synthetic/prefill-8k".into(),
+            system: "llama.cpp".into(),
+            kind: "different-quantization".into(),
+        });
+        result.machine.per_system.push(SystemMemory {
+            system: "mrun".into(),
+            free_memory_before: 1 << 30,
+            swap: 0,
+            load_average: Some(1.5),
+        });
         result.cells[0].failures.push(Failure {
             rep: 2,
             error: "truncated input".into(),

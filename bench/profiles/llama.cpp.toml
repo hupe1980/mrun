@@ -1,0 +1,21 @@
+# llama.cpp server (llama-server), latest stable release: prompt cache reuse on, one slot and
+# mrun's context length.
+name = "llama.cpp"
+url = "http://127.0.0.1:8080"
+apis = ["chat"]
+health = "/health"
+version_path = "/props"
+version_pointer = "/build_info"
+ignore_eos = "body"
+flags = ["-c {context}", "-np 1", "--cache-reuse 256", "--cache-ram 8192", "--jinja"]
+start = "llama-server -m <model.gguf> -c {context} -np 1 --cache-reuse 256 --cache-ram 8192 --jinja --port 8080"
+
+[model]
+name = ""
+format = "gguf"
+bits_per_weight = 4.85
+kv_format = "f16"
+
+[[reset]]
+method = "POST"
+path = "/slots/0?action=erase"

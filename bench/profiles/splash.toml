@@ -1,0 +1,22 @@
+# Inco Splash (github.com/incoai/splash, Apache-2.0), Qwen3.6 and Qwen3.8 only. Its default INT8
+# KV is cell `splash` (labeled lossy KV); variant `splash-bf16` is the exact-KV cell. Flag names
+# to verify on the pinned release.
+name = "splash"
+url = "http://127.0.0.1:8000"
+apis = ["chat"]
+health = "/v1/models"
+ignore_eos = "none"
+flags = []
+start = "splash serve --model mlx-community/Qwen3.6-35B-A3B-4bit"
+manual_reset = "Restart Splash with its persistent and SSD caches off or cleared"
+
+[model]
+name = "mlx-community/Qwen3.6-35B-A3B-4bit"
+format = "mlx"
+bits_per_weight = 4.5
+kv_format = "int8"
+
+[variants.splash-bf16]
+flags = ["--kv-format bf16", "idle release off"]
+start = "splash serve --model mlx-community/Qwen3.6-35B-A3B-4bit --kv-format bf16 (idle release off)"
+kv_format = "bf16"

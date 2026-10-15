@@ -1,0 +1,22 @@
+# mrun itself. Its context length N is every system's context length (005 FR-015).
+name = "mrun"
+url = "http://127.0.0.1:8484"
+apis = ["chat", "messages", "responses"]
+health = "/health"
+version_path = "/mrun/status"
+version_pointer = "/version"
+context_path = "/v1/models"
+context_pointer = "/data/0/context_window"
+ignore_eos = "mrun-header"
+flags = []
+start = "mrun serve --model <model>"
+
+[model]
+name = ""
+format = "mlx"
+bits_per_weight = 4.5
+kv_format = "bf16"
+
+[[reset]]
+method = "POST"
+path = "/mrun/cache/clear"

@@ -1,0 +1,28 @@
+# Ollama, latest stable release, default caching, with mrun's context length (its small default
+# would silently truncate agent prompts).
+name = "ollama"
+url = "http://127.0.0.1:11434"
+apis = ["chat"]
+health = "/api/version"
+version_path = "/api/version"
+version_pointer = "/version"
+ignore_eos = "none"
+flags = ["OLLAMA_CONTEXT_LENGTH={context}"]
+start = "OLLAMA_CONTEXT_LENGTH={context} ollama serve"
+
+[model]
+name = "qwen3-coder:30b"
+format = "gguf"
+bits_per_weight = 4.85
+kv_format = "f16"
+
+# Unload, then load again.
+[[reset]]
+method = "POST"
+path = "/api/generate"
+body = '{"model": "{model}", "keep_alive": 0}'
+
+[[reset]]
+method = "POST"
+path = "/api/generate"
+body = '{"model": "{model}"}'

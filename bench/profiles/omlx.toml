@@ -1,0 +1,15 @@
+# oMLX, latest stable release, defaults (in-memory and SSD prompt cache).
+name = "omlx"
+url = "http://127.0.0.1:8000"
+apis = ["chat", "messages"]
+health = "/v1/models"
+ignore_eos = "none"
+flags = []
+start = "omlx serve (context length {context})"
+manual_reset = "Restart oMLX and clear its SSD cache directory"
+
+[model]
+name = ""
+format = "mlx"
+bits_per_weight = 4.5
+kv_format = "bf16"

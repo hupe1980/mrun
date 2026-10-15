@@ -51,6 +51,9 @@
               "swap": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "load_average": {
+                "type": "number"
               }
             },
             "required": [
@@ -321,6 +324,10 @@
                 "message_index": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "rep": {
+                  "type": "integer",
+                  "minimum": 1
                 }
               },
               "required": [
@@ -363,6 +370,9 @@
         "type": "object",
         "properties": {
           "cell": {
+            "type": "string"
+          },
+          "system": {
             "type": "string"
           },
           "kind": {
