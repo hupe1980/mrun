@@ -55,3 +55,30 @@ GitHub issue search was blocked (403), so issue-level claims come from web pages
 - **008 speculative decoding.** llama.cpp's n-gram family (`common/speculative.cpp`), with a per-position acceptance metric.
 - **Thinking-off probe.** vLLM renders `reasoning_effort=none` and compares it with other efforts to detect templates that ignore it (`anthropic/serving.py:207-240`). Do this when hybrid thinking models become a default.
 - **Reference code.** vLLM `rust/` (winnow streaming parsers) and SGLang `rust/sglang-radix-tree` are Rust references for mrun's parser and tree.
+
+## Jev (TypeSafe AI) — checked 2026-10-15, not adopted
+
+Jev is a "System One" model released 2026-09-15 by TypeSafe AI. It does not generate text or code.
+It evaluates typed questions (choice, score, yes/no) against a supplied state and returns
+schema-valid answers with calibrated probabilities. Reported latency is 70–500 ms. These figures
+come from vendor material and secondary coverage; none is verified here.
+
+It is proprietary: the weights are not published, it runs only behind TypeSafe's hosted API, and
+access is through an early-access waitlist. Its architecture is undisclosed apart from "RL for
+Calibrated Decisions".
+
+- **Verdict:** mrun cannot serve it, since there are no weights and it is not an MLX family. It
+  is not a coding model, and the agent clients mrun serves do not use it.
+- **Pattern worth keeping:** typed decisions with calibrated probabilities, used as a router or
+  guard beside an LLM. mrun can offer the same thing locally, with the models it already runs, by
+  combining:
+  - constrained decoding (002 JSON schema and enum outputs via llguidance);
+  - token log-probabilities (002 `logprobs`, planned).
+- **Revisit when:** an open-weights decision model ships in a format mrun can load, or agent
+  clients start sending decision-style requests.
+
+Sources:
+- typesafe.ai/blog/introducing-system-one-models-and-jev
+- docs.typesafe.ai/concepts/system-one
+- datacamp.com/blog/system-one-models-jev
+- digitalocean.com/resources/articles/what-is-jev
