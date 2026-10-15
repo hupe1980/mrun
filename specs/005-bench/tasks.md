@@ -15,10 +15,10 @@ description: "Tasks for 005 Benchmark Harness"
 
 ## Phase 2: Foundational
 
-- [ ] T003 `bench/stats.rs`: min/median/max; nearest-rank p95 and IQR only for n ≥ 20; tests on fixed samples. (Throttling slope: removed, 0.1 scope cut, 2026-10-15)
+- [X] T003 `bench/stats.rs`: min/median/max; nearest-rank p95 and IQR only for n ≥ 20; tests on fixed samples. (Throttling slope: removed, 0.1 scope cut, 2026-10-15) *Note*: `bench/stats.rs`.
 - [ ] T004 `bench/driver.rs`: replay in all three API styles, per-system model name, client-side TTFT per FR-013 (ignoring pings, comments, keepalives, role-only chunks), first-useful-token and per-token timings, cached and prompt token extraction (usage fields, `: mrun` SSE comments when streaming, `x-mrun-*` headers otherwise, incl. cause and message index); "truncated input" check (> 2% from expected, FR-015); tests against the fake server; test that only configured hosts are contacted (FR-011)
 - [ ] T005 [P] `bench/machine.rs` (macOS only): chip, memory, macOS, load average before each system, power source, low power, thermal state via `NSProcessInfo.thermalState` at each cell's start and end, free memory and swap per system; Linux tests use a stub. (RSS/footprint sampling: removed, 0.1 scope cut, 2026-10-15)
-- [ ] T006 `bench/report.rs`: RunResult v1 (validated against the schema) + markdown report with Method and "Losing cells" sections; insta snapshot tests for every cell status and an empty losing-cells section (SC-003)
+- [X] T006 `bench/report.rs`: RunResult v1 (validated against the schema) + markdown report with Method and "Losing cells" sections; insta snapshot tests for every cell status and an empty losing-cells section (SC-003) *Note*: `bench/result.rs` (RunResult v1), hand-written `bench/result.schema.json` with a validation test, `bench/report.rs` (markdown with Method and an always-present Losing cells section); plain assertions instead of insta snapshots.
 
 ## Phase 3: US1 — Measure my workload (P1) 🎯 MVP
 

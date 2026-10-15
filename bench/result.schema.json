@@ -1,0 +1,437 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hupe1980/mrun/bench/result.schema.json",
+  "title": "mrun bench run result",
+  "description": "Hand-written contract of `mrun bench` results (005 data model). Additive changes keep schema_version 1.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": "string"
+    },
+    "mrun_version": {
+      "type": "string"
+    },
+    "machine": {
+      "type": "object",
+      "properties": {
+        "chip": {
+          "type": "string"
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "macos": {
+          "type": "string"
+        },
+        "power_source": {
+          "type": "string"
+        },
+        "low_power": {
+          "type": "boolean"
+        },
+        "per_system": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "system": {
+                "type": "string"
+              },
+              "free_memory_before": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "swap": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "system",
+              "free_memory_before",
+              "swap"
+            ]
+          }
+        }
+      },
+      "required": [
+        "chip",
+        "memory_bytes",
+        "macos",
+        "power_source",
+        "low_power",
+        "per_system"
+      ]
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "apis": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "chat",
+                "messages",
+                "responses"
+              ]
+            }
+          },
+          "context_length": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "model": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string"
+              },
+              "bits_per_weight": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "kv_format": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "format",
+              "bits_per_weight",
+              "kv_format"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "endpoint",
+          "apis",
+          "context_length",
+          "flags",
+          "model"
+        ]
+      }
+    },
+    "resets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string"
+          },
+          "rep": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "step": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "system",
+          "rep",
+          "step",
+          "ok"
+        ]
+      }
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string"
+          },
+          "cell": {
+            "type": "string"
+          },
+          "api": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed",
+              "not-run",
+              "n/a"
+            ]
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "median": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "p95": {
+            "type": "number"
+          },
+          "iqr": {
+            "type": "number"
+          },
+          "unit": {
+            "enum": [
+              "ms",
+              "s",
+              "tok/s"
+            ]
+          },
+          "thermal_start": {
+            "type": "string"
+          },
+          "thermal_end": {
+            "type": "string"
+          },
+          "early_eos": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "malformed_tool_calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "template_rerenders": {
+            "type": "object",
+            "properties": {
+              "turns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tokens": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "turns",
+              "tokens"
+            ]
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rep": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "rep",
+                "error"
+              ]
+            }
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "n": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "conversation": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "new",
+                    "repeated",
+                    "branching"
+                  ]
+                },
+                "ttft_ms": {
+                  "type": "number"
+                },
+                "tfut_ms": {
+                  "type": "number"
+                },
+                "input": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cached": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "output": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cause": {
+                  "type": "string"
+                },
+                "message_index": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "n",
+                "conversation",
+                "kind",
+                "ttft_ms",
+                "tfut_ms",
+                "input",
+                "cached",
+                "output"
+              ]
+            }
+          },
+          "session_s": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "system",
+          "cell",
+          "api",
+          "status",
+          "samples",
+          "min",
+          "median",
+          "max",
+          "unit",
+          "thermal_start",
+          "thermal_end",
+          "early_eos",
+          "malformed_tool_calls",
+          "failures"
+        ]
+      }
+    },
+    "comparability": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "cell": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "same-weights",
+              "different-quantization",
+              "lossy-kv",
+              "n/a"
+            ]
+          }
+        },
+        "required": [
+          "cell",
+          "kind"
+        ]
+      }
+    },
+    "method": {
+      "type": "object",
+      "properties": {
+        "replay": {
+          "const": "in-order"
+        },
+        "reps": {
+          "type": "object",
+          "properties": {
+            "synthetic": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cancel": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "agent": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "synthetic",
+            "cancel",
+            "agent"
+          ]
+        }
+      },
+      "required": [
+        "replay",
+        "reps"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "started_at",
+    "finished_at",
+    "mrun_version",
+    "machine",
+    "systems",
+    "resets",
+    "cells",
+    "comparability",
+    "method",
+    "warnings"
+  ]
+}
