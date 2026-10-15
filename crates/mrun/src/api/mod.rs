@@ -1,5 +1,7 @@
 //! HTTP API: router, the loopback Host/Origin guard, `/health` and client probes.
 
+pub mod model;
+
 use crate::cli::serve::{Readiness, ServerState};
 use axum::Router;
 use axum::extract::{Request, State};
