@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-/// Events buffered per request before the stall timer starts (001 FR-011).
+/// Events buffered per request before a slow consumer starts the stall timer.
 pub const EVENT_CAPACITY: usize = 64;
 /// Default time a consumer may stop reading before its request is cancelled.
 pub const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(10);

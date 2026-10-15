@@ -67,7 +67,7 @@ struct RunArgs {
     check: bool,
 }
 
-/// Interactive prompt input limit (001 FR-016).
+/// Largest prompt accepted on the command line, checked before tokenization.
 const MAX_PROMPT_BYTES: usize = 8 * 1024 * 1024;
 
 fn main() -> ExitCode {
@@ -100,7 +100,7 @@ fn run(args: RunArgs) -> ExitCode {
         return ExitCode::from(3);
     }
     eprintln!(
-        "error: this build of mrun has no inference engine yet\n  hint: the MLX engine is being implemented (feature 001, tasks T004-T015)"
+        "error: this build of mrun has no inference engine yet\n  hint: the MLX engine is under development; follow the project README for progress"
     );
     ExitCode::from(1)
 }

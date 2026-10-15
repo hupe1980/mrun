@@ -1,4 +1,4 @@
-//! The generation loop, generic over [`Engine`] (001 contract): admission, prefill of all but the
+//! The generation loop, generic over [`Engine`]: admission, prefill of all but the
 //! last prompt token, decode with stop and UTF-8 handling, exactly one `Finished` event.
 
 use crate::chat::stop::StopMatcher;

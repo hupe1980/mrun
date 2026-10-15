@@ -28,7 +28,7 @@ pub struct ModelInfo {
     pub eos_tokens: Vec<u32>,
 }
 
-/// Startup memory budget (see the 001 data model).
+/// Memory budget computed at startup: what mrun may use and how it is split.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct MemoryBudget {
     pub physical: u64,

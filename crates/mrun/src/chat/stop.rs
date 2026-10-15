@@ -1,6 +1,6 @@
 //! Stop-sequence matching on streamed text with hold-back of possible partial matches.
 
-/// Maximum number of stop sequences and their length in bytes (001 FR-016).
+/// Limits on stop sequences: count and length in bytes.
 pub const MAX_STOPS: usize = 4;
 pub const MAX_STOP_BYTES: usize = 256;
 

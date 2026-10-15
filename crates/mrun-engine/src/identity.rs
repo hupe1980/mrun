@@ -1,4 +1,4 @@
-//! Model content identity (001 research R10), shared with feature 004.
+//! Model content identity: a hash over the files that determine a model's output.
 //!
 //! `identity = sha256` over the sorted `(relative path, file sha256)` pairs of every file that
 //! determines output. In the Hugging Face cache, weight files are symlinks to LFS blobs named by
