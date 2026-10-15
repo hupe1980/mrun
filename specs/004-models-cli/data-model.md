@@ -62,7 +62,7 @@ default_model = "qwen3.6"
 enabled = true
 
 [limits]
-body_mib = 8
+body_mib = 64
 messages = 4096
 tools = 256
 schema_kib = 64

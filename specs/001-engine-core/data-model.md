@@ -44,13 +44,18 @@ Load refused (exit 4) if `weights + scratch + recurrent_bytes + 4,096 × kv_byte
 | pending | ≤ 1 pipelined step (token fed, not confirmed) + pre-step recurrent arrays |
 
 Accounting invariant: `live allocation + Σ segments + Σ checkpoints = allocated() ≤
-state_capacity_bytes`; the one-layer copy transient and chunk rollback copy are inside scratch.
+state_capacity_bytes`; the one-layer copy transient (growth, `split_off`, `append`) and the chunk
+rollback copy are inside scratch, so no caller budgets them.
+
+`trim(0)` and `reserve(0, …)` always succeed and reset recurrent state to zeros.
 
 ## Checkpoint
 
-`{id, position, bytes = recurrent_bytes}`: deep copy of every linear layer's conv and recurrent
-state at `position`. Created by `prefill` (plan) or `checkpoint()`; restored by copy; dropped
-explicitly. Attention-only models: bytes 0.
+`{id, position, bytes = recurrent_bytes}` (≈ 61 MiB on Qwen3.6, R4): deep copy of every linear
+layer's conv and recurrent state at `position`. Created by `prefill` (plan, at most
+`MAX_PLAN_CHECKPOINTS` = 3 per call) or `checkpoint()`; restored by copy; dropped explicitly.
+Stored checkpoints beyond the live state + 3 are evictable cache (003). Attention-only models:
+bytes 0.
 
 ## Segment
 
@@ -60,16 +65,20 @@ plus (hybrid) the recurrent state at `end`, moved out by `split_off`. `append` r
 
 ## Session (`mrun::runtime`)
 
+The reuse policy of `mrun run`; `runtime/generate.rs` owns the per-request loop and takes either
+`Session` or 003's `PrefixStore` (under `serve`).
+
 | Field | Meaning |
 | --- | --- |
 | committed | prompt + output tokens whose text was fully emitted (the conversation) |
 | tokens | tokens the engine state holds; always a prefix of `committed` after a finish; equals the engine's state token for token |
-| checkpoints | hybrid: the two newest `(position, CheckpointId)` of this conversation |
+| checkpoints | hybrid: the two newest `(position, CheckpointId)` of this conversation, planned at `generation_start` |
 
 ## Request and events
 
 Request: prompt tokens, `Sampling` (validated), `max_tokens`, `stop` (≤ 4 × 256 B), optional mask
-provider (002), `CancelToken`.
+provider (002), `CancelToken` (cancel, plus a yield request that makes `prefill` return after the
+current whole chunk with `Prefilled.yielded`).
 
 States: `Admitted → Prefilling → Decoding → Finished(reason)`; any → `Cancelled`; engine error or
 panic → `Failed` (state reset).

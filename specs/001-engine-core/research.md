@@ -67,9 +67,10 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
 
 ## R5: Prefill chunking and cancellation
 
-- **Decision**: Chunk length `clamp(2048 × 16384 / max(depth, 1), 256, 2048)` from the chunk's
-  start position (2,048 up to 16K; 1,024 at 32K; 512 at 64K; 256 from 128K), so attention work per
-  chunk-layer stays roughly constant and one layer stays near 100 ms at any depth. Chunks also end
+- **Decision**: Chunk length `clamp(2048 × 16384 / max(depth, 1), 128, 2048)` from the chunk's
+  start position (2,048 up to 16K; 1,024 at 32K; 512 at 64K; 256 at 128K; 128 from 256K), so
+  attention work per chunk-layer stays roughly constant: one layer stays near 100 ms up to 128K
+  and ≤ ~200 ms at 262K, where fixed per-layer cost dominates the small chunk. Chunks also end
   at plan boundaries and checkpoint positions. All but the last prompt token are prefilled; the last
   goes through `forward`, as in mlx-lm. Per layer: build, `eval`, check cancel (one layer in
   flight). On cancel the partial chunk is discarded: attention offset reset to the chunk start, and
@@ -79,14 +80,20 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
   Up to 16K the split equals mlx-lm's fixed 2,048 split from position 0, so conformance (≤ 8K
   prompts) and SC-003 (16K) compare like for like.
 - **Risk**: per-layer eval adds 36–48 syncs per chunk; measured by the engine bench (FR-018).
-  Fallback: eval every 2 layers if overhead exceeds 5% and SC-004 still holds.
+  Fallback: eval every 2 layers if overhead exceeds 5% and SC-004 still holds. SC-004 at the
+  maximum depth (262K on Qwen3.6) is at risk: a ~200 ms layer plus teardown leaves little margin
+  under 300 ms; recorded, not assumed.
+- **Yield**: the same per-layer check reads `CancelToken::yield_requested()` (set by the worker,
+  e.g. on memory pressure, 003 FR-009); `prefill` then returns after the current whole chunk with
+  `Prefilled.yielded`, and the caller continues with the remaining tokens and the same plan, so
+  chunk ends and results are unchanged.
 
 ## R6: Memory budget
 
 - **Decision**:
   1. `physical = device_info.memory_size` (Linux CPU builds: `/proc/meminfo`),
      `recommended = device_info.max_recommended_working_set_size`.
-  2. `reserve = clamp(0.15 × physical, 2 GiB, 8 GiB)`; `budget = min(0.75 × physical,
+  2. `reserve = clamp(physical ÷ 6, 2 GiB, 8 GiB)`; `budget = min(0.75 × physical,
      recommended) − reserve` (lower freely; higher only with `--allow-over`).
   3. Pre-load check: weights from file sizes + 2 GiB scratch estimate + recurrent state + 4,096
      tokens ≤ budget (FR-007); after load, `get_active_memory` is the measured weights.
@@ -94,15 +101,16 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
      `R = recurrent_bytes × (1 + MAX_PLAN_CHECKPOINTS)`. Run one chunk of `chunk_len(P)` at depth P
      and one 2,048-token chunk at depth min(16K, P), each with a temporary state and a live
      recurrent state; `scratch = max(peak − active_before) + one layer of attention state at P`,
-     × 1.25 (the only margin). Cache in `~/.mrun/probe.toml` keyed by (identity, machine model,
+     × 1.25 (the only margin). This envelope also covers the one-layer copy transient of growth,
+     `split_off` and `append`, so 003 does not budget it. Cache in `~/.mrun/probe.toml` keyed by (identity, machine model,
      macOS, MLX version, mrun version, chunk policy).
   5. `state_capacity_bytes = budget − weights − scratch`; `kv_capacity_tokens = min(max_position,
      P, (state_capacity_bytes − R) / kv_bytes_per_token)`.
   6. `set_memory_limit(budget)`, `set_cache_limit(scratch)`, `set_wired_limit(min(budget,
      recommended))` after `synchronize`; `clear_cache()` after each prefill call and every 256
      decode tokens.
-- **Worked example (M4 Pro 48 GB)**: reserve 7.2 GiB, budget ≈ 36 − 7.2 = 28.8 GiB.
-  Qwen3.6 4-bit: weights ≈ 20 GiB, scratch ≈ 1–2 GiB → ≈ 7 GiB state → capped at max position
+- **Worked example (M4 Pro 48 GB)**: reserve 8 GiB, budget = 36 − 8 = 28 GiB.
+  Qwen3.6 4-bit: weights ≈ 20 GiB, scratch ≈ 1–2 GiB → ≈ 6–7 GiB state → capped at max position
   262,144 (≈ 5 GiB of attention state + 0.25 GiB recurrent). Qwen3-Coder: ≈ 16 GiB weights →
   ≈ 10–11 GiB state ≈ 105–120K tokens. Qwen3-8B: capped at 40,960.
 
@@ -200,11 +208,13 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
 - **Decision**: A checkpoint deep-copies all conv and recurrent arrays (`zeros` + `slice_update` +
   `eval`, debug pointer assertion). Prefill captures planned checkpoints at chunk ends, so no extra
   passes. `restore_checkpoint` copies (the checkpoint stays for repeated reuse, e.g. a shared
-  system prompt). `split_off(at)` per layer: copy the tail into a compact buffer, copy the prefix
-  into a buffer of `round_up(at, 256)`, release the old buffer (transient one layer, ≈ cost of one
-  read of the state: ≈ 45 ms for 90K tokens on Qwen3-Coder). Hybrids move the live recurrent
-  state into the segment (it describes `end`). `append` reverses it, freeing each segment layer as
-  it is copied when consuming.
+  system prompt). `split_off(at, shrink)` per layer: copy the tail into a compact buffer; with
+  `shrink`, copy the prefix into a buffer of `round_up(at, 256)` and release the old buffer
+  (transient one layer). Cost: a 90K-token tail on Qwen3-Coder is 90K × 96 KiB ≈ 8.2 GiB read and
+  written, ≥ 65 ms at 273 GB/s; a switch round trip (out + in) ≈ 0.15–0.2 s. When an `append`
+  follows at once (a switch), `shrink = false` skips the prefix copy and the append reuses the
+  kept allocation. Hybrids move the live recurrent state into the segment (it describes `end`).
+  `append` reverses it, freeing each segment layer as it is copied when consuming.
 - **Rationale**: D017/D019: state moves, never doubles, so a long conversation survives a subagent.
   Copy-based restore (dropped) capped conversations at half of capacity.
 

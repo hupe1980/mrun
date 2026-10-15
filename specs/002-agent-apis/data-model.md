@@ -36,7 +36,7 @@ re-rendered history depends on the template:
 On XML templates, `raw_args` that does not parse as a JSON object is rendered verbatim in place of
 the parameter list, with a `history-args-raw` warning (FR-004).
 
-Validation (before queuing), configurable: body ≤ 8 MiB; messages ≤ 4,096; tools ≤ 256; each schema
+Validation (before queuing), configurable: body ≤ 64 MiB (base64 screenshots in agent history; images are dropped before rendering); messages ≤ 4,096; tools ≤ 256; each schema
 ≤ 64 KiB and depth ≤ 16; tool result call ids must match a prior tool call; images/audio/files in
 user content rejected with the JSON path; images inside tool results replaced by a placeholder
 (FR-020). The `model` field is informational when one model is served (FR-018).

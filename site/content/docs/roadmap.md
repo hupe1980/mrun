@@ -29,6 +29,8 @@ Each comes after the first release, once measurements on recorded agent sessions
   a controller turns speculation off where it does not pay. Qwen3.6's multi-token prediction heads
   follow only if measurements show they help on this model.
 - **Persistent cache on SSD**, opt-in, so long sessions survive server restarts.
+- **Image input.** Qwen3.6 can read images; screenshots and image tool results will reach the model
+  instead of being replaced by a placeholder, with each image part of the exact cache key.
 
 ## Later
 

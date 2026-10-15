@@ -21,7 +21,7 @@
 - Q: Which models? → A: Qwen3-8B (dense, correctness reference), Qwen3-Coder-30B-A3B (attention MoE), Qwen3.6-35B-A3B (hybrid: 30 Gated DeltaNet + 10 gated attention layers, MoE 256 experts, `model_type` `qwen3_5_moe`). The default is confirmed by `mrun bench` before release (D015).
 - Q: What is "greedy parity"? → A: The token chosen is the argmax over log-probabilities (`logits − logsumexp(logits)`) computed in the logits dtype, exactly as mlx-lm `generate_step` does, with the same prefill chunk split. Any fused (compiled) op mlx-lm uses must be bitwise-equal in mrun: either compiled the same way or proven equal unfused.
 - Q: What is the sequence state? → A: Attention K/V per attention layer (cut at any position by offset) plus, for hybrid models, the recurrent state (convolution + delta-rule state) per linear layer, which exists only at the position it was computed for. Hybrid models resume earlier positions from checkpoints.
-- Q: How large is a prefill chunk? → A: Depth-adaptive: `clamp(2048 × 16384 / depth, 256, 2048)` tokens where depth is the chunk's start position; chunks also end at caller-given boundaries. Cancellation is checked after every layer with one layer in flight. A cancelled partial chunk is discarded; whole chunks are kept.
+- Q: How large is a prefill chunk? → A: Depth-adaptive: `clamp(2048 × 16384 / depth, 128, 2048)` tokens where depth is the chunk's start position; chunks also end at caller-given boundaries. Cancellation is checked after every layer with one layer in flight. A cancelled partial chunk is discarded; whole chunks are kept.
 - Q: When is memory allocated? → A: Lazily and in steps, never above the request's reserved total or the state capacity. Before any allocation the engine reports the bytes it needs so the caller can evict cache first.
 - Q: What does a conversation keep after a turn? → A: Exactly its committed tokens: prompt plus emitted output. Held-back, stop-matched and pipelined tokens are trimmed.
 - Q: Is the model ever unloaded when idle? → A: No (D020).
@@ -190,11 +190,13 @@ uninterrupted run that used the same chunk split.
   exactly the longest committed prefix it can represent: held-back, stop-matched and pipelined
   tokens are trimmed; hybrid models that cannot trim that far resume from the deepest checkpoint
   at or below it. The runtime's view of the state MUST equal the engine's token for token.
-- **FR-005**: Prompt processing MUST run in chunks of `clamp(2048 × 16384 / depth, 256, 2048)`
+- **FR-005**: Prompt processing MUST run in chunks of `clamp(2048 × 16384 / depth, 128, 2048)`
   tokens (depth = chunk start, minimum 1), ending additionally at caller-given boundaries and
   planned checkpoint positions; it MUST keep one layer in flight and check cancellation after
   every layer; a cancelled partial chunk MUST be discarded and only whole chunks reported as
-  processed. Generation MUST check cancellation after every token.
+  processed. A yield request (checked at the same points) MUST end the call after the current
+  whole chunk so the caller can evict and continue with the same plan. Generation MUST check
+  cancellation after every token.
 - **FR-006**: At startup the engine MUST compute `budget = min(fraction × physical,
   recommended working set) − reserve`, with fraction 0.75 and reserve
   `clamp(physical ÷ 6, 2 GiB, 8 GiB)` by default, physical memory and working set read from the
@@ -204,10 +206,11 @@ uninterrupted run that used the same chunk split.
   model whose weights + scratch estimate + recurrent state + 4,096 tokens of attention state
   exceed the budget, stating each number; after loading it MUST verify with measured sizes.
 - **FR-008**: The engine MUST measure peak scratch by probe chunks at the deepest admissible
-  position and at the largest chunk (including the one-layer growth transient and the recurrent
-  rollback copy), cache it per (model identity, machine, macOS, MLX version, mrun version, chunk
-  policy), and size state capacity from the remainder. Token capacity MUST NOT exceed the model's
-  maximum position or the probed depth.
+  position and at the largest chunk (including the one-layer copy transient of growth and moves,
+  and the recurrent rollback copy), cache it per (model identity, machine, macOS, MLX version,
+  mrun version, chunk policy), and size state capacity from the remainder. Callers never budget the
+  move transient separately. Token capacity MUST NOT exceed the model's maximum position or the
+  probed depth.
 - **FR-009**: A request MUST be admitted only if its prompt plus one output token fits the token
   capacity (memory held by cached state counts as available) and rejected up front otherwise,
   stating requested tokens and capacity. The output limit MUST be clamped to the remaining
@@ -257,7 +260,8 @@ uninterrupted run that used the same chunk split.
 - **Checkpoint**: A deep copy of all recurrent state at one position.
 - **Segment**: State for positions `[start, end)` moved out of the live sequence (attention tail
   plus, for hybrids, recurrent state at `end`).
-- **Session**: Committed tokens of the conversation and the tokens the state holds.
+- **Session**: Committed tokens of the conversation and the tokens the state holds; the reuse
+  policy of `mrun run` (003's prefix cache is the other policy of the same generation loop).
 - **Request**: Prompt, sampling, limits, stop sequences, optional mask, cancellation; produces
   events and one `Finished`.
 - **Memory budget**: Physical memory, working set, reserve, weights, scratch, recurrent state,
@@ -276,7 +280,9 @@ uninterrupted run that used the same chunk split.
   context for each model on the target Mac.
 - **SC-004**: For each model, interrupting prompt processing at random points makes mrun ready for
   the next prompt within 300 ms, p95 over 50 trials per depth bucket: 16K, 64K and the model's
-  maximum admissible depth (buckets above capacity skipped).
+  maximum admissible depth (buckets above capacity skipped). The maximum-depth bucket is at risk:
+  with the 128-token chunk floor one layer may take up to ~200 ms at 262K (R5); the result is
+  recorded either way.
 - **SC-005**: 100% of admission boundary tests pass: capacity − 1 prompt tokens completes with one
   output token; capacity tokens is rejected before processing with both numbers; an oversized
   output limit is clamped to capacity − prompt and reported.

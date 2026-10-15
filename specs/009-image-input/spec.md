@@ -260,7 +260,7 @@ final (research references in brackets).
 - **OQ-3**: Is a 5% session share the right gate threshold [R10]?
 - **OQ-4**: Can mrun's resize reproduce the reference (PIL bicubic) bit for bit, or does SC-005
   compare on identical pixel tensors only, as written [R3]?
-- **OQ-5**: 002 FR-009's 8 MiB body cap rejects image-carrying sessions even on the placeholder
-  path. Should 002 count image bytes separately now, before this feature [R9]?
+- **OQ-5** (resolved 2026-10-15): 002 FR-009's body cap was raised to 64 MiB for 0.1, so
+  image-carrying sessions reach the placeholder path; this feature keeps that cap.
 - **OQ-6**: Is 2,560 tokens per image enough for screenshots with small text, and is 1.5 s
   (SC-003) achievable for the encoder on an M4 Pro? Both are measured in the gate phase.

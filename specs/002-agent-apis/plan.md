@@ -33,7 +33,7 @@ real-client smoke tests on macOS (Claude Code, Codex, OpenCode pinned) as part o
 mask ≤ 2 ms typical, computed on CPU while the GPU runs the next step
 **Constraints**: Loopback default with Host/Origin checks; no prompt logging; one generation at a
 time; queue 16 waiting / 600 s wait deadline
-**Scale/Scope**: 1 active + 16 queued requests; configurable limits (bodies 8 MiB, tools 256, schema
+**Scale/Scope**: 1 active + 16 queued requests; configurable limits (bodies 64 MiB, tools 256, schema
 depth 16)
 
 ## Constitution Check

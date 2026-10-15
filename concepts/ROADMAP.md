@@ -39,8 +39,9 @@ M4, M5 and M6 can run in parallel with M3. The binding spike gates everything.
 | --- | --- | --- | --- |
 | 1 | **006 Speculative decoding**: MTP heads (Qwen3.6 ships them) and copy-aware n-gram drafts for code edits, with a controller that turns speculation off where it loses | n-gram acceptance and MTP acceptance on recorded traces | On the MoE default, gains come from verbatim-copy stretches and long context; elsewhere expect ≈1.0×. Needs weights with `mtp.*` tensors (mlx-community conversions drop them) |
 | 2 | **007 Persistent prefix tier** (opt-in SSD, exact bytes, model-bound, token-verified) | Share of turns missing because of restart or eviction; SSD read speed | Allowed by constitution IV (explicit opt-in, bound to model identity) |
-| 3 | Parallel sessions (batched decode) | Share of wall time queued behind other requests in traces | Only if queueing is significant |
-| 4 | Linux / CUDA evaluation | — | Linux already builds and runs portable tests; no performance commitments |
+| 3 | **009 Image input**: screenshots and image tool results for Qwen3.6's vision encoder; exact prefix identity per image | Share of recorded sessions containing images (gate ≥ 5%); whether the pinned repo keeps the vision tower | Until then images in tool results are replaced by a placeholder |
+| 4 | Parallel sessions (batched decode) | Share of wall time queued behind other requests in traces | Only if queueing is significant |
+| 5 | Linux / CUDA evaluation | — | Linux already builds and runs portable tests; no performance commitments |
 
 ## Dropped in this sprint
 

@@ -177,7 +177,7 @@ timeouts and that the next request runs normally.
   (Anthropic `event: error` with `overloaded_error` for queue failures, Chat `data: {"error":…}`,
   Responses `response.failed`). Status codes follow [contracts/api.md](contracts/api.md#status-codes).
 - **FR-009**: Requests MUST be validated before queuing against configurable limits (defaults: body
-  8 MiB, 4,096 messages, 256 tools, schema 64 KiB and depth 16); errors name the limit and the
+  64 MiB, since agent histories carry base64 screenshots; 4,096 messages, 256 tools, schema 64 KiB and depth 16); errors name the limit and the
   setting that raises it.
 - **FR-010**: The server MUST run one generation at a time with a FIFO queue (default 16 waiting).
   The queue deadline covers waiting time only (default 600 s, configurable). While a request waits
