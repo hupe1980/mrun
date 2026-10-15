@@ -21,7 +21,7 @@ All commands accept `--help` (with examples) and `-q/--quiet`; tabular commands 
 | Command | Owner | Behavior |
 | --- | --- | --- |
 | `mrun run <model> [sampling flags] [--think] [--chunk N] [--memory-fraction F] [--reserve-gib N] [--allow-over] [--info] [--check]` | 001 | Interactive chat; see [001 contract](../../001-engine-core/contracts/engine.md) |
-| `mrun serve [--model M] [--host H] [--port P] [--api-key-file F] [--thinking client\|off\|on] [--max-output N] [--queue N] [--queue-wait-s N] [--chunk N] [--memory-fraction F] [--reserve-gib N] [--allow-over] [--no-cache] [--debug-cache] [--reject-tool-images] [--record DIR] [--detach]` | 001/002/003/004 | Start the server (default `127.0.0.1:8484`); prints URL and a `mrun launch` hint |
+| `mrun serve [--model M] [--host H] [--port P] [--api-key-file F] [--thinking client\|off\|on] [--max-output N] [--queue N] [--queue-wait-s N] [--chunk N] [--memory-fraction F] [--reserve-gib N] [--allow-over] [--no-cache] [--no-warmup] [--debug-cache] [--reject-tool-images] [--record DIR] [--detach]` | 001/002/003/004 | Start the server (default `127.0.0.1:8484`); prints URL and a `mrun launch` hint |
 | `mrun stop` | 004 | Stop a detached server gracefully |
 | `mrun ps` | 004 | Model, budget, active (with progress) and queued requests, cache stats, recording flag, last miss |
 | `mrun pull <alias\|org/name[@rev]> [--yes]` | 004 | Size, license, fit; confirm if it won't fit; resumable download; verify; manifest |
@@ -29,9 +29,9 @@ All commands accept `--help` (with examples) and `-q/--quiet`; tabular commands 
 | `mrun show <model>` | 004 | Manifest, architecture, quantization, license, identity, fit breakdown |
 | `mrun rm <alias> [--yes]` | 004 | Remove mrun-created snapshot refs and unshared blobs; warn about shared blobs |
 | `mrun verify <model>` | 004 | Re-hash every file against the recorded identity |
-| `mrun launch <claude-code\|codex\|opencode> [-- client args]` | 004 | Start the client configured for this process only |
+| `mrun launch <claude-code\|codex\|opencode> [--model M] [--dry-run] [--yes] [-- client args]` | 004 | Start the client configured for this process only; starts a server and offers a pull when needed (FR-005) |
 | `mrun connect <claude-code\|codex\|opencode> [--write] [--undo]` | 004 | Print persistent config; write with diff + 0600 backup; restore backup |
-| `mrun doctor` | 004 | All checks with fixes (exit 8 on failures) |
+| `mrun doctor [--agent <client>]` | 004 | All checks with fixes (exit 8 on failures); `--agent` runs a tool-call and compaction round trip |
 | `mrun cache clear` | 003 | Clear the prefix cache of the running server |
 | `mrun config` | 004 | Effective configuration with sources |
 | `mrun bench ...` | 005 | See [005 contract](../../005-bench/contracts/result-schema.md) |

@@ -47,7 +47,7 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 
 - [ ] T021 [P] [US3] `crates/mrun-engine/src/budget.rs`: physical memory (`sysctl hw.memsize`, `/proc/meminfo`), recommended working set, budget formula and overrides; unit tests
 - [ ] T022 [US3] Pre-load check from file sizes; scratch probe per research R6 (incl. per-layer growth transient) with cache in `~/.mrun/probe.toml`; `kv_capacity_tokens` capped by max position; MLX memory/cache/wired limits; refusal with all numbers (exit 4)
-- [ ] T023 [US3] Admission: `prompt + max_output ≤ kv_capacity_tokens` (cached segments count as available, one request at a time); boundary tests (= capacity passes, +1 rejected) on ScriptedEngine (done in T011) and tiny model
+- [ ] T023 [US3] Admission: `prompt + 1 ≤ kv_capacity_tokens`, output limit clamped to the rest and reported (cached segments count as available, one request at a time); boundary tests (capacity − 1 passes with one output token, capacity rejected, oversized limit clamped) on ScriptedEngine (done in T011) and tiny model
 - [ ] T024 [US3] `mrun run --info` breakdown incl. current free memory (snapshot test)
 
 ## Phase 6: US4 — Trustworthy output (P2)
@@ -60,7 +60,7 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 ## Phase 7: Polish
 
 - [ ] T029 [P] SC-002/SC-003 with `bench_engine` vs `bench_reference.sh` at 1K/16K for both models; SC-007 cold start (probe cached) for 8B; record in research
-- [ ] T030 [P] 30-minute soak (SC-006): `phys_footprint` sampling and `vm_stat` swap-outs; record
+- [ ] T030 [P] 30-minute soak and 2-hour leak soak (SC-006): `phys_footprint` sampling, `vm_stat` swap-outs, MLX active memory and Metal buffer count flat; record
 - [ ] T031 [P] Offline/no-write audit (FR-015): test that loading and generating make no network connections (no network features compiled; run with network namespace/`sandbox-exec` deny) and write nothing outside `~/.mrun`
 - [ ] T032 Update `README.md` (build prerequisites) and site pages `getting-started.md`, `memory.md` (`mrun run`, `--info`) and run [quickstart](quickstart.md)
 

@@ -23,12 +23,17 @@ Sources: [literature-study](../../concepts/research/literature-study.md) (A-1..A
   is about to be replaced, and only for boundary prefixes not already in the tree.
 - **Rationale**: Avoids storing the active conversation twice (analysis T7); agent edits and
   branches happen at message boundaries (literature A-3/A-4; mlx-lm checkpoints at the same
-  places); the 4K cap bounds reprocessing when an edit lands mid-message.
+  places); the 4K cap bounds reprocessing when an edit lands mid-message. Prefill chunks also end
+  at these boundaries (a chunk never crosses a message end, as llama.cpp's span-aware chunking),
+  which costs nothing for attention models and is required for hybrid checkpoints later (006).
+  Cancelled prefills keep every completed chunk (FR-004 via `finish(prefilled)`): Ollama's
+  agent-hang loop (retry after client timeout restarts a 53K prefill from zero) is the failure
+  this prevents.
 
 ## R3: Order of operations
 
 - **Decision**: (1) lookup: longest token match across the live path and the tree; pin matched
-  nodes. (2) admission: `prompt + max_output ≤ capacity` (one request at a time); evict unpinned
+  nodes. (2) admission: `prompt + clamped max_output ≤ capacity` (001 FR-009) (one request at a time); evict unpinned
   leaves as much as the initial allocation plus the transient below needs. (3) if the match is on
   the live path: trim to the divergence (zero copy). Otherwise: materialize the live path's
   unstored boundaries only as far as free memory allows after evicting other unpinned leaves (the
@@ -45,8 +50,8 @@ Sources: [literature-study](../../concepts/research/literature-study.md) (A-1..A
 
 ## R4: Eviction
 
-- **Decision**: LRU over unpinned leaves in the FR-007 order: compaction-superseded, other
-  session (`prompt_cache_key`), then turn kind (assistant before user/tool before system), as in
+- **Decision**: LRU over unpinned leaves in the FR-007 order: compaction-superseded, subagent
+  branches and other sessions (client session headers or `prompt_cache_key`), then turn kind (assistant before user/tool before system), as in
   mlx-lm's server; LRU within each group. Two 2026 eviction studies found plain LRU near-optimal
   for single long sessions, so no cost-aware scoring for attention-only models. Evicting calls `clear_cache()` so memory returns to the OS.
   Pressure events from the dispatch source are queued to the worker and handled between steps:

@@ -4,15 +4,18 @@ description = "Connect Claude Code, Codex CLI, OpenCode and any OpenAI-compatibl
 weight = 20
 +++
 
-Every client can be started with `mrun launch <client>`, which sets the configuration for that one
-process. `mrun connect <client>` prints the equivalent persistent configuration;
-`--write` applies it (showing a diff and keeping a backup) and `--undo` restores the backup.
+Every client can be started with `mrun launch <client>`, which configures it for that one process
+and leaves your client settings untouched. If no server is running, `launch` starts one; if no
+model is downloaded, it offers the default. `--dry-run` prints what it would set.
+
+`mrun connect <client>` prints the equivalent persistent configuration; `--write` applies it
+(showing a diff and keeping a backup) and `--undo` restores the backup.
 
 | Client | Protocol | `launch` | `connect --write` edits |
 | --- | --- | --- | --- |
-| Claude Code | Anthropic Messages | `mrun launch claude-code` | `~/.claude/settings.json` |
-| Codex CLI | OpenAI Responses | `mrun launch codex` | `~/.codex/config.toml` |
-| OpenCode | Chat Completions | `mrun launch opencode` | `opencode.json` |
+| Claude Code (2.1.273+) | Anthropic Messages | `mrun launch claude-code` | `~/.claude/settings.json` |
+| Codex CLI | OpenAI Responses | `mrun launch codex` | `~/.codex/mrun.config.toml` (use `codex --profile mrun`) |
+| OpenCode | Chat Completions | `mrun launch opencode` | `~/.config/opencode/opencode.json` |
 
 ## Claude Code
 
@@ -22,29 +25,38 @@ process. `mrun connect <client>` prints the equivalent persistent configuration;
 | --- | --- | --- |
 | `ANTHROPIC_BASE_URL` | `http://127.0.0.1:8484` | Send requests to mrun |
 | `ANTHROPIC_AUTH_TOKEN` | API key reference, or a placeholder | Claude Code requires one |
-| `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` | The served model | Every model slot, including subagents, uses the local model |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | This Mac's context capacity | Claude Code compacts before the server would refuse |
-| `CLAUDE_CODE_ATTRIBUTION_HEADER` | `0` | Removes a per-request header line that would change the prompt |
+| `ANTHROPIC_API_KEY` | empty | A key in your shell would otherwise take precedence |
+| `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` | The served model | Every model slot, including subagents and background tasks, uses the local model |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | This Mac's context capacity | Claude Code compacts before the server would refuse |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | The server's output limit | Otherwise Claude Code reserves 32,000 tokens of the window for output |
+| `CLAUDE_CODE_GATEWAY_HINT_HEADERS` | `1` | Sends session, subagent and compaction hints that guide cache eviction |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | Keeps the session local |
 | `CLAUDE_CODE_TOTAL_TOKENS_REMINDER` | `off` | Removes a per-turn token count that would break prefix reuse |
-| `CLAUDE_CODE_GATEWAY_HINT_HEADERS` | `1` | Lets mrun see session and turn boundaries |
+| `API_TIMEOUT_MS` | 50 minutes | Long local prompts take longer than hosted APIs |
 
-The last three matter for speed: any text that changes on every turn early in the prompt forces
-the model to re-read everything after it. See [Prefix cache](@/docs/prefix-cache.md).
+Claude Code also adds a per-request nonce to its attribution line. mrun replaces just that nonce
+with a fixed value, so reuse works even if you start `claude` yourself with only
+`ANTHROPIC_BASE_URL` set.
 
 ## Codex
 
-Codex speaks the OpenAI Responses API. mrun adds a provider named `mrun` with
-`wire_api = "responses"` and `base_url = "http://127.0.0.1:8484/v1"`. mrun is stateless: Codex
-resends the conversation each turn and the prefix cache makes that cheap. Requests that depend on
-server-stored state (`previous_response_id`) are rejected with a clear error.
+Codex speaks the OpenAI Responses API. `launch` selects a provider named `mrun` with
+`wire_api = "responses"` through `-c` overrides and passes a model catalog with the real context
+window — without it, Codex assumes 272,000 tokens for unknown models and never compacts in time.
+`connect --write` creates a separate profile, so your main `config.toml` stays as it is.
+
+mrun is stateless: Codex resends the conversation each turn and the prefix cache makes that cheap.
+Requests that depend on server-stored state (`previous_response_id`) are rejected with a clear
+error.
 
 ## OpenCode
 
-OpenCode uses Chat Completions through an OpenAI-compatible provider pointing at
-`http://127.0.0.1:8484/v1`, with the served model and its context limit.
+`launch` passes the provider through `OPENCODE_CONFIG_CONTENT`: an OpenAI-compatible provider at
+`http://127.0.0.1:8484/v1` with the model's context, input and output limits.
 
 ## Other clients
 
 Any tool that speaks OpenAI Chat Completions works — Aider, Continue, Cline, Zed and others. Set
 the base URL to `http://127.0.0.1:8484/v1` and any API key value; unknown model names are served
-by the loaded model and responses report its real id.
+by the loaded model and responses report its real id. Set the client's context limit to the value
+`mrun ps` shows; most clients otherwise assume far more than fits on a laptop.

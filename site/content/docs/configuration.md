@@ -38,6 +38,7 @@ default_model = "qwen3-coder"
 
 [cache]
 enabled = true
+warmup = true
 
 [limits]
 body_mib = 8

@@ -34,7 +34,7 @@ diff and backup (FR-006); offline-first
 
 | Principle | Gate | Status |
 | --- | --- | --- |
-| I Agent latency | `connect` sets cache-stable client settings (attribution header off) | Pass |
+| I Agent latency | `launch`/`connect` set cache-stable client settings (token reminder off, hint headers on) and real context limits | Pass |
 | II Exactness | Model identity = verified content hashes (feeds 003 cache keys) | Pass |
 | III Memory budget | `ls/show/pull/launch` use 001's budget function and the server's capacity | Pass |
 | IV Local, private | Only `pull` touches network (offline test); identity for path models too; launch is process-scoped | Pass |

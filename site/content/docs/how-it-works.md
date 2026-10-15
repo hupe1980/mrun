@@ -22,9 +22,9 @@ explanations.
    limits.
 2. **Rendering.** The model's own chat template turns the conversation into text, which the model's
    tokenizer turns into token ids. The same conversation always yields the same tokens.
-3. **Admission.** mrun checks that the prompt plus the output limit fits the memory budget *before*
-   touching anything. Requests that cannot fit are refused with the numbers, and the cache is left
-   intact.
+3. **Admission.** mrun checks that the prompt fits the memory budget *before* touching anything,
+   and clamps the output limit to the space left. Prompts that cannot fit are refused with the
+   numbers, and the cache is left intact.
 4. **Prefix lookup.** The [prefix cache](@/docs/prefix-cache.md) finds the longest token prefix it
    has already computed and restores that attention state. The usual case — the next turn of the
    current conversation — needs no copy at all.
@@ -55,8 +55,10 @@ token-for-token against them.
 
 ## Design rules
 
-- **Exactness.** Reuse never changes output: a cached prefix is used only if every token and the
-  model identity match.
+- **Exactness.** A cached prefix is used only if every token and the model identity match. The
+  result equals recomputing it, up to the floating-point rounding any chunked prefill has.
+- **One GPU thread.** Competing servers that drive MLX from several threads have hit stream errors
+  and kernel panics; mrun keeps all GPU work on one thread by design.
 - **Memory is a budget, not a hope.** Everything that can grow is accounted for at startup.
 - **Standard wire formats.** Response bodies are exactly what each API defines. mrun's extra
   information travels in headers and SSE comments that clients ignore.

@@ -32,7 +32,7 @@ States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (has
 
 | Field | Type |
 | --- | --- |
-| id | stable string (`memory.pressure`, `client.claude.attribution`, ...) |
+| id | stable string (`memory.pressure`, `client.claude.version`, ...) |
 | status | ok \| warn \| fail \| skipped |
 | severity | info \| warning \| error |
 | detail | human text |
@@ -45,7 +45,7 @@ States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (has
           max_output = 16384  reject_tool_images = false
 [memory]  fraction = 0.75  reserve_gib = 8
 [engine]  chunk = 2048  default_model = "qwen3-coder"
-[cache]   enabled = true
+[cache]   enabled = true  warmup = true
 [limits]  body_mib = 8  messages = 4096  tools = 256  schema_kib = 64  schema_depth = 16
 ```
 

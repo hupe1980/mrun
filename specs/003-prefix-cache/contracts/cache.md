@@ -22,7 +22,7 @@ impl PrefixStore {
 }
 ```
 
-Worker order per request: `lookup` → admission (`evict_for` until `prompt + max_output` fits) →
+Worker order per request: `lookup` → admission (`evict_for` until `prompt + clamped max_output` fits; the clamp uses total capacity, so eviction can always make room) →
 `prepare` (bounded materialization, restore) → `release` (segments copied into the active cache are
 no longer pinned) → prefill remainder → decode (calling `evict_for` when the active cache grows) →
 `finish`. The finish reason used for recording comes from the worker (002), so tool

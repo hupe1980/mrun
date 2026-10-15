@@ -23,7 +23,9 @@ definitions; this page lists what mrun serves and where it deliberately differs.
 ## Behavior worth knowing
 
 - **Any model name works.** The loaded model serves every request; responses report its real id.
-- **Output limit.** Requests without one get 16,384 tokens; larger values are clamped to what fits.
+- **Output limit.** Requests without one get 16,384 tokens; larger values are clamped to the space
+  left after the prompt and reported in `x-mrun-max-tokens`. Only a prompt that leaves no room at
+  all is refused.
 - **Stateless Responses.** `previous_response_id` and item references return 400, because nothing
   is stored. Clients resend the conversation, and the prefix cache makes that cheap.
 - **Queueing.** One request runs at a time; others wait up to 600 seconds in a queue of 8. Queued

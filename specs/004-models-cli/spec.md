@@ -75,7 +75,7 @@ mistakes such as volatile prompt headers.
 diagnosis avoids frustration and support load.
 
 **Independent Test**: Introduce known misconfigurations (low-power mode, too-large model, client
-without the attribution-header setting) and check that `mrun doctor` reports each with a fix.
+configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor` reports each with a fix.
 
 **Acceptance Scenarios**:
 
@@ -113,22 +113,40 @@ without the attribution-header setting) and check that `mrun doctor` reports eac
 - **FR-004**: Models MUST be identified by content hash using feature 001's identity function,
   whether pulled or given as a path. Fast checks (size, modification time) run on every use;
   `mrun verify <model>` re-hashes every file; a mismatch is refused until repaired.
-- **FR-005**: `mrun launch <claude-code|codex|opencode> [args]` MUST start the client with mrun
-  configured for that process only (environment and per-invocation flags), including: base URL,
-  model names for every model slot the client uses (for Claude Code `ANTHROPIC_MODEL`,
-  `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
-  `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`), the context window and output
-  limit from the running server's `/v1/models`, cache-stability settings
-  (`CLAUDE_CODE_ATTRIBUTION_HEADER=0`, `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`), gateway hint headers
-  (`CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`), and the API key by environment reference when one is
-  configured.
+- **FR-005**: `mrun launch <claude-code|codex|opencode> [-- args]` MUST start the client with mrun
+  configured for that process only, leaving the user's client files untouched. Values come from the
+  running server's `/v1/models` (served id, context window, output limit). Per client (research R5):
+  - Claude Code (≥ 2.1.273): base URL, auth token (key by environment reference, otherwise a
+    placeholder) with `ANTHROPIC_API_KEY` emptied so a shell key cannot override it; the served id
+    in every model slot (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`,
+    `CLAUDE_CODE_SUBAGENT_MODEL`); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = capacity and
+    `CLAUDE_CODE_MAX_OUTPUT_TOKENS` = output limit (`CLAUDE_CODE_AUTO_COMPACT_WINDOW` only when
+    capacity ≥ 100,000, its minimum); gateway hint headers on; nonessential traffic off; the
+    per-turn token reminder off.
+  - Codex: `-c` overrides selecting a `mrun` provider (`wire_api = "responses"`) and a model catalog
+    file with the real context window, because Codex otherwise assumes 272,000 tokens for unknown
+    models and never compacts in time; conflicting user `-c` provider arguments are refused.
+  - OpenCode: the whole provider config through `OPENCODE_CONFIG_CONTENT` (highest precedence), with
+    `limit.context`, `limit.input` and `limit.output`.
+
+  If no server is running, `launch` starts one (detached) after confirmation; if no model is pulled,
+  it offers the default alias with its fit. `--dry-run` prints the environment and arguments instead
+  of starting anything. A missing client binary is reported with its install command. Claude Code
+  also gets `API_TIMEOUT_MS` raised to 50 minutes, since long local prefills exceed its default.
+  `launch` warns when the context capacity is below 48K tokens (agents' system prompts and tool
+  schemas alone take 15–25K), naming the larger-memory or smaller-model options.
 - **FR-006**: `mrun connect <client>` MUST print the equivalent persistent configuration; with
   `--write` it MUST show a diff, back up the original (mode 0600), write atomically, and
-  `mrun connect <client> --undo` MUST restore the backup.
+  `mrun connect <client> --undo` MUST restore the backup. Targets: Claude Code
+  `~/.claude/settings.json` (`env`), Codex a separate profile `~/.codex/mrun.config.toml` used with
+  `codex --profile mrun` (root `config.toml` untouched), OpenCode
+  `~/.config/opencode/opencode.json`.
 - **FR-007**: `mrun doctor` MUST check: macOS and chip, memory budget and current pressure,
   low-power mode, model integrity, server reachability, port conflicts, free space in the model
   cache, client configuration pitfalls (wrong base URL or wire API, missing context limits, Claude
-  Code older than 2.1.181 without the attribution setting), and print fixes.
+  Code older than 2.1.273, an `ANTHROPIC_API_KEY` in the environment overriding the gateway token),
+  and print fixes. `mrun doctor --agent <client>` additionally runs one tool-call round trip and one
+  compaction request against the server and reports whether the client can work with it.
 - **FR-008**: `mrun ps` MUST show loaded model, budget breakdown, active and queued requests (with
   prompt-processing progress), cache size and hit rate, recording state and the most recent miss
   explanation.

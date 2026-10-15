@@ -255,6 +255,9 @@ wire_api = "responses"
   - For a schema `string`, stream JSON-escaped characters, holding back up to `\n</parameter>`.
   - For other types, buffer until close, then emit the parsed JSON value. If it fails to parse, apply the FR-004 policy (raw arguments for Chat/Responses, plain text for Anthropic) and never repair.
   - Unknown types fall back to the string rule.
+  - A value ends only at `\n</parameter>\n` followed by `<parameter=` or `</function>` (as llama.cpp), never at the first `</parameter>`: coding agents edit files that contain these tags. vLLM (`rust/src/parser/src/tool/qwen_coder.rs:273`) and SGLang match the first closing tag and have no test for this [V, competitor study 2026-10-15].
+  - No coercion: `null` stays the string `"null"` for string parameters (vLLM `tool/parameters.rs:255-264` does this right; SGLang `qwen3_coder_detector.py:106` does not); booleans must be exactly `true`/`false`; never `eval`/`literal_eval` (CVE-2025-9141 came from vLLM's `eval`).
+  - A call naming an undeclared tool is passed through with a `tool-unknown` warning (vLLM and SGLang accept it silently).
 - **Malformed or truncated calls:** a call that fails to parse follows the FR-004 fallback (raw arguments for Chat/Responses, a text block for Anthropic; XML-synthesized and Anthropic arguments are buffered per call so the fallback is possible while streaming); at `Length` it becomes "incomplete". Never report it as a completed call.
 
 ## 4. Constrained decoding

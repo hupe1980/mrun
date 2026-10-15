@@ -20,9 +20,9 @@ Every command accepts `--help` (with examples) and `-q/--quiet`. Commands that p
 | `mrun show <model>` | Manifest, architecture, quantization, license, fit breakdown |
 | `mrun rm <alias>` | Remove a model, warning about files shared with other tools |
 | `mrun verify <model>` | Re-hash every file against the manifest |
-| `mrun launch <client> [-- args]` | Start Claude Code, Codex or OpenCode configured for mrun |
+| `mrun launch <client> [-- args]` | Start Claude Code, Codex or OpenCode configured for mrun; starts the server and offers a download when needed. `--dry-run` prints the settings |
 | `mrun connect <client>` | Print persistent client configuration; `--write` applies it, `--undo` restores the backup |
-| `mrun doctor` | Check machine, models, server and clients; print a fix for each failure |
+| `mrun doctor` | Check machine, models, server and clients; print a fix for each failure. `--agent <client>` runs a tool call and a compaction against the server |
 | `mrun cache clear` | Clear the running server's prefix cache |
 | `mrun config` | Show the effective configuration and where each value came from |
 | `mrun bench` | Benchmark mrun and other local servers; see [Benchmarks](@/docs/benchmarks.md) |
@@ -42,6 +42,7 @@ Every command accepts `--help` (with examples) and `-q/--quiet`. Commands that p
 | `--memory-fraction`, `--reserve-gib` | 0.75, 8 | Memory budget (see [Memory](@/docs/memory.md)) |
 | `--allow-over` | off | Start even if the model exceeds the budget |
 | `--no-cache` | off | Disable the prefix cache |
+| `--no-warmup` | off | Disable warm-up while the agent runs tools |
 | `--debug-cache` | off | Print divergence excerpts on the terminal |
 | `--reject-tool-images` | off | Reject images in tool results instead of replacing them |
 | `--record <dir>` | off | Record requests as a benchmark trace (stored locally, never uploaded) |

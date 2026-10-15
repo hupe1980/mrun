@@ -41,19 +41,36 @@
 - **Decision**: `mrun launch <client>` (primary, Ollama-style) execs the client with process-scoped
   environment and flags; `mrun connect` prints/writes persistent config with diff, 0600 backup and
   `--undo`. Values come from the running server (`/v1/models` context window, served model id).
-  - Claude Code: `ANTHROPIC_BASE_URL=http://127.0.0.1:8484`, `ANTHROPIC_AUTH_TOKEN` (env reference
-    when a key is configured, otherwise a dummy), `ANTHROPIC_MODEL`,
-    `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` (all the served
-    id), `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `CLAUDE_CODE_AUTO_COMPACT_WINDOW` from capacity,
-    `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` (removes a volatile
-    per-turn token count that breaks prefix reuse) and `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` (Claude
-    Code ≥ 2.1.273 then sends hint headers such as `x-claude-code-context-compacted`, which 003 uses
-    to drop superseded prefixes).
-  - Codex: provider `mrun` with `base_url`, `wire_api = "responses"`, `env_key` (when keyed),
-    `model_context_window` and `model_auto_compact_token_limit` from capacity (output limit from
-    `/v1/models` `max_output_tokens`).
-  - OpenCode: provider using `@ai-sdk/openai-compatible` with `baseURL`, model
-    `limit.context`/`limit.input`/`limit.output`.
+  - Claude Code (minimum 2.1.273, re-verified 2026-10-15 against code.claude.com env-vars,
+    model-config and llm-gateway-protocol docs and Ollama `cmd/launch/claude.go:67-87`):
+    `ANTHROPIC_BASE_URL=http://127.0.0.1:8484`; `ANTHROPIC_AUTH_TOKEN` (env reference when keyed,
+    otherwise a placeholder); `ANTHROPIC_API_KEY=` (empty, else a shell key wins);
+    `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`
+    (all the served id, which never starts with `claude-`, otherwise the context override is
+    ignored); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = capacity; `CLAUDE_CODE_MAX_OUTPUT_TOKENS` = server
+    output limit (Claude Code reserves 32,000 for unknown models); `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+    only when capacity ≥ 100,000 (its accepted range is 100,000–1,000,000);
+    `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` (session, agent, request-class, prompt-id and
+    context-compacted headers used by 003); `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (offline
+    promise); `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` (undocumented, used by Ollama; removes a
+    volatile per-turn count); `API_TIMEOUT_MS=3000000` (oMLX `integrations/claude.py:103`). The
+    attribution header needs no setting (002 FR-025 fixes its nonce server-side). Not adopted:
+    oMLX's `--disallowedTools LSP` (an LSP connecting mid-session inserts its tool schema and
+    forces a full re-prefill); mrun reports it as a `edit` miss in the tools region instead of
+    silently removing a feature.
+  - Codex (source `codex-rs` 2026-10-15): root `profile =` keys are rejected; profiles live in
+    `~/.codex/<name>.config.toml` (`config/src/loader/mod.rs:131`). Unknown model slugs get a
+    272,000-token fallback window (`models-manager/src/model_info.rs:98-135`), so mrun writes a
+    `model_catalog_json` file (in `~/.mrun/codex/models.json`) with the real window and output
+    limit. `launch` passes `-c model_provider=mrun`, `-c model_providers.mrun.{name,base_url,
+    wire_api="responses",env_key}` and `-c model_catalog_json=…`, refusing conflicting user `-c`
+    provider arguments (as Ollama `cmd/launch/codex.go:150-205`). `--oss` only accepts lmstudio or
+    ollama, so it is not used.
+  - OpenCode: `launch` sets `OPENCODE_CONFIG_CONTENT` (highest precedence); `connect` writes
+    `~/.config/opencode/opencode.json`. Provider `@ai-sdk/openai-compatible` with `baseURL`, model
+    `limit.context`/`limit.input`/`limit.output`. OpenCode's local discovery probes known ports
+    and reads `max_model_len` from `/v1/models`, which 002 reports; an upstream discovery plugin
+    for port 8484 is a later contribution.
 - **Rationale**: Analysis I3 (all model slots, else background/subagent requests use `claude-*`
   ids), I4 (clients default to 200K–272K context; mrun's capacity is ≈ 100–110K on 48 GB), S4
   (global settings redirect all Claude Code use; launch is scoped). Key names are re-verified
@@ -64,7 +81,8 @@
 - **Decision**: Registry of checks, each `fn check(&Ctx) -> Finding { id, status, severity, fix }`:
   chip/macOS, memory budget and pressure, low-power mode, model integrity (fast checks), server
   reachability, port conflicts, HF cache free space, client config pitfalls (wrong base URL or wire
-  API, missing context limits, Claude Code < 2.1.181 without the attribution setting). Each check is
+  API, missing context limits, Claude Code < 2.1.273, a shell `ANTHROPIC_API_KEY`). `--agent <client>`
+  runs a scripted tool-call round trip and a compaction request. Each check is
   unit-tested with a fake context. Exit code 8 when any check fails.
 
 ## R7: Config

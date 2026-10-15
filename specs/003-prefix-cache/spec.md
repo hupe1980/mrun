@@ -151,7 +151,7 @@ request and simulate memory pressure; verify eviction order and that requests su
   request; admission happens before any restore. Cached state may occupy capacity reserved for a
   request's output until that output needs it, and is then evicted. Eviction removes the least
   recently used unpinned leaves and MUST never evict state in use. Candidate order: leaves superseded
-  by a compaction (FR-013), then leaves of other sessions (FR-014), then by turn kind (assistant,
+  by a compaction (FR-013), then finished subagent branches and leaves of other sessions (FR-014), then by turn kind (assistant,
   then user/tool, then system), least recently used first within each group.
 - **FR-008**: Memory pressure signals MUST shrink the cache (and release freed memory to the OS)
   before affecting running requests.
@@ -168,9 +168,20 @@ request and simulate memory pressure; verify eviction order and that requests su
   `x-claude-code-context-compacted` hint header), cached state for the superseded conversation MUST
   become the first eviction candidate.
 - **FR-014**: Client cache hints MUST be honored as hints only: Anthropic `cache_control`
-  breakpoints add segment boundaries at their token positions; OpenAI `prompt_cache_key` groups
-  requests of one session so eviction prefers other sessions' state. Hints never change what is
-  reused (matching stays token-exact) and absent hints change nothing.
+  breakpoints add segment boundaries at their token positions. A session id is taken from the
+  clients' own headers (Claude Code `x-claude-code-session-id` and `x-claude-code-agent-id` /
+  `x-claude-code-parent-agent-id`; Codex `thread-id` / `x-codex-parent-thread-id`; OpenCode
+  `x-session-id` / `x-parent-session-id`) or OpenAI `prompt_cache_key`; eviction prefers other
+  sessions' state and finished subagent branches. Header values are capped (256 bytes each) and
+  only hashed. Hints never change what is reused (matching stays token-exact) and absent hints
+  change nothing.
+- **FR-015**: While the server is idle after a turn that ended in tool calls, mrun SHOULD warm the
+  cache with the predicted start of the next prompt: the finished conversation rendered exactly as
+  the client will resend it (the template's form of the reply, which drops earlier reasoning and
+  normalizes tool-call text). The warm-up is an ordinary prefill without output: it is admitted
+  like any request, yields to any arriving request within one layer, is discarded after 120 s
+  unused, and is skipped when memory is short. Because reuse stays token-exact, a wrong prediction
+  costs only idle GPU time. `--no-warmup` disables it.
 
 ### Key Entities
 

@@ -59,7 +59,7 @@ oversize requests across all three APIs, checking status codes, error bodies and
 
 1. **Given** a completed request, **When** the response ends, **Then** usage reports input, cached
    input and output tokens, and they sum consistently.
-2. **Given** a request whose prompt plus output does not fit, **When** submitted, **Then** the API
+2. **Given** a request whose prompt alone does not fit (no room for output), **When** submitted, **Then** the API
    returns the API-appropriate "context too long" error with the token numbers.
 3. **Given** an unsupported parameter that changes meaning (for example image input), **When**
    submitted, **Then** the request is rejected naming the parameter; unknown harmless fields are
@@ -127,8 +127,11 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   FR-022. When streaming, argument text is forwarded as it arrives only where it is the model's raw
   JSON (Qwen3 Hermes syntax on Chat/Responses); arguments synthesized from other syntaxes (Qwen3-Coder
   XML) and all Anthropic `tool_use` input are buffered per call and emitted when the call closes,
-  so the fallback above is always possible. The tool-call envelope (for example a missing `<tool_call>` opener before a declared
-  function) MAY be recognized, because it does not change argument content.
+  so the fallback above is always possible. The tool-call envelope (for example a missing
+  `<tool_call>` opener before a declared function) MAY be recognized, because it does not change
+  argument content. Values are never coerced or evaluated (research §3); argument text that
+  contains the syntax's own closing tags (a file edit of a parser) MUST round-trip unchanged; a call
+  to an undeclared tool is passed through with a `tool-unknown` warning.
 - **FR-005**: Structured output (JSON schema response format) MUST be supported with the same
   constrained decoding.
 - **FR-006**: The Responses API MUST be stateless: `previous_response_id` and item references MUST
@@ -146,8 +149,10 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   setting that raises it.
 - **FR-010**: The server MUST run one generation at a time with a FIFO queue (default 8 waiting).
   The queue deadline covers waiting time only (default 600 s, configurable); while a request
-  waits, streaming responses MUST send keepalives (Anthropic `ping`, SSE comments). Full-queue and
-  deadline errors MUST be immediate and explicit.
+  waits or its prompt is being processed, streaming responses MUST send response headers at once
+  and keepalives at least every 10 s (Anthropic `ping`, SSE comments), because Claude Code aborts a
+  stream after 300 s without bytes. Full-queue and deadline errors MUST be immediate and explicit;
+  `retry-after` is integer seconds, at most 60 (larger values stop Claude Code's retries).
 - **FR-011**: Client disconnect MUST cancel queued or running work promptly (within 300 ms or one
   token) and release its reservation.
 - **FR-012**: The server MUST bind to loopback by default and accept only loopback `Host` headers
@@ -187,7 +192,7 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   arrival and response-end times, to disk only when given on the command line (never via config
   or environment), only on loopback, with files mode 0600, a startup warning, and a visible flag in `/mrun/status`.
 - **FR-022**: Every response MUST report mrun metadata (cached and processed tokens, miss cause and
-  divergence from feature 003, effective output limit, warnings such as `tool-args-invalid`,
+  divergence from feature 003, effective output limit, warnings such as `tool-args-invalid`, `tool-unknown`,
   `image-omitted`, `max-tokens-clamped`). Non-streaming responses carry it in `x-mrun-*` headers;
   streaming responses carry it in SSE comment lines (`: mrun {json}`) emitted before the first
   content event and before the final event, because headers are sent before the result is known.
@@ -198,6 +203,15 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   `previous_message_not_found`, `unavailable`), derived by comparing this prompt's fingerprint with
   that message's (data model: Prompt Fingerprint, DiagnosticsIndex); `diagnostics` is `null` when the
   prefix was fully reused. The index holds the last 256 message ids in memory only.
+- **FR-025**: Prompts MUST be rendered exactly as sent, with one named exception: the per-request
+  nonce in Claude Code's attribution block (a leading system text starting with
+  `x-anthropic-billing-header:`, field `cch=`) is replaced by a fixed value of the same length,
+  because it changes on every request and would otherwise defeat all prefix reuse for users who
+  start Claude Code without `mrun launch` (same approach as llama.cpp). Nothing else in that block
+  or elsewhere is altered.
+- **FR-026**: While a streaming request is queued or its prompt is processed, keepalive comments
+  on OpenAI APIs and `/mrun/status` MUST carry progress (`queued` position, or `prefill`
+  processed/total tokens); Anthropic streams use plain `ping` events.
 - **FR-024**: Anthropic `context_management` (server-side context edits and compaction) MUST be
   accepted and ignored: mrun never rewrites or summarizes client context, and Claude Code sends the
   field by default. Clients that depend on the edits keep working because their own compaction

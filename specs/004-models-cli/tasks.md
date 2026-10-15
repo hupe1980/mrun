@@ -21,8 +21,8 @@ description: "Tasks for 004 Models and CLI Experience"
 ## Phase 3: US1 — Zero to working agent (P1) 🎯 MVP
 
 - [ ] T007 [US1] `hub/download.rs` + `cli/pull.rs`: size/license/fit preview, disk-space check, hf-hub download with resume, verification, manifest; wiremock tests (resume, corrupt, disk full, gated → `HF_TOKEN` hint, `HF_ENDPOINT` mirror)
-- [ ] T008 [US1] `cli/launch.rs`: process-scoped env/flags per client (all Claude Code model slots, context/output limits from `/v1/models`, attribution setting, key by env reference); exec the client; tests with a fake server and fake client binary
-- [ ] T009 [US1] `cli/connect.rs`: print mode; `--write` with diff, 0600 backup, atomic write; `--undo`; snapshot tests per client; stopped-server detection with `mrun serve --detach` hint
+- [ ] T008 [US1] `cli/launch.rs`: process-scoped env/flags per client per FR-005 / research R5 (Claude Code env set incl. emptied `ANTHROPIC_API_KEY`; Codex `-c` overrides + model catalog file; OpenCode `OPENCODE_CONFIG_CONTENT`); start server / offer pull with confirmation; `--dry-run`; missing-client hint; exec the client; tests with a fake server and fake client binary
+- [ ] T009 [US1] `cli/connect.rs`: print mode; `--write` with diff, 0600 backup, atomic write to the FR-006 targets (Codex separate `mrun.config.toml` profile); `--undo`; snapshot tests per client; stopped-server detection with `mrun serve --detach` hint
 - [ ] T010 [US1] `serve --detach` and `cli/stop.rs` (pid file, graceful SIGTERM); tests
 
 ## Phase 4: US2 — Manage models (P1)
@@ -33,7 +33,7 @@ description: "Tasks for 004 Models and CLI Experience"
 
 ## Phase 5: US3 — Diagnose (P2)
 
-- [ ] T014 [P] [US3] `cli/doctor.rs` checks registry per FR-007 (incl. version-aware Claude Code attribution check, missing context limits, port conflict, cache free space); fake-context tests for ≥ 10 scenarios (SC-002); exit 8 on failures
+- [ ] T014 [P] [US3] `cli/doctor.rs` checks registry per FR-007 (incl. Claude Code ≥ 2.1.273, shell `ANTHROPIC_API_KEY`, missing context limits, `--agent <client>` round trip, port conflict, cache free space); fake-context tests for ≥ 10 scenarios (SC-002); exit 8 on failures
 - [ ] T015 [P] [US3] `cli/ps.rs` against `/mrun/status` (002 schema v1)
 - [ ] T016 [US3] `mrun config`, `mrun completions <shell>`, `--help` examples for every command (snapshot tests with a timing assertion: < 200 ms)
 

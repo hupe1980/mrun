@@ -19,6 +19,15 @@ computing it again. mrun stores it in a radix tree keyed by token ids:
 Reuse is exact: the same token ids, the same model content hash, the same rendering. Nothing is
 approximated.
 
+Two more things keep the cache warm:
+
+- **Interrupted prompts keep their progress.** If a client gives up during a long prompt and
+  retries, mrun resumes from the last completed chunk instead of starting over.
+- **Warm-up while tools run.** After a turn that ends in tool calls, the GPU is idle while your
+  agent runs them. mrun uses that time to process the conversation exactly as the client will send
+  it next (templates often re-render the previous reply slightly differently). A real request
+  always takes priority; a wrong guess costs only idle time.
+
 ## Reading the numbers
 
 Every response reports how many prompt tokens were reused, in each API's own usage field
@@ -52,7 +61,7 @@ the divergence to the server terminal — never to logs or responses.
 
 Cached segments share the memory budget with the active request. When a new request needs room,
 mrun evicts the least recently used segments: first conversations superseded by a compaction,
-then other sessions, then assistant turns before user and tool turns before system prompts. A request is never refused while evictable cache remains. If macOS reports memory
+then finished subagents and other sessions, then assistant turns before user and tool turns before system prompts. A request is never refused while evictable cache remains. If macOS reports memory
 pressure, mrun sheds cache first.
 
 ## Shared between clients
@@ -63,9 +72,10 @@ other people with `--host`, keep it in mind, or run with `--no-cache`.
 
 ## Client hints
 
-Anthropic `cache_control` breakpoints and OpenAI `prompt_cache_key` are accepted as hints:
-breakpoints mark good places to keep a snapshot, and the key groups one session's requests so
-eviction prefers other sessions' state. Hints never change what is reused.
+mrun reads the session and subagent ids that Claude Code, Codex and OpenCode send, plus Anthropic
+`cache_control` breakpoints and OpenAI `prompt_cache_key`. Breakpoints mark good places to keep a
+snapshot; session ids let eviction drop finished subagents and other sessions before your main
+conversation. Hints never change what is reused.
 
 Clients can also ask why a turn missed the cache with `diagnostics.previous_message_id`; mrun
 answers with the standard `diagnostics.cache_miss_reason` in the response.
@@ -78,4 +88,5 @@ answers with the standard `diagnostics.cache_miss_reason` in the response.
 | `x-mrun-cache: off` request header | Disable reuse for one request (all APIs) |
 | `"mrun": {"cache": false}` in a Chat Completions or Responses body | Same, in the body |
 | `mrun cache clear` | Drop all cached segments of the running server |
+| `mrun serve --no-warmup` | Turn off warm-up while tools run |
 | `mrun serve --debug-cache` | Print divergence excerpts on the server terminal (loopback only) |

@@ -80,10 +80,11 @@ and just above the computed token capacity, and confirm acceptance and a clear r
 
 1. **Given** a model larger than the memory budget, **When** the developer runs it, **Then** mrun
    refuses before loading, stating model size, budget and how to change the budget.
-2. **Given** a loaded model, **When** a prompt plus requested output exceeds the token capacity,
-   **Then** mrun rejects it before processing, stating requested tokens and capacity.
-3. **Given** a prompt plus output limit exactly at the capacity, **When** submitted, **Then** it
-   runs to completion.
+2. **Given** a loaded model, **When** a prompt leaves no room for even one output token, **Then**
+   mrun rejects it before processing, stating requested tokens and capacity.
+3. **Given** a prompt whose output limit exceeds the remaining capacity, **When** submitted,
+   **Then** the output limit is clamped to what fits, reported, and generation stops with
+   "length" at that point.
 4. **Given** `mrun run --info`, **When** the model loads, **Then** mrun prints the budget breakdown:
    weights, attention-state capacity in tokens and bytes, scratch reserve, and headroom.
 
@@ -112,7 +113,8 @@ model and compare token IDs against stored reference outputs.
 ### Edge Cases
 
 - Empty prompt, or max tokens of zero: rejected with a clear message.
-- Prompt plus output limit exactly at capacity: accepted; one token more: rejected.
+- Prompt of capacity − 1 tokens: accepted with an output limit of 1; a prompt of capacity tokens:
+  rejected.
 - A stop sequence split across two tokens: detected; partial matches are not emitted early.
 - Output that ends mid-way through a multi-byte character: no invalid text is shown.
 - Interrupt arriving just as generation completes: exactly one outcome is reported.
@@ -152,9 +154,11 @@ model and compare token IDs against stored reference outputs.
   the deepest supported position (plus the per-layer attention-state growth transient), cache the result per (model identity, machine, mrun version),
   and size attention-state capacity from what remains. Capacity MUST also be capped by the model's
   maximum position.
-- **FR-009**: Each request MUST be admitted only if its prompt plus output limit fits the
-  attention-state capacity (counting memory that cached state can give back as available), and
-  MUST be rejected up front otherwise, stating requested tokens and capacity.
+- **FR-009**: Each request MUST be admitted only if its prompt plus at least one output token fits
+  the attention-state capacity (counting memory that cached state can give back as available), and
+  MUST be rejected up front otherwise, stating requested tokens and capacity. The output limit is
+  clamped to the remaining capacity and the applied limit is reported (clients such as Claude Code
+  send large default limits on every request).
 - **FR-010**: Sampling MUST support temperature, top-p, top-k, min-p, seed, stop sequences and max
   tokens; temperature 0 MUST be greedy (argmax).
 - **FR-011**: The engine MUST run model work off the async runtime on a dedicated worker and deliver
@@ -198,11 +202,14 @@ model and compare token IDs against stored reference outputs.
   the reference implementation's at 16K context, for both models.
 - **SC-004**: For both models, interrupting a 16K-token prompt at a random point makes mrun ready
   for the next prompt within 300 ms (p95 over 50 trials) on the target Mac.
-- **SC-005**: Requests whose prompt plus output limit equals the computed capacity complete;
-  requests one token over are rejected before processing, in 100% of boundary tests.
+- **SC-005**: A prompt of capacity − 1 tokens completes with one output token; a prompt of
+  capacity tokens is rejected before processing; oversized output limits are clamped and reported;
+  100% of boundary tests.
 - **SC-006**: During a 30-minute session alternating 1K and 30K-token prompts with no other heavy
   applications running, mrun's physical footprint stays at or below its budget plus 1 GiB, and the
-  system's swap-out count does not increase.
+  system's swap-out count does not increase. A 2-hour soak of the same workload shows no growth in
+  MLX active memory or Metal buffer count between the first and last 10 minutes (long-session
+  leaks reported in competitors). The model is never unloaded on an idle timer.
 - **SC-007**: With the model on disk and the scratch probe cached, a developer goes from `mrun run`
   to the first streamed token in under 15 seconds for the 8B model on the target Mac.
 

@@ -34,9 +34,9 @@ context = (budget − weights − scratch) ÷ attention bytes per token
 
 ## Admission
 
-Before a request touches the GPU, mrun checks that its prompt plus its output limit fits — after
-evicting cached prefixes if needed. If it cannot fit, the request is refused immediately with the
-token counts, in the error format each API defines (for example `context_length_exceeded`). The
+Before a request touches the GPU, mrun checks that its prompt fits — after evicting cached prefixes
+if needed — and clamps the output limit to the space left. If the prompt itself cannot fit, the
+request is refused immediately with the token counts, in the error format each API defines (for example `context_length_exceeded`). The
 model reports this machine's real context capacity in `GET /v1/models`, and `mrun launch` passes it
 to the client, so agents compact their history before hitting the limit.
 

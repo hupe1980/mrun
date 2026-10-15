@@ -8,7 +8,8 @@ pub trait Engine {
     fn budget(&self) -> &MemoryBudget;
     fn active_len(&self) -> u32;
     /// Ensure capacity for the active cache to reach `total_tokens`; evicting is the caller's job
-    /// (003) via `drop_segment`. Err(Capacity) when even an empty cache cannot fit it.
+    /// (003) via `drop_segment`. Err(Capacity) when even an empty cache cannot fit it. Callers pass prompt + clamped output
+    /// limit (FR-009).
     fn reserve(&mut self, total_tokens: u32) -> Result<(), EngineError>;
     /// Append `tokens` to the active cache in chunks; cancel checked after every layer.
     /// Returns how many tokens were processed (less than `tokens.len()` only on cancel).

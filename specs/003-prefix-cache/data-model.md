@@ -13,7 +13,8 @@
 | segment | KvSegmentId | owned KV for exactly this edge's tokens (always present) |
 | bytes | u64 | segment size (from `Engine::snapshot`) |
 | kind | System \| User \| Tool \| Assistant \| Periodic \| Breakpoint | eviction order; `Breakpoint` = client `cache_control` position (FR-014), evicted like the turn it ends in |
-| session | Option<u64> | hash of the `prompt_cache_key` that last used this node (FR-014) |
+| session | Option<u64> | hash of the session id (client headers or `prompt_cache_key`) that last used this node (FR-014) |
+| subagent | bool | created by a request carrying a parent-agent/thread header; evicted before the parent's state |
 | superseded | bool | set by a compaction hint (FR-013) |
 | text_hash | Option<u64> | hash of the message text ending at this node (miss classification) |
 | last_used | Instant | LRU |

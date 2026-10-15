@@ -58,6 +58,8 @@ pub struct Stats {
     pub prompt_tokens: u32,
     pub cached_tokens: u32,
     pub generated_tokens: u32,
+    /// Output limit actually applied: the requested one, clamped to the remaining capacity.
+    pub max_tokens: u32,
     pub ttft: Option<Duration>,
     pub prefill_tps: f64,
     pub decode_tps: f64,
@@ -155,13 +157,27 @@ fn run<E: Engine>(
         Ok(matcher) => matcher,
         Err(error) => return FinishReason::Rejected(error.to_string()),
     };
-    let total = prompt.len() as u64 + u64::from(request.max_tokens);
-    let Ok(total) = u32::try_from(total) else {
-        return FinishReason::Rejected("prompt plus output limit is too large".into());
+    // Refuse only a prompt that leaves no room for one output token; otherwise clamp the
+    // output limit to what fits, so large client defaults never turn away a turn that fits.
+    let capacity = engine.budget().kv_capacity_tokens;
+    let Some(room) = u32::try_from(prompt.len())
+        .ok()
+        .and_then(|len| capacity.checked_sub(len))
+        .filter(|room| *room > 0)
+    else {
+        return FinishReason::Rejected(
+            EngineError::Capacity {
+                requested: (prompt.len() as u64 + 1).min(u64::from(u32::MAX)) as u32,
+                available: capacity,
+            }
+            .to_string(),
+        );
     };
+    let max_tokens = request.max_tokens.min(room);
+    stats.max_tokens = max_tokens;
 
     // Admit before touching the cache, so a rejected request leaves the conversation intact.
-    match engine.reserve(total) {
+    match engine.reserve(prompt.len() as u32 + max_tokens) {
         Ok(()) => {}
         Err(error @ EngineError::Capacity { .. }) => {
             return FinishReason::Rejected(error.to_string());
@@ -261,7 +277,7 @@ fn run<E: Engine>(
                 );
             }
         }
-        if stats.generated_tokens >= request.max_tokens {
+        if stats.generated_tokens >= max_tokens {
             flush(&mut matcher, next, sink, stats, started);
             return finish_decode(stats, decode_started, FinishReason::Length);
         }
@@ -489,22 +505,37 @@ mod tests {
     }
 
     #[test]
-    fn capacity_boundary_is_exact() {
+    fn output_limit_is_clamped_to_capacity() {
+        let tokenizer = byte_tokenizer();
+        let prompt = ids(&tokenizer, "0123456789");
+        let run = run_with(
+            ScriptedEngine::new(ids(&tokenizer, "xyz"), 12),
+            Session::default(),
+            request(prompt, 100),
+        );
+        let (reason, _, stats) = finished(&run.events);
+        assert_eq!(*reason, FinishReason::Length);
+        assert_eq!(stats.max_tokens, 2);
+        assert_eq!(stats.generated_tokens, 2);
+    }
+
+    #[test]
+    fn prompt_without_room_for_output_is_rejected() {
         let tokenizer = byte_tokenizer();
         let prompt = ids(&tokenizer, "0123456789");
         let at = run_with(
-            ScriptedEngine::new(ids(&tokenizer, "xyz"), 13),
+            ScriptedEngine::new(ids(&tokenizer, "xyz"), 11),
             Session::default(),
             request(prompt.clone(), 3),
         );
         assert_eq!(*finished(&at.events).0, FinishReason::Length);
         let over = run_with(
-            ScriptedEngine::new(ids(&tokenizer, "xyz"), 13),
+            ScriptedEngine::new(ids(&tokenizer, "xyz"), 10),
             Session::default(),
-            request(prompt, 4),
+            request(prompt, 3),
         );
         let (reason, prefilled, _) = finished(&over.events);
-        assert!(matches!(reason, FinishReason::Rejected(message) if message.contains("14 tokens")));
+        assert!(matches!(reason, FinishReason::Rejected(message) if message.contains("11 tokens")));
         assert_eq!(prefilled, 0);
         assert_eq!(
             over.engine.processed.len(),
@@ -525,7 +556,7 @@ mod tests {
         let rejected = run_with(
             first.engine,
             first.session,
-            request(ids(&tokenizer, "xyz"), 100),
+            request(ids(&tokenizer, "0123456789abcdefghijk"), 1),
         );
         assert!(matches!(
             finished(&rejected.events).0,

@@ -8,7 +8,7 @@ lists what mrun serves and where it intentionally differs.
 | --- | --- | --- |
 | `GET /health` | Liveness + readiness | `{"status":"ok","model":...}`; 503 while loading |
 | `HEAD /api/hello` | Claude Code probe | 200, empty |
-| `GET /v1/models` | Served models | `context_window` = this machine's KV capacity; `max_output_tokens` = server default |
+| `GET /v1/models` | Served models | `context_window` and `max_model_len` = this machine's KV capacity (vLLM-style field read by OpenCode's local discovery); `max_output_tokens` = server default |
 | `POST /v1/chat/completions` | OpenAI Chat Completions | stream + non-stream, tools, `response_format`, `reasoning_content` |
 | `POST /v1/messages` | Anthropic Messages | query string ignored (`?beta=true`); thinking with opaque signatures; `ping` every 10 s of silence |
 | `POST /v1/messages/count_tokens` | Anthropic token count | no queue; exact tokens mrun would process |
@@ -25,7 +25,7 @@ Cross-cutting:
 - **Unknown model ids**: served by the loaded model; responses report the real id.
 - **Output limit**: absent → server default (16,384); too large → clamped and reported.
 - **mrun metadata** `{cached, processed, cause, divergence, max_tokens, warnings[]}` (warnings:
-  `tool-args-invalid`, `image-omitted`, `max-tokens-clamped`):
+  `tool-args-invalid`, `tool-unknown`, `image-omitted`, `max-tokens-clamped`):
   - non-streaming: headers `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`,
     `x-mrun-cache-divergence`, `x-mrun-max-tokens`, `x-mrun-warning` (comma-separated);
   - streaming: SSE comment lines `: mrun {json}` before the first content event (cache, limit) and
@@ -36,9 +36,11 @@ Cross-cutting:
   full reuse. `context_management` is accepted and ignored (FR-024).
 - **Cache hints**: `cache_control` and `prompt_cache_key` are passed to 003 as boundary and session
   hints (003 FR-014); they never change responses.
+- **Attribution nonce** (FR-025): the `cch=` value of Claude Code's `x-anthropic-billing-header` system text is fixed before rendering; nothing else is rewritten.
+- **Progress** (FR-026): queued/prefill keepalive comments carry `: mrun {"queued":n}` or `: mrun {"prefill":[done,total]}`.
 - **Per-request cache off**: request header `x-mrun-cache: off` on all APIs (003 FR-009).
 - **Disconnect**: dropping the connection cancels queued or running work.
-- **Queued streams**: keepalives every 10 s (Anthropic `ping`, SSE comment for OpenAI APIs).
+- **Queued and prefilling streams**: headers at once, keepalives every 10 s (Anthropic `ping`, SSE comment for OpenAI APIs) until the first token.
 
 ## Status codes
 
@@ -51,7 +53,7 @@ Cross-cutting:
 | Host/Origin rejected | 403 | 403 | 403 |
 | Bad/missing API key | 401 | 401 `authentication_error` | 401 |
 
-`retry-after` is integer seconds (Claude Code requires it).
+`retry-after` is integer seconds, 1–60 (Claude Code requires it and stops retrying above 60).
 
 ## `GET /mrun/status` (schema_version 1)
 
