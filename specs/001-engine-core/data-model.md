@@ -4,71 +4,80 @@
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| identity | 64-hex | [research R10](research.md#r10-model-identity-without-feature-004); same function as 004 |
-| architecture | `qwen3` \| `qwen3_moe` | from `config.json` `model_type` |
-| layers, hidden, heads, kv_heads, head_dim, vocab | u32 | config |
-| experts, experts_per_token, norm_topk_prob | Option | MoE only |
-| rope_theta, rms_eps, tie_embeddings, max_position | | config |
-| quantization | {bits, group_size, mode, overrides} | per-path overrides allowed |
-| kv_dtype | bf16 \| f16 | activation dtype |
-| kv_bytes_per_token | u64 | layers × 2 × kv_heads × head_dim × dtype size |
-| template, eos_tokens | | from tokenizer files |
+| identity | 64-hex | [R10](research.md#r10-model-identity); same function as 004 |
+| architecture | `qwen3` \| `qwen3_moe` \| `qwen3_5_moe` | `config.json` `model_type` |
+| layers | u32 | all decoder layers |
+| layer_kinds | Vec<Attention \| Linear> | qwen3_5: linear iff `(i+1) % full_attention_interval != 0` |
+| hidden, heads, kv_heads, head_dim, vocab, max_position | u32 | attention layers |
+| linear | Option{k_heads, v_heads, k_dim, v_dim, conv_kernel} | hybrid only |
+| moe | Option{experts, per_token, norm_topk_prob, shared_expert} | MoE only |
+| rope | {theta, dims (head_dim × partial_rotary_factor)} | |
+| quantization | {bits, group_size, mode, overrides} | |
+| dtype | bf16 \| f16 | activations, attention state, conv state |
+| kv_bytes_per_token | u64 | attention layers × 2 × kv_heads × head_dim × dtype |
+| recurrent_bytes | u64 | linear layers × (v_heads·v_dim·k_dim·4 + (kernel−1)·conv_dim·dtype); 0 for attention-only |
+| eos_tokens | Vec<u32> | union (R10) |
 
 ## MemoryBudget
 
-| Field | Type | Rule |
-| --- | --- | --- |
-| physical | bytes | `hw.memsize` |
-| recommended_working_set | bytes | `device_info` |
-| fraction, reserve | f32, bytes | defaults 0.75, 8 GiB (other apps + mrun host heap) |
-| budget | bytes | `min(fraction × physical, recommended) − reserve` (≥ 0) |
-| weights | bytes | estimated from files before load, measured after |
-| scratch | bytes | (probed peak + per-layer KV growth transient) × 1.25 (margin applied only here), cached per identity/machine/version |
-| kv_capacity_tokens | u32 | `min(max_position, (budget − weights − scratch) / kv_bytes_per_token)` |
-
-Load refused (exit 4) if `weights + scratch + 4,096 × kv_bytes_per_token > budget`.
-Worked example: [research R6](research.md#r6-memory-budget).
-
-## KV accounting (shared with 003)
-
-- `active_tokens`: tokens of the active conversation in the active cache (allocated `cap ≥ active`).
-- `cached_tokens`: owned segments in the prefix store (003); pinned only while being copied into
-  the active cache, otherwise evictable.
-- Admission (one request at a time): `prompt + max_output ≤ kv_capacity_tokens`. Memory held by
-  cached segments counts as available and is reclaimed on demand: at admission for the initial
-  allocation, and later whenever the active cache grows (FR-009). Without 003, `cached = 0`.
-- Invariant: `active cap bytes + cached bytes ≤ kv_capacity_bytes` at all times (the one-layer
-  growth transient lives in the scratch envelope). During a restore, the matched segments and their
-  copy in the active cache coexist, so a restore needs `active allocation + matched bytes ≤
-  kv_capacity_bytes`; when that does not fit after evicting other entries, fewer segments are
-  restored (003 R3).
-
-## KvCache (active)
-
-| Field | Type | Invariants |
-| --- | --- | --- |
-| keys, values | per-layer arrays `[1, kv_heads, cap, head_dim]` | solely owned (no other handle) |
-| offset | u32 | ≤ cap; tokens `[0, offset)` valid |
-| cap | u32 | multiple of 256; grows in 4,096-token steps, one layer at a time (transient ≤ one layer's K/V, inside the scratch envelope) |
-
-## KvSegmentId
-
-Opaque handle to an owned deep copy of a token range of the active cache, with `bytes` known.
-Used by 003; dropped explicitly.
-
-## Session and generation (in `mrun::runtime`)
-
-| Field | Type |
+| Field | Rule |
 | --- | --- |
-| tokens | Vec<u32> committed conversation tokens (prompt + shown output) |
-| request | prompt tokens, sampling {temperature, top_p, top_k, min_p, seed}, max_output, stop (≤ 4 × 256 B), mask provider (002), cancel token |
+| physical, recommended | `device_info` `memory_size`, `max_recommended_working_set_size` |
+| fraction, reserve | 0.75; `clamp(0.15 × physical, 2 GiB, 8 GiB)` |
+| budget | `min(fraction × physical, recommended) − reserve` |
+| weights | file sizes before load; measured after |
+| scratch | probed peak (two points) + one attention layer at P, × 1.25; cached per key (R6) |
+| probed_depth | P |
+| state_capacity_bytes | `budget − weights − scratch` |
+| kv_capacity_tokens | `min(max_position, P, (state_capacity_bytes − recurrent_bytes × (1 + 3)) / kv_bytes_per_token)` |
 
-States: `Idle → Prefilling(layer/chunk progress) → Decoding → Finished(reason)`; any state →
-`Cancelled`; `Failed` on engine error (active cache trimmed to committed tokens or reset). After
-any finish the active cache is trimmed to `tokens.len()` (FR-004).
+Load refused (exit 4) if `weights + scratch + recurrent_bytes + 4,096 × kv_bytes_per_token > budget`.
 
-Events: `Started {prompt, cached}`, `Progress {done, total}`, `Token {id, text}`,
-`Finished {reason: Stop|Length|Cancelled|Error, prefilled, stats}` — exactly one `Finished`;
-`prefilled` reports how far prompt processing got (used by 003 on cancel).
+## Sequence state (engine, live)
 
-Stats: prompt_tokens, cached_tokens, generated_tokens, ttft_ms, prefill_tps, decode_tps.
+| Field | Invariants |
+| --- | --- |
+| attention[l]: K, V `[1, kv_heads, cap, head_dim]` | solely owned; `cap` multiple of 256 or = reserved total; `cap ≤ min(reserved, kv_capacity_tokens)` |
+| offset | `≤ cap`; positions `[0, offset)` valid; = active_len |
+| linear[l]: conv `[1, kernel−1, conv_dim]`, state `[1, v_heads, v_dim, k_dim]` f32 | describes position `offset`; `None` after `split_off` until restore/append |
+| reservation | `total` from `reserve`; growth beyond it is `ReservationExceeded` |
+| pending | ≤ 1 pipelined step (token fed, not confirmed) + pre-step recurrent arrays |
+
+Accounting invariant: `live allocation + Σ segments + Σ checkpoints = allocated() ≤
+state_capacity_bytes`; the one-layer copy transient and chunk rollback copy are inside scratch.
+
+## Checkpoint
+
+`{id, position, bytes = recurrent_bytes}`: deep copy of every linear layer's conv and recurrent
+state at `position`. Created by `prefill` (plan) or `checkpoint()`; restored by copy; dropped
+explicitly. Attention-only models: bytes 0.
+
+## Segment
+
+`{id, start, end, bytes}`: attention K/V for `[start, end)` per layer in compact owned buffers,
+plus (hybrid) the recurrent state at `end`, moved out by `split_off`. `append` requires live
+`active_len == start`.
+
+## Session (`mrun::runtime`)
+
+| Field | Meaning |
+| --- | --- |
+| committed | prompt + output tokens whose text was fully emitted (the conversation) |
+| tokens | tokens the engine state holds; always a prefix of `committed` after a finish; equals the engine's state token for token |
+| checkpoints | hybrid: the two newest `(position, CheckpointId)` of this conversation |
+
+## Request and events
+
+Request: prompt tokens, `Sampling` (validated), `max_tokens`, `stop` (≤ 4 × 256 B), optional mask
+provider (002), `CancelToken`.
+
+States: `Admitted → Prefilling → Decoding → Finished(reason)`; any → `Cancelled`; engine error or
+panic → `Failed` (state reset).
+
+Events (bounded channel, 64): `Started {prompt, cached, max_tokens}`, `Progress {done, total}`,
+`Token {id, text}`. Then exactly one `Finished {reason: Stop{stop} | Length | Cancelled |
+Rejected(msg) | Error(msg), prefilled, stats}` on a one-slot channel. `prefilled` = prompt tokens
+held in state at the end (whole chunks).
+
+Stats: prompt_tokens, cached_tokens, generated_tokens, max_tokens (applied), ttft (first sampled
+token), prefill_tps, decode_tps.
