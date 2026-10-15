@@ -92,7 +92,7 @@ pub trait Engine {
 }
 
 pub fn chunk_len(depth: u32) -> u32; // clamp(2048 * 16384 / max(depth, 1), 128, 2048)
-/// Per prefill call; more planned checkpoints in one call → Err(InvalidRange{start, end, len})
+/// Per prefill call; more planned checkpoints in one call → Err(TooManyCheckpoints{planned, max})
 /// with nothing changed. Stored checkpoints beyond the live state + 3 are evictable cache (003).
 pub const MAX_PLAN_CHECKPOINTS: usize = 3;
 
@@ -100,6 +100,11 @@ pub struct PrefillPlan<'a> { pub boundaries: &'a [u32], pub checkpoints: &'a [u3
 pub struct Prefilled { pub committed: u32, pub checkpoints: Vec<Checkpoint>, pub yielded: bool }
 pub struct Step { /* opaque id; at most one current and one pipelined */ }
 pub struct Checkpoint { pub id: CheckpointId, pub position: u32, pub bytes: u64 }
+/// Allowed next tokens; `from_words` takes a 32-bit-word bitset (llguidance layout).
+impl TokenMask { pub fn none_allowed(vocab: u32) -> Self; pub fn from_words(words: &[u32], vocab: u32) -> Self; }
+/// Chat syntax of a family (one per family in 0.1), named by the registry in `mrun-engine`;
+/// parsers live in `mrun/src/chat/syntax/` (002).
+pub enum SyntaxId { Hermes, QwenXml, Harmony }
 pub struct Segment { pub id: SegmentId, pub start: u32, pub end: u32, pub bytes: u64 }
 pub enum EngineError {
     Capacity { requested: u32, available: u32 },
@@ -108,6 +113,7 @@ pub enum EngineError {
     NoRecurrentState,                    // position-bound state absent (name kept from code)
     ReservationExceeded { needed: u32, reserved: u32 },
     InvalidRange { start: u32, end: u32, len: u32 },
+    TooManyCheckpoints { planned: u32, max: u32 },
     UnknownSegment(SegmentId), UnknownCheckpoint(CheckpointId), InvalidStep,
     Backend(String),
 }
@@ -157,33 +163,98 @@ decoding (`forward_draft`, `accept`, `draft_mtp`, `spec_caps`;
 ## Generation loop (`crates/mrun/src/runtime/generate.rs`)
 
 The single owner of the per-request loop, generic over `Engine` and over a reuse policy:
-`Session` (001, `mrun run`) or the 003 `PrefixStore` (under `serve`).
-002's `runtime/worker.rs` only dequeues and calls `generate`.
+`Session` (001, `mrun run`) or the 003 `PrefixStore` (under `serve`). 002 T005 refactors
+`runtime/handle.rs` (no new `worker.rs`): the worker becomes generic over the policy, holds a lazy
+`Option<E>` built by the server's factory, takes requests from a FIFO of 16 with a wait deadline,
+and handles `Reset` inside `catch_unwind`; it only dequeues and calls `generate`.
 
-1. Validate (empty prompt, limit 0, sampling, stop caps) → `Rejected`.
-2. Admission (FR-009): reject unless `prompt + 1 ≤ kv_capacity_tokens`; clamp the limit.
-3. Reuse (policy): `Session` takes the common prefix of `session.tokens` and prompt
+```rust
+pub struct GenerateRequest {
+    pub prompt: RenderedPrompt,
+    pub sampling: Sampling, pub max_tokens: u32, pub stop: Vec<String>,
+    pub cancel: CancelToken,
+    pub hook: Option<Box<dyn DecodeHook>>, // 002 FR-036
+}
+/// Produced by the renderer (002 T004a); `RenderedPrompt::from_tokens` for plain prompts.
+pub struct RenderedPrompt {
+    pub tokens: Vec<u32>,
+    pub messages: Vec<MessageMark>,   // MessageMark { start: u32, role: Role }
+    pub system_tools_end: u32,
+    pub generation_start: u32,        // start of the generation header; = tokens.len() if none
+}
+/// Per-request decode logic on the engine thread (parser, grammar, forced tokens, ignore_eos).
+pub trait DecodeHook: Send {
+    /// Sees every output token (sampled or forced); returns the mask for the next sampled step.
+    fn on_token(&mut self, id: u32) -> Option<TokenMask>;
+    /// Tokens to append next without sampling (each still goes through `on_token`).
+    fn forced_tokens(&mut self) -> Vec<u32> { Vec::new() }
+    /// EOS tokens become ordinary output tokens; only the output limit ends generation.
+    fn ignore_eos(&self) -> bool { false }
+}
+pub enum Event {
+    Started { prompt: u32, cached: u32, max_tokens: u32 },
+    Progress { done: u32, total: u32 },
+    /// One per output token id, in order: `text` is what became visible now (possibly empty),
+    /// `held` the bytes of decoded text still held back by stop matching.
+    Token { id: u32, text: String, held: u32 },
+    /// Held text released at a finish without a stop-sequence match.
+    Flush { text: String },
+}
+pub enum FinishReason {
+    /// A stop sequence (`stop`) or the EOS token that ended generation (`eos_token`).
+    Stop { stop: Option<String>, eos_token: Option<u32> },
+    Length, Cancelled, Rejected(String), Error(String),
+}
+
+pub trait ReusePolicy {               // the seam of the 003 contract (authoritative)
+    fn initial_need(&self, engine: &dyn Engine, prompt: &RenderedPrompt, total: u32) -> u64;
+    fn evict(&mut self, engine: &mut dyn Engine, bytes: u64, protect: Option<&RenderedPrompt>) -> u64;
+    fn prepare(&mut self, engine: &mut dyn Engine, prompt: &RenderedPrompt, total: u32)
+        -> Result<Prepared, EngineError>;  // the policy reserves
+    fn on_pressure(&mut self, engine: &mut dyn Engine, level: Pressure, idle: bool);
+    fn commit(&mut self, engine: &mut dyn Engine, prompt: &RenderedPrompt, committed: &[u32],
+              target: u32, captured: Vec<Checkpoint>) -> u32;
+    fn clear(&mut self, engine: &mut dyn Engine);
+}
+pub struct Prepared { pub resume: u32, pub chunks: ChunkPlan } // 003 T008 adds `miss`
+pub enum Pressure { Warning, Critical }
+/// Edge-triggered level shared with the pressure source: `raise` records a level and requests a
+/// yield of the running request; the loop `take`s it.
+pub struct PressureGauge;
+```
+
+1. Validate (empty prompt, limit 0, sampling, stop caps) → `Rejected`. The TTFT clock starts
+   when `generate` is called, i.e. at the worker's dequeue.
+2. Admission (FR-009): reject unless `prompt + 1 ≤ kv_capacity_tokens`; clamp the limit;
+   `total = prompt + limit`. Policy state is unchanged on rejection.
+3. `need = initial_need(prompt, total)`; when it exceeds the free bytes
+   (`state_capacity_bytes − allocated()`), `evict(need − free, Some(prompt))`.
+4. `prepare(prompt, total)`: `Session` takes the common prefix of `session.tokens` and the prompt
    (≤ prompt − 1); models with position-bound state that cannot trim there restore the deepest
-   session checkpoint ≤ common.
-   `PrefixStore` runs its lookup and switch (003). Then `reserve(keep, prompt + limit)`.
-4. Prefill all but the last prompt token; models with position-bound state plan a checkpoint at
-   `generation_start` (the
-   start of the generation header; the session keeps the two newest). On `NeedsMemory{bytes}` the
-   policy evicts (`Session`: drop the older session checkpoint, else fail with an error;
-   `PrefixStore`: `evict(bytes)`) and the call is retried. On `yielded` the policy acts on memory
-   pressure (and 003 applies pending soft pins), then `prefill` is called again with the remaining
-   tokens and the same plan.
-5. Decode: `forward(last)` → optional mask → `sample(step, …, pipeline = remaining > 1)`;
-   detokenize, stop-match, emit. TTFT = first sampled token.
-6. Finish: committed = prompt + tokens whose text was fully emitted; trim the state to the longest
-   committed prefix it holds (position-bound state falls back to a checkpoint); the policy records the state
-   tokens (`session.tokens`, or 003 `commit`).
+   session checkpoint ≤ common; then `reserve(resume, total)`. The plan checkpoints
+   `generation_start` (models with position-bound state; the session keeps the two newest).
+   `PrefixStore` runs its lookup and switch (003).
+5. Prefill all but the last prompt token with `Prepared.chunks`. On `NeedsMemory{bytes}` →
+   `evict(bytes, None)` and retry while it frees something (`Session`: the older session
+   checkpoint first), else fail with an error. On `yielded`, a pending pressure level is passed to
+   `on_pressure(level, idle = false)`; then `prefill` continues with the remaining tokens and the
+   same plan.
+6. Decode: a pending pressure level → `on_pressure`; `forward(last)` → the next forced token, or
+   `sample(step, …, mask from the last on_token, pipeline = remaining > 1)`; EOS (unless
+   `ignore_eos`) finishes with `Stop{eos_token}`; otherwise `on_token(id)`, detokenize,
+   stop-match, emit `Token{id, text, held}`. TTFT = first sampled or forced token.
+7. Finish: committed = prompt + tokens whose text was fully emitted; trim the state to the longest
+   committed prefix it holds (position-bound state falls back to a checkpoint); the policy records
+   the state tokens (`session.tokens`, or 003 `commit`).
 
 Events go through `flume::bounded(64)`; the worker sends with a stall timeout, then stops sending
 `Token`/`Progress` to that consumer and cancels. The event sender is dropped at finish and
 `Finished` is sent on its own one-slot channel with `try_send` (never blocks, never lost); the
 consumer drains events, then reads `Finished`. The worker wraps each request in `catch_unwind`;
 a panic yields `Finished{Error}` and `reset_all()` (the session is cleared with it).
+
+`ScriptedEngine` and the test knobs (`chat::tokenizer::test_support`) are compiled only for unit
+tests and with the `test-support` cargo feature of `mrun`, which its integration tests enable.
 
 ## CLI: `mrun run`
 
@@ -196,8 +267,11 @@ mrun run <model> [--prompt TEXT] [--system TEXT] [--temperature F] [--top-p F] [
 - `<model>`: local path or HF repo id; aliases arrive with 004. An unsupported `model_type` exits
   3 (message: 004 E034).
 - `--think` per family (002 FR-035): Qwen3 and Qwen3.6 set `enable_thinking`; gpt-oss sets
-  reasoning effort `high` (default `low`); Qwen3-Coder and Devstral print `thinking-unsupported`
-  and run without thinking.
+  `RenderOptions.reasoning_effort` `high` (default `low`); Qwen3-Coder prints
+  `thinking-unsupported` and runs without thinking.
+- Each turn is rendered with and without the generation prompt; `generation_start` is their
+  common token prefix (`chat::prompt::generation_start`), so hybrids checkpoint where the next
+  turn's re-rendered reply diverges.
 - Interactive REPL without `--prompt`; `/clear`, `/info`, `/exit`.
 - Stats line per answer: `42 tok · 1.2 s TTFT · 512 tok/s prefill · 61 tok/s decode · 3,104 cached`.
 - `--info`: budget breakdown (FR-006/008) incl. current free memory, then exit.

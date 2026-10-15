@@ -5,14 +5,14 @@
 | Field | Type | Notes |
 | --- | --- | --- |
 | identity | 64-hex | [R10](research.md#r10-model-identity); same function as 004 |
-| family | `qwen3_5_moe` \| `qwen3_moe` \| `gpt_oss` \| `mistral` \| `qwen3` (0.1) | family registry (010) from `config.json` `model_type` (wrapped configs: `text_config.model_type`; `mistral3`/`ministral3` → `mistral`); unknown → refused listing families |
+| family | `qwen3_5_moe` \| `qwen3_moe` \| `gpt_oss` \| `qwen3` (0.1; `mistral` is 0.2, 010) | family registry (010) from `config.json` `model_type` (wrapped configs: `text_config.model_type`); unknown → refused listing families; each family names one `SyntaxId` (`Hermes` \| `QwenXml` \| `Harmony`, defined in `mrun-engine`) |
 | layers | u32 | all decoder layers |
 | layer_kinds | Vec<FullAttention \| SlidingAttention{window} \| Linear> | set by the family module: qwen3_5 linear iff `(i+1) % full_attention_interval != 0`; gpt_oss from `layer_types` (default alternating sliding/full) |
 | hidden, heads, kv_heads, head_dim, vocab, max_position | u32 | attention layers |
 | linear | Option{k_heads, v_heads, k_dim, v_dim, conv_kernel} | linear-attention families only |
 | moe | Option{experts, per_token, norm_topk_prob, shared_expert, bias} | MoE only |
 | sinks | bool | per-head attention sinks (gpt_oss) |
-| rope | {theta, dims (head_dim × partial_rotary_factor), scaling: None \| Yarn{…}, query_scale: Option{beta, original_max}} | YaRN for gpt_oss and mistral; position-scaled queries for mistral (`llama_4_scaling_beta`) |
+| rope | {theta, dims (head_dim × partial_rotary_factor), scaling: None \| Yarn{…}, query_scale: Option{beta, original_max}} | YaRN for gpt_oss (position-scaled queries: `mistral`, 0.2) |
 | quantization | {bits, group_size, mode: affine \| mxfp4, overrides} | per-path overrides (8-bit routers, MXFP4 experts) |
 | dtype | bf16 \| f16 | activations, attention state, conv state |
 | kv_bytes_per_token | u64 | positional state: all attention layers (sliding included, full KV kept) × 2 × kv_heads × head_dim × dtype |
@@ -26,11 +26,10 @@
 | `qwen3_5_moe` (Qwen3.6-35B-A3B) | 10 × 2 × 2 × 256 × 2 B = 20 KiB | ≈ 61.4 MiB (30 GDN layers) |
 | `qwen3_moe` (Qwen3-Coder-30B-A3B) | 48 × 2 × 4 × 128 × 2 B = 96 KiB | 0 |
 | `gpt_oss` (gpt-oss-20b) | 24 × 2 × 8 × 64 × 2 B = 48 KiB (12 sliding + 12 full, full KV kept) | 0 |
-| `mistral` (Devstral Small 2 24B) | 40 × 2 × 8 × 128 × 2 B = 160 KiB | 0 |
 | `qwen3` (Qwen3-8B) | 36 × 2 × 8 × 128 × 2 B = 144 KiB | 0 |
 
-Dimensions are read from `config.json` and checked at load (gpt-oss and Devstral values to confirm
-on the pinned weights).
+Dimensions are read from `config.json` and checked at load (gpt-oss values to confirm on the
+pinned weights).
 
 ## MemoryBudget
 
@@ -92,17 +91,29 @@ The reuse policy of `mrun run`; `runtime/generate.rs` owns the per-request loop 
 
 ## Request and events
 
-Request: prompt tokens, `Sampling` (validated), `max_tokens`, `stop` (≤ 4 × 256 B), optional mask
-provider (002), `CancelToken` (cancel, plus a yield request that makes `prefill` return after the
-current whole chunk with `Prefilled.yielded`).
+Request (`GenerateRequest`): `prompt: RenderedPrompt` (`tokens`, `messages: [MessageMark{start,
+role}]`, `system_tools_end`, `generation_start`; 002 T004a renders it, `mrun run` computes
+`generation_start` as the common prefix of the turn rendered without and with the generation
+prompt), `Sampling` (validated), `max_tokens`, `stop` (≤ 4 × 256 B), optional `DecodeHook` (002
+FR-036: `on_token(id) -> Option<TokenMask>` for the next step, `forced_tokens()`, `ignore_eos()`),
+`CancelToken` (cancel, plus a yield request that makes `prefill` return after the current whole
+chunk with `Prefilled.yielded`).
 
 States: `Admitted → Prefilling → Decoding → Finished(reason)`; any → `Cancelled`; engine error or
 panic → `Failed` (state reset).
 
 Events (bounded channel, 64): `Started {prompt, cached, max_tokens}`, `Progress {done, total}`,
-`Token {id, text}`. Then exactly one `Finished {reason: Stop{stop} | Length | Cancelled |
-Rejected(msg) | Error(msg), prefilled, stats}` on a one-slot channel. `prefilled` = prompt tokens
+`Token {id, text, held}` for every output token id (sampled or forced; `text` = visible now,
+`held` = bytes held back by stop matching), `Flush {text}` (held text released at a finish without
+a stop match). Then exactly one `Finished {reason: Stop{stop, eos_token} | Length | Cancelled |
+Rejected(msg) | Error(msg), prefilled, stats}` on a one-slot channel; `eos_token` is the EOS id
+that ended generation. `prefilled` = prompt tokens
 held in state at the end (whole chunks).
 
-Stats: prompt_tokens, cached_tokens, generated_tokens, max_tokens (applied), ttft (first sampled
-token), prefill_tps, decode_tps.
+Stats: prompt_tokens, cached_tokens, generated_tokens, max_tokens (applied), ttft (dequeue to the
+first output token), prefill_tps, decode_tps.
+
+Memory pressure: `Pressure {Warning, Critical}` from a `PressureGauge` (edge-triggered; raising a
+level requests a yield of the running request). The loop passes it to the policy's `on_pressure`
+at prefill yields and between decode tokens. `Session`: Warning drops the older checkpoint,
+Critical drops all session checkpoints (and, when idle, the live state).

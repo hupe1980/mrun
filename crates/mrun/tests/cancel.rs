@@ -114,7 +114,7 @@ fn cancel_during_decode_trims_the_pending_step() {
         };
         let mut session = Session::default();
         let mut req = request(ids("q?"), 50);
-        req.generation_start = Some(1);
+        req.prompt.generation_start = 1;
         // Events: Started, Progress, then tokens; cancel at the third token.
         let mut sink = CancelAfter {
             events: Vec::new(),

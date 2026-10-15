@@ -10,6 +10,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# `ScriptedEngine` and test fixtures, for integration tests and the test suites of later features.
+test-support = []
+
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 flume.workspace = true
@@ -22,6 +26,8 @@ thiserror.workspace = true
 tokenizers.workspace = true
 
 [dev-dependencies]
+# Integration tests are built against the library with `test-support`.
+mrun = { path = ".", features = ["test-support"] }
 tempfile.workspace = true
 
 [lints]

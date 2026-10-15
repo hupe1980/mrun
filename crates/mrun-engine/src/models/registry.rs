@@ -6,7 +6,8 @@ use super::LoadError;
 use crate::engine::{LayerKind, ModelInfo};
 use serde_json::Value;
 
-/// Chat syntax a family's template may use; the template probe picks within the accepted set.
+/// Chat syntax of a family's template: tool calls, reasoning and message framing. The parsers
+/// live in `mrun`; the registry names one per family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyntaxId {
     Hermes,
@@ -50,8 +51,7 @@ pub struct Family {
     pub alias: Option<&'static str>,
     /// Accepted `(model_type, text_config.model_type)` pairs.
     keys: &'static [(&'static str, Option<&'static str>)],
-    /// Accepted chat syntaxes, default first.
-    pub syntaxes: &'static [SyntaxId],
+    pub syntax: SyntaxId,
     /// End tokens joined to the EOS union, by token text.
     pub eos_extra: &'static [&'static str],
     default_layers: DefaultLayers,
@@ -66,7 +66,7 @@ static FAMILIES: [Family; 4] = [
             ("qwen3_5_moe", None),
             ("qwen3_5_moe", Some("qwen3_5_moe_text")),
         ],
-        syntaxes: &[SyntaxId::QwenXml],
+        syntax: SyntaxId::QwenXml,
         eos_extra: &[],
         default_layers: DefaultLayers::LinearWithFullInterval,
     },
@@ -74,7 +74,7 @@ static FAMILIES: [Family; 4] = [
         name: "qwen3_moe",
         alias: Some("qwen3-coder"),
         keys: &[("qwen3_moe", None)],
-        syntaxes: &[SyntaxId::QwenXml, SyntaxId::Hermes],
+        syntax: SyntaxId::QwenXml,
         eos_extra: &[],
         default_layers: DefaultLayers::AllFull,
     },
@@ -82,7 +82,7 @@ static FAMILIES: [Family; 4] = [
         name: "gpt_oss",
         alias: Some("gpt-oss"),
         keys: &[("gpt_oss", None)],
-        syntaxes: &[SyntaxId::Harmony],
+        syntax: SyntaxId::Harmony,
         eos_extra: &["<|call|>", "<|return|>"],
         default_layers: DefaultLayers::AlternatingSliding,
     },
@@ -90,7 +90,7 @@ static FAMILIES: [Family; 4] = [
         name: "qwen3",
         alias: None,
         keys: &[("qwen3", None)],
-        syntaxes: &[SyntaxId::Hermes],
+        syntax: SyntaxId::Hermes,
         eos_extra: &[],
         default_layers: DefaultLayers::AllFull,
     },
@@ -368,12 +368,12 @@ mod tests {
         assert_eq!(qwen3.layer_kinds, vec![LayerKind::FullAttention; 36]);
         assert_eq!(qwen3.kv_bytes_per_token, 144 * KIB);
         assert_eq!((qwen3.recurrent_bytes, qwen3.max_position), (0, 40960));
-        assert_eq!(qwen3.family.syntaxes, [SyntaxId::Hermes]);
+        assert_eq!(qwen3.family.syntax, crate::SyntaxId::Hermes);
 
         let coder = resolve(qwen3_coder());
         assert_eq!(coder.family.name, "qwen3_moe");
         assert_eq!(coder.kv_bytes_per_token, 96 * KIB);
-        assert_eq!(coder.family.syntaxes[0], SyntaxId::QwenXml);
+        assert_eq!(coder.family.syntax, SyntaxId::QwenXml);
         assert!(
             coder
                 .state_kinds()
@@ -403,6 +403,7 @@ mod tests {
                 30
             );
         }
+        assert_eq!(wrapped.family.syntax, SyntaxId::QwenXml);
         let info = wrapped.model_info("id".into(), vec![1]);
         assert!(info.is_hybrid());
         assert_eq!(info.family, "qwen3_5_moe");
@@ -436,7 +437,7 @@ mod tests {
             assert_eq!(cfg.kv_bytes_per_token, 48 * KIB);
             assert_eq!(cfg.recurrent_bytes, 0);
         }
-        assert_eq!(explicit.family.syntaxes, [SyntaxId::Harmony]);
+        assert_eq!(explicit.family.syntax, SyntaxId::Harmony);
         assert_eq!(explicit.family.eos_extra, ["<|call|>", "<|return|>"]);
     }
 

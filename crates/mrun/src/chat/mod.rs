@@ -1,6 +1,7 @@
-//! Chat layer: tokenization, chat templates, stop sequences.
+//! Chat layer: tokenization, chat templates, rendered prompts, stop sequences.
 
 pub mod limits;
+pub mod prompt;
 pub mod stop;
 pub mod template;
 pub mod tokenizer;

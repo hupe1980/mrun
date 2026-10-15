@@ -1,10 +1,13 @@
 //! `Session`: the reuse policy of `mrun run`, one conversation kept in the live engine state.
 
-use crate::runtime::generate::{ChunkPlan, GenerateRequest, ReusePolicy};
+use crate::chat::prompt::RenderedPrompt;
+use crate::runtime::generate::{ChunkPlan, Prepared, Pressure, ReusePolicy};
 use mrun_engine::{Checkpoint, Engine, EngineError};
 
 /// Checkpoints a hybrid conversation keeps (planned at each turn's generation start).
 const KEPT_CHECKPOINTS: usize = 2;
+/// Output positions the first growth of a request covers.
+const FIRST_GROWTH: u32 = 4096;
 
 #[derive(Debug, Default)]
 pub struct Session {
@@ -27,6 +30,26 @@ impl Session {
 
     pub fn checkpoints(&self) -> &[Checkpoint] {
         &self.checkpoints
+    }
+
+    /// Length of the state prefix `prompt` can reuse; its last token is always processed.
+    fn common(&self, prompt: &RenderedPrompt) -> u32 {
+        self.tokens
+            .iter()
+            .zip(&prompt.tokens)
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(prompt.tokens.len().saturating_sub(1)) as u32
+    }
+
+    /// The generation-start checkpoint to plan when prefill starts at `resume`.
+    fn planned_checkpoint(
+        engine: &dyn Engine,
+        prompt: &RenderedPrompt,
+        resume: u32,
+    ) -> Option<u32> {
+        let at = prompt.generation_start;
+        (engine.info().is_hybrid() && at > resume && at < prompt.len()).then_some(at)
     }
 
     /// Cuts the state to `len`; where recurrent state cannot be cut, resumes from the deepest
@@ -65,51 +88,92 @@ impl Session {
             engine.drop_checkpoint(checkpoint.id);
         }
     }
+
+    /// Drops the `count` oldest checkpoints; returns their bytes.
+    fn drop_oldest(&mut self, engine: &mut dyn Engine, count: usize) -> u64 {
+        self.checkpoints
+            .drain(..count.min(self.checkpoints.len()))
+            .map(|checkpoint| {
+                engine.drop_checkpoint(checkpoint.id);
+                checkpoint.bytes
+            })
+            .sum()
+    }
 }
 
 impl ReusePolicy for Session {
+    fn initial_need(&self, engine: &dyn Engine, prompt: &RenderedPrompt, total: u32) -> u64 {
+        let info = engine.info();
+        let positions = total.min(prompt.len().saturating_add(FIRST_GROWTH));
+        let checkpoints = Session::planned_checkpoint(engine, prompt, self.common(prompt))
+            .map_or(0, |_| info.recurrent_bytes);
+        // The engine holds only the live state and this session's checkpoints.
+        let held: u64 = self
+            .checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.bytes)
+            .sum();
+        let live = engine.allocated().saturating_sub(held);
+        let target = u64::from(positions) * info.kv_bytes_per_token + info.recurrent_bytes;
+        target.saturating_sub(live) + checkpoints
+    }
+
+    /// Oldest checkpoint first. `protect` is not consulted: losing a checkpoint costs only
+    /// re-processing, and the session holds nothing else.
+    fn evict(
+        &mut self,
+        engine: &mut dyn Engine,
+        bytes: u64,
+        _protect: Option<&RenderedPrompt>,
+    ) -> u64 {
+        let mut freed = 0;
+        while freed < bytes && !self.checkpoints.is_empty() {
+            freed += self.drop_oldest(engine, 1);
+        }
+        freed
+    }
+
     fn prepare(
         &mut self,
         engine: &mut dyn Engine,
-        request: &GenerateRequest,
-    ) -> Result<u32, EngineError> {
-        let prompt = &request.prompt;
-        let common = self
-            .tokens
-            .iter()
-            .zip(prompt)
-            .take_while(|(a, b)| a == b)
-            .count()
-            .min(prompt.len() - 1) as u32;
+        prompt: &RenderedPrompt,
+        total: u32,
+    ) -> Result<Prepared, EngineError> {
+        let common = self.common(prompt);
         self.retain_checkpoints(engine, common);
-        let keep = self.cut(engine, common);
-        self.tokens.truncate(keep as usize);
-        Ok(keep)
+        let resume = self.cut(engine, common);
+        self.tokens.truncate(resume as usize);
+        engine.reserve(resume, total)?;
+        let checkpoints = Session::planned_checkpoint(engine, prompt, resume)
+            .into_iter()
+            .collect();
+        Ok(Prepared {
+            resume,
+            chunks: ChunkPlan {
+                boundaries: Vec::new(),
+                checkpoints,
+            },
+        })
     }
 
-    fn plan(&self, engine: &dyn Engine, request: &GenerateRequest, keep: u32) -> ChunkPlan {
-        let end = request.prompt.len() as u32 - 1;
-        ChunkPlan {
-            boundaries: Vec::new(),
-            checkpoints: request
-                .generation_start
-                .filter(|&at| engine.info().is_hybrid() && at > keep && at <= end)
-                .into_iter()
-                .collect(),
+    /// Warning halves the checkpoints (oldest first); Critical drops them all and, when idle,
+    /// the live state too.
+    fn on_pressure(&mut self, engine: &mut dyn Engine, level: Pressure, idle: bool) {
+        let count = match level {
+            Pressure::Warning => self.checkpoints.len().div_ceil(2),
+            Pressure::Critical => self.checkpoints.len(),
+        };
+        self.drop_oldest(engine, count);
+        if idle && level == Pressure::Critical {
+            engine.reset();
+            self.tokens.clear();
         }
-    }
-
-    fn evict(&mut self, engine: &mut dyn Engine, _bytes: u64) -> bool {
-        if self.checkpoints.is_empty() {
-            return false;
-        }
-        engine.drop_checkpoint(self.checkpoints.remove(0).id);
-        true
     }
 
     fn commit(
         &mut self,
         engine: &mut dyn Engine,
+        _prompt: &RenderedPrompt,
         committed: &[u32],
         target: u32,
         captured: Vec<Checkpoint>,

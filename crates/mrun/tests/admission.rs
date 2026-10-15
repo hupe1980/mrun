@@ -86,7 +86,7 @@ fn cached_state_counts_as_available() {
     let mut session = Session::default();
     let first = prompt(100);
     let mut req = request(first.clone(), 2);
-    req.generation_start = Some(90);
+    req.prompt.generation_start = 90;
     let (_, finished) = run_collect(&mut engine, &mut session, req);
     assert_eq!(finished.reason, FinishReason::Length);
     assert_eq!(session.checkpoints().len(), 1);
@@ -95,7 +95,7 @@ fn cached_state_counts_as_available() {
     let mut next = session.committed().to_vec();
     next.extend(prompt(CAPACITY - 1 - next.len() as u32));
     let mut req = request(next.clone(), 50);
-    req.generation_start = Some(CAPACITY - 10);
+    req.prompt.generation_start = CAPACITY - 10;
     let (events, finished) = run_collect(&mut engine, &mut session, req);
     assert_eq!(finished.reason, FinishReason::Length);
     assert_eq!(finished.stats.generated_tokens, 1);

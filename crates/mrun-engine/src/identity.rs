@@ -10,7 +10,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -42,7 +42,7 @@ pub enum IdentityError {
     Io { path: PathBuf, source: io::Error },
     #[error("{path} is not valid JSON: {message}")]
     Json { path: PathBuf, message: String },
-    #[error("identity cache {path} is corrupt: {message}")]
+    #[error("cannot write identity cache {path}: {message}")]
     Cache { path: PathBuf, message: String },
 }
 
@@ -254,12 +254,10 @@ fn inode(_meta: &fs::Metadata) -> u64 {
     0
 }
 
+/// The cache, or an empty one when it is missing or unreadable as TOML (it is rebuilt).
 fn load_cache(path: &Path) -> Result<Cache, IdentityError> {
     match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text).map_err(|error| IdentityError::Cache {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        }),
+        Ok(text) => Ok(toml::from_str(&text).unwrap_or_default()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Cache::default()),
         Err(source) => Err(IdentityError::Io {
             path: path.to_path_buf(),
@@ -273,16 +271,21 @@ fn store_cache(path: &Path, cache: &Cache) -> Result<(), IdentityError> {
         path: path.to_path_buf(),
         source,
     };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(io_err)?;
-    }
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    fs::create_dir_all(dir).map_err(io_err)?;
     let text = toml::to_string(cache).map_err(|error| IdentityError::Cache {
         path: path.to_path_buf(),
         message: error.to_string(),
     })?;
-    let temp = path.with_extension("toml.tmp");
-    fs::write(&temp, text).map_err(io_err)?;
-    fs::rename(&temp, path).map_err(io_err)
+    // A uniquely named temp file per writer, renamed into place: concurrent writers never
+    // interleave, and the last rename wins.
+    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io_err)?;
+    temp.write_all(text.as_bytes()).map_err(io_err)?;
+    temp.persist(path).map_err(|error| io_err(error.error))?;
+    Ok(())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -417,6 +420,40 @@ mod tests {
             eos_union(dir, &[]),
             Err(IdentityError::Json { .. })
         ));
+    }
+
+    #[test]
+    fn a_corrupt_cache_is_rebuilt() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = model_dir(root.path());
+        let cache = root.path().join("identity.toml");
+        let first = identify(&dir, &cache).unwrap();
+        fs::write(&cache, "not = [toml").unwrap();
+        let second = identify(&dir, &cache).unwrap();
+        assert_eq!(second.value, first.value);
+        assert_eq!(second.changed_from, None, "no previous record survives");
+        assert!(toml::from_str::<Cache>(&fs::read_to_string(&cache).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn concurrent_writers_never_share_a_temp_file() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = model_dir(root.path());
+        let cache = root.path().join("identity.toml");
+        std::thread::scope(|scope| {
+            let runs: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| identify(&dir, &cache)))
+                .collect();
+            for run in runs {
+                run.join().unwrap().unwrap();
+            }
+        });
+        let leftovers: Vec<_> = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != "model" && name != "identity.toml")
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]

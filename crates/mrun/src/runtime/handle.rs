@@ -6,7 +6,8 @@
 
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::generate::{
-    self, Event, EventSink, FinishReason, Finished, GenerateRequest, ReusePolicy, Stats,
+    self, Event, EventSink, FinishReason, Finished, GenerateRequest, PressureGauge, ReusePolicy,
+    Stats,
 };
 use crate::runtime::session::Session;
 use flume::{Receiver, Sender, bounded, unbounded};
@@ -44,6 +45,7 @@ pub struct EngineHandle {
     commands: Sender<Command>,
     info: ModelInfo,
     budget: MemoryBudget,
+    pressure: Arc<PressureGauge>,
 }
 
 /// Receivers of one request: drain `events` (closed at the finish), then read `finished`.
@@ -78,6 +80,8 @@ impl EngineHandle {
     {
         let (commands, inbox) = unbounded::<Command>();
         let (ready_tx, ready_rx) = bounded(1);
+        let pressure = Arc::new(PressureGauge::default());
+        let gauge = pressure.clone();
         thread::Builder::new()
             .name("mrun-engine".into())
             .spawn(move || {
@@ -89,7 +93,7 @@ impl EngineHandle {
                     }
                 };
                 let _ = ready_tx.send(Ok((engine.info().clone(), *engine.budget())));
-                worker(&mut engine, &tokenizer, &inbox, stall_timeout);
+                worker(&mut engine, &tokenizer, &inbox, stall_timeout, &gauge);
             })
             .map_err(|error| format!("cannot start engine thread: {error}"))?;
         let (info, budget) = ready_rx
@@ -99,6 +103,7 @@ impl EngineHandle {
             commands,
             info,
             budget,
+            pressure,
         })
     }
 
@@ -108,6 +113,11 @@ impl EngineHandle {
 
     pub fn budget(&self) -> &MemoryBudget {
         &self.budget
+    }
+
+    /// Where the memory-pressure source reports levels for the running request.
+    pub fn pressure(&self) -> &Arc<PressureGauge> {
+        &self.pressure
     }
 
     /// Queues a request.
@@ -156,6 +166,7 @@ fn worker<E: Engine>(
     tokenizer: &Tokenizer,
     inbox: &Receiver<Command>,
     stall_timeout: Duration,
+    pressure: &PressureGauge,
 ) {
     let mut session = Session::default();
     for command in inbox {
@@ -172,7 +183,14 @@ fn worker<E: Engine>(
                 };
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
                     let mut detok = tokenizer.stream();
-                    generate::generate(engine, &mut session, &mut detok, request, &mut sink)
+                    generate::generate(
+                        engine,
+                        &mut session,
+                        &mut detok,
+                        request,
+                        &mut sink,
+                        pressure,
+                    )
                 }));
                 // Close the event stream first so a consumer draining it moves on to `Finished`.
                 drop(sink);
@@ -197,22 +215,16 @@ fn worker<E: Engine>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chat::prompt::RenderedPrompt;
     use crate::chat::tokenizer::test_support::byte_tokenizer;
     use crate::runtime::scripted::ScriptedEngine;
-    use mrun_engine::{CancelToken, Sampling};
     use std::future::Future;
     use std::pin::pin;
     use std::task::{Context, Poll, Wake, Waker};
 
     fn request(tokenizer: &Tokenizer, prompt: &str) -> GenerateRequest {
-        GenerateRequest {
-            prompt: tokenizer.encode(prompt).unwrap(),
-            sampling: Sampling::GREEDY,
-            max_tokens: 100,
-            stop: Vec::new(),
-            cancel: CancelToken::new(),
-            generation_start: None,
-        }
+        let tokens = tokenizer.encode(prompt).unwrap();
+        GenerateRequest::new(RenderedPrompt::from_tokens(tokens), 100)
     }
 
     fn spawn(
@@ -321,7 +333,10 @@ mod tests {
             (text, generation.finished.recv_async().await.unwrap())
         });
         assert_eq!(text, "hey");
-        assert_eq!(finished.reason, FinishReason::Stop { stop: None });
+        assert!(matches!(
+            finished.reason,
+            FinishReason::Stop { stop: None, .. }
+        ));
     }
 
     #[test]

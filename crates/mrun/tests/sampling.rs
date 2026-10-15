@@ -5,7 +5,7 @@ mod common;
 
 use common::{ids, request, run_collect, text};
 use mrun::runtime::generate::FinishReason;
-use mrun::runtime::scripted::ScriptedEngine;
+use mrun::runtime::scripted::{SCRIPT_EOS, ScriptedEngine};
 use mrun::runtime::session::Session;
 use mrun_engine::Sampling;
 
@@ -92,7 +92,13 @@ fn valid_sampling_settings_are_accepted() {
     let mut req = request(ids("q"), 5);
     req.sampling = sampling;
     let (events, finished) = run_collect(&mut engine, &mut Session::default(), req);
-    assert_eq!(finished.reason, FinishReason::Stop { stop: None });
+    assert_eq!(
+        finished.reason,
+        FinishReason::Stop {
+            stop: None,
+            eos_token: Some(SCRIPT_EOS)
+        }
+    );
     assert_eq!(text(&events), "ok");
 }
 
@@ -124,7 +130,8 @@ fn stop_sequence_split_across_tokens_ends_with_its_text_trimmed() {
     assert_eq!(
         finished.reason,
         FinishReason::Stop {
-            stop: Some("END".into())
+            stop: Some("END".into()),
+            eos_token: None
         }
     );
     assert_eq!(text(&events), "one ENtwo ");
@@ -141,7 +148,13 @@ fn eos_ends_with_stop_and_is_not_kept() {
     let mut engine = ScriptedEngine::new(ids("done"), 1_000);
     let mut session = Session::default();
     let (_, finished) = run_collect(&mut engine, &mut session, request(ids("q"), 50));
-    assert_eq!(finished.reason, FinishReason::Stop { stop: None });
+    assert_eq!(
+        finished.reason,
+        FinishReason::Stop {
+            stop: None,
+            eos_token: Some(SCRIPT_EOS)
+        }
+    );
     assert_eq!(finished.stats.generated_tokens, 4);
     assert_eq!(session.tokens(), ids("qdone"));
 }
@@ -151,14 +164,15 @@ fn hybrid_stop_falls_back_to_the_generation_checkpoint() {
     let prompt = ids("<user>hi<asst>");
     let mut req = request(prompt.clone(), 50);
     req.stop = vec!["</x>".into()];
-    req.generation_start = Some(8);
+    req.prompt.generation_start = 8;
     let mut engine = ScriptedEngine::new_hybrid(ids("reply</x>tail"), 1_000, RB);
     let mut session = Session::default();
     let (events, finished) = run_collect(&mut engine, &mut session, req);
     assert_eq!(
         finished.reason,
         FinishReason::Stop {
-            stop: Some("</x>".into())
+            stop: Some("</x>".into()),
+            eos_token: None
         }
     );
     assert_eq!(text(&events), "reply");

@@ -70,7 +70,7 @@ impl StreamDecoder<'_> {
 }
 
 /// Fixtures for unit and integration tests.
-#[doc(hidden)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_support {
     use super::Tokenizer;
     use tokenizers::models::bpe::{BPE, Vocab};

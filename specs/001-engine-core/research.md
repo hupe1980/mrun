@@ -290,6 +290,8 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
 
 ## R17: `mistral` port (Devstral Small 2 24B)
 
+*Moved to 0.2 with Devstral (010 T010; 0.1 scope cut, 2026-10-15); kept for that port.*
+
 - **Graph** (mlx-lm `mistral3.py` → `ministral3.py`): `model_type` `mistral3` wraps a
   `text_config` of type `ministral3`; the family accepts that pair (others refused). Dense
   Llama-style stack: RMSNorm, attention without bias (GQA, `head_dim` from config), RoPE from

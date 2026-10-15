@@ -2,12 +2,15 @@
 
 #![allow(dead_code)]
 
+use mrun::chat::prompt::RenderedPrompt;
 use mrun::chat::tokenizer::Tokenizer;
 use mrun::chat::tokenizer::test_support::byte_tokenizer;
-use mrun::runtime::generate::{Event, EventSink, Finished, GenerateRequest, generate};
+use mrun::runtime::generate::{
+    Event, EventSink, Finished, GenerateRequest, PressureGauge, generate,
+};
 use mrun::runtime::scripted::ScriptedEngine;
 use mrun::runtime::session::Session;
-use mrun_engine::{CancelToken, Engine, Sampling};
+use mrun_engine::Engine;
 use std::sync::LazyLock;
 
 pub static TOKENIZER: LazyLock<Tokenizer> = LazyLock::new(byte_tokenizer);
@@ -18,14 +21,7 @@ pub fn ids(text: &str) -> Vec<u32> {
 }
 
 pub fn request(prompt: Vec<u32>, max_tokens: u32) -> GenerateRequest {
-    GenerateRequest {
-        prompt,
-        sampling: Sampling::GREEDY,
-        max_tokens,
-        stop: Vec::new(),
-        cancel: CancelToken::new(),
-        generation_start: None,
-    }
+    GenerateRequest::new(RenderedPrompt::from_tokens(prompt), max_tokens)
 }
 
 /// Runs one request and asserts that the session mirrors the engine state afterwards.
@@ -35,7 +31,15 @@ pub fn run(
     request: GenerateRequest,
     sink: &mut dyn EventSink,
 ) -> Finished {
-    let finished = generate(engine, session, &mut TOKENIZER.stream(), request, sink);
+    let pressure = PressureGauge::default();
+    let finished = generate(
+        engine,
+        session,
+        &mut TOKENIZER.stream(),
+        request,
+        sink,
+        &pressure,
+    );
     assert_eq!(
         engine.tokens(),
         session.tokens(),
@@ -62,7 +66,7 @@ pub fn text(events: &[Event]) -> String {
     events
         .iter()
         .filter_map(|event| match event {
-            Event::Token { text, .. } => Some(text.as_str()),
+            Event::Token { text, .. } | Event::Flush { text } => Some(text.as_str()),
             _ => None,
         })
         .collect()

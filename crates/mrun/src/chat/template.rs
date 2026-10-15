@@ -27,6 +27,10 @@ pub struct RenderOptions {
     pub enable_thinking: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<serde_json::Value>,
+    /// Harmony (gpt-oss) `low`, `medium` or `high`; left undefined when `None`, so the
+    /// template's default applies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug)]
@@ -142,6 +146,10 @@ impl ChatTemplate {
                 tools => Value::from(minijinja::value::Serde(&options.tools)),
                 add_generation_prompt => options.add_generation_prompt,
                 enable_thinking => options.enable_thinking,
+                reasoning_effort => options
+                    .reasoning_effort
+                    .as_deref()
+                    .map_or(Value::UNDEFINED, Value::from),
                 bos_token => &self.bos_token,
                 eos_token => &self.eos_token,
             })
@@ -348,11 +356,30 @@ mod tests {
                 &RenderOptions {
                     add_generation_prompt: true,
                     enable_thinking: true,
-                    tools: None,
+                    ..Default::default()
                 },
             )
             .unwrap();
         assert!(on.ends_with("<|im_start|>assistant"));
+    }
+
+    #[test]
+    fn reasoning_effort_is_passed_only_when_set() {
+        let template = ChatTemplate::new(
+            "{%- if reasoning_effort is not defined %}{%- set reasoning_effort = 'medium' %}\
+             {%- endif %}Reasoning: {{ reasoning_effort }}"
+                .into(),
+        )
+        .unwrap();
+        let render = |effort: Option<&str>| {
+            let options = RenderOptions {
+                reasoning_effort: effort.map(str::to_string),
+                ..RenderOptions::default()
+            };
+            template.render(&serde_json::json!([]), &options).unwrap()
+        };
+        assert_eq!(render(None), "Reasoning: medium");
+        assert_eq!(render(Some("high")), "Reasoning: high");
     }
 
     #[test]

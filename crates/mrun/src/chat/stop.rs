@@ -78,6 +78,11 @@ impl StopMatcher {
         }
     }
 
+    /// Bytes held back as a possible start of a stop sequence.
+    pub fn held(&self) -> usize {
+        self.held.len()
+    }
+
     /// Releases held text at the end of generation (no stop matched).
     pub fn finish(&mut self) -> String {
         std::mem::take(&mut self.held)
@@ -117,6 +122,7 @@ mod tests {
     fn held_text_is_flushed_at_finish() {
         let mut matcher = StopMatcher::new(vec!["##".into()]).unwrap();
         assert_eq!(matcher.feed("a#").emit, "a");
+        assert_eq!(matcher.held(), 1);
         assert_eq!(matcher.finish(), "#");
     }
 

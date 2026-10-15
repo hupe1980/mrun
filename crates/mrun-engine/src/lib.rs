@@ -13,3 +13,4 @@ pub use engine::{
     MemoryBudget, ModelInfo, PrefillPlan, Prefilled, Sampling, Segment, SegmentId, Step, TokenMask,
     chunk_len,
 };
+pub use models::SyntaxId;

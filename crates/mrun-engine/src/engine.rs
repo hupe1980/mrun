@@ -124,6 +124,22 @@ impl TokenMask {
         }
     }
 
+    /// Mask from a bitset in 32-bit words (bit `i % 32` of word `i / 32` allows token `i`), the
+    /// layout grammar engines produce. Missing words allow nothing; bits at or above `vocab` are
+    /// ignored.
+    pub fn from_words(words: &[u32], vocab: u32) -> Self {
+        let mut mask = Self::none_allowed(vocab);
+        for (i, &word) in words.iter().enumerate().take(vocab.div_ceil(32) as usize) {
+            mask.bits[i / 2] |= u64::from(word) << (32 * (i % 2));
+        }
+        if !vocab.is_multiple_of(64)
+            && let Some(last) = mask.bits.last_mut()
+        {
+            *last &= (1 << (vocab % 64)) - 1;
+        }
+        mask
+    }
+
     pub fn allow(&mut self, token: u32) {
         if token < self.vocab {
             self.bits[(token / 64) as usize] |= 1 << (token % 64);
@@ -183,7 +199,7 @@ pub const MAX_PLAN_CHECKPOINTS: usize = 3;
 
 /// Absolute, ascending positions where prefill chunks must end; recurrent state is also
 /// checkpointed at each `checkpoints` position. More than [`MAX_PLAN_CHECKPOINTS`] in one call
-/// is refused with `InvalidRange`.
+/// is refused with `TooManyCheckpoints`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PrefillPlan<'a> {
     pub boundaries: &'a [u32],
@@ -278,6 +294,8 @@ pub enum EngineError {
     ReservationExceeded { needed: u32, reserved: u32 },
     #[error("invalid range {start}..{end} for a sequence of {len} tokens")]
     InvalidRange { start: u32, end: u32, len: u32 },
+    #[error("{planned} planned checkpoints in one prefill; at most {max} are allowed")]
+    TooManyCheckpoints { planned: u32, max: u32 },
     #[error("unknown segment {0:?}")]
     UnknownSegment(SegmentId),
     #[error("unknown checkpoint {0:?}")]
@@ -429,6 +447,21 @@ mod tests {
         assert!(mask.is_allowed(129));
         assert!(!mask.is_allowed(1));
         assert!(!mask.is_allowed(500));
+    }
+
+    #[test]
+    fn token_mask_from_words_reads_a_32_bit_bitset() {
+        // Tokens 0, 33, 64 and 70 set; 70 lies beyond the vocabulary and is dropped.
+        let mask = TokenMask::from_words(&[1, 1 << 1, 1 | (1 << 6)], 70);
+        let allowed: Vec<u32> = (0..96).filter(|&t| mask.is_allowed(t)).collect();
+        assert_eq!(allowed, [0, 33, 64]);
+        let mut expected = TokenMask::none_allowed(70);
+        for token in [0, 33, 64] {
+            expected.allow(token);
+        }
+        assert_eq!(mask, expected);
+        // Missing words allow nothing.
+        assert_eq!(TokenMask::from_words(&[], 70), TokenMask::none_allowed(70));
     }
 
     #[test]

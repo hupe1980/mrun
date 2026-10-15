@@ -8,7 +8,8 @@
 
 Run the release-0.1 model families from the `mrun` binary on Apple Silicon: `qwen3_5_moe`
 (Qwen3.6-35B-A3B, hybrid), `qwen3_moe` (Qwen3-Coder-30B-A3B), `gpt_oss` (gpt-oss-20b, MXFP4,
-sliding window with sinks), `mistral` (Devstral Small 2 24B, dense) and `qwen3` (Qwen3-8B). Own
+sliding window with sinks) and `qwen3` (Qwen3-8B, internal test reference, no alias); Devstral
+Small 2 (`mistral`) moved to 0.2 (010 T010). Own
 `mlx-sys` over vendored mlx-c/MLX, a thin safe layer, a shared block library (attention: full,
 sliding window, sinks; Gated DeltaNet with mlx-lm's Metal kernel bound through
 `mlx_fast_metal_kernel_*`; dense and MoE feed-forward; norms; RoPE incl. YaRN) and one small family
@@ -34,7 +35,7 @@ sha2; toml
 `crates/mrun-engine/tests/reference/*.json`; template goldens in `crates/mrun/tests/templates/`
 **Testing**: cargo test. Linux CI: `ScriptedEngine` (allocation, growth, pipelining, checkpoints,
 moves), chat layer goldens, MLX CPU backend with tiny random-weight `qwen3`/`qwen3_moe`/`qwen3_5_moe`
-configs and tiny `gpt_oss`/`mistral` configs
+configs and a tiny `gpt_oss` config
 (GDN via the ops reference; MXFP4 on the CPU backend). macOS (`#[ignore]`, `MRUN_TEST_MODELS`): GDN kernel vs ops,
 conformance on real weights, exactness of moves/checkpoints, bench cells
 **Target Platform**: macOS 15+ on Apple Silicon; Linux x86_64/aarch64 for CI (CPU)
@@ -42,9 +43,9 @@ conformance on real weights, exactness of moves/checkpoints, bench cells
 **Performance Goals**: ≥ 90% of mlx-lm decode (1K, 16K) and prefill (16K) per model; cancel
 ≤ 300 ms p95 at 16K, 64K and max depth; first token ≤ 15 s cold for 8B
 **Constraints**: Budget by construction (III); exact greedy parity (II); no network; input caps
-**Scale/Scope**: 5 families (one model each), 1 live sequence; capacity on 48 GB ≈ 262K (Qwen3.6,
+**Scale/Scope**: 4 families (one model each), 1 live sequence; capacity on 48 GB ≈ 262K (Qwen3.6,
 max position), ≈ 105–120K (Qwen3-Coder), 131,072 (gpt-oss-20b, max position; ≈ 14.7 GiB of KV
-would allow > 300K (capped at 131K)), ≈ 78K (Devstral Small 2, 160 KiB/token), 40,960 (Qwen3-8B,
+would allow > 300K (capped at 131K)), 40,960 (Qwen3-8B,
 max position)
 
 ## Constitution Check
@@ -87,8 +88,8 @@ crates/
 │   │   ├── state.rs           # attention K/V + recurrent state, allocation, checkpoints, segments
 │   │   ├── models/blocks/     # shared blocks (layout per 010): attention (full, sliding, sinks),
 │   │   │                      # gated_delta, ffn (SwiGLU, SwigluOAI, MoE/SwitchGLU), norm, rope (default, YaRN)
-│   │   ├── models/registry.rs # model_type → family module, state kinds, chat syntax (010)
-│   │   ├── models/{qwen3.rs, qwen3_moe.rs, qwen3_5_moe.rs, gpt_oss.rs, mistral.rs}  # one per family
+│   │   ├── models/registry.rs # model_type → family module, state kinds, one SyntaxId (010)
+│   │   ├── models/{qwen3.rs, qwen3_moe.rs, qwen3_5_moe.rs, gpt_oss.rs}  # one per family
 │   │   ├── kernels/gated_delta.metal.inc   # mlx-lm kernel bodies, verbatim
 │   │   ├── sample.rs          # logprobs, greedy, top-k/p, min-p, seed, mask
 │   │   └── mlx_engine.rs      # MlxEngine

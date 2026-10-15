@@ -6,8 +6,7 @@
   MetalToolchain`), CMake ≥ 3.24; Rust per `rust-toolchain.toml`.
 - Weights in the HF cache (until 004: `hf download <repo>`): `mlx-community/Qwen3-8B-4bit`,
   `mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit`, a 4-bit MLX conversion of Qwen3.6-35B-A3B,
-  `mlx-community/gpt-oss-20b-MXFP4-Q8` and `mlx-community/Devstral-Small-2-24B-Instruct-2512-4bit`
-  (pins per 004 T005a).
+  and `mlx-community/gpt-oss-20b-MXFP4-Q8` (pins per 004 T005a).
 - Only to regenerate references or goldens: Python with mlx-lm `ba8a08f` and transformers at the
   pinned version.
 
@@ -17,7 +16,7 @@
 cargo build --release
 cargo test --workspace                          # unit, ScriptedEngine, tiny CPU models
 cargo test -p mrun --no-default-features        # no MLX build
-MRUN_TEST_MODELS=qwen3-8b,qwen3-coder,qwen3.6,gpt-oss,devstral cargo test -p mrun-engine --release -- --ignored
+MRUN_TEST_MODELS=qwen3-8b,qwen3-coder,qwen3.6,gpt-oss cargo test -p mrun-engine --release -- --ignored
 ```
 
 ## Scenarios
@@ -34,7 +33,7 @@ MRUN_TEST_MODELS=qwen3-8b,qwen3-coder,qwen3.6,gpt-oss,devstral cargo test -p mru
 3. **Cancel** (US2): paste a 16K-token prompt, press Ctrl-C during processing → ready within
    300 ms; ask again → stats show the kept whole chunks as cached.
 4. **Conformance** (US4): `mrun run <model> --check` → "20/20 prompts match" for each 0.1 family
-   (Qwen3.6, Qwen3-Coder, gpt-oss-20b, Devstral Small 2, Qwen3-8B). A model with an unsupported
+   (Qwen3.6, Qwen3-Coder, gpt-oss-20b, Qwen3-8B). A model with an unsupported
    `model_type` → exit 3 listing the supported families.
 5. **State primitives** (US5): `cargo test -p mrun-engine --release --test exactness -- --ignored`
    → split-off/append and checkpoint-restore logits bit-identical on each model, and gpt-oss

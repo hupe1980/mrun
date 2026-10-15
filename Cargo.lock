@@ -600,6 +600,7 @@ dependencies = [
  "flume",
  "minijinja",
  "minijinja-contrib",
+ "mrun",
  "mrun-engine",
  "serde",
  "serde_json",

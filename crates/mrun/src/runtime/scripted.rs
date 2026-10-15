@@ -496,10 +496,9 @@ impl Engine for ScriptedEngine {
         let end = start + tokens.len() as u32;
         let planned = plan.checkpoints_in(start, end).count();
         if planned > MAX_PLAN_CHECKPOINTS {
-            return Err(EngineError::InvalidRange {
-                start,
-                end,
-                len: start,
+            return Err(EngineError::TooManyCheckpoints {
+                planned: planned as u32,
+                max: MAX_PLAN_CHECKPOINTS as u32,
             });
         }
         self.grow(end, planned as u64 * self.info.recurrent_bytes)?;
@@ -598,13 +597,18 @@ impl Engine for ScriptedEngine {
     }
 
     fn trim(&mut self, len: u32) -> Result<(), EngineError> {
-        let confirmed = self.confirmed_len();
-        if len > confirmed {
+        let (active, confirmed) = (self.active_len(), self.confirmed_len());
+        if len > active {
             return Err(EngineError::InvalidRange {
                 start: len,
                 end: len,
-                len: confirmed,
+                len: active,
             });
+        }
+        if len == active && len > 0 {
+            // Keeping every position confirms a pending step.
+            self.pending = None;
+            return Ok(());
         }
         if self.hybrid() && self.recurrent.is_some() && len != 0 && len != confirmed {
             return Err(EngineError::NotTrimmable {
@@ -947,6 +951,51 @@ mod tests {
     }
 
     #[test]
+    fn trim_to_the_active_length_confirms_a_pending_step() {
+        for make in [engine, hybrid] {
+            let mut engine = make(100);
+            engine.reserve(0, 100).unwrap();
+            prefill(&mut engine, &[1, 2]);
+            let step = engine.forward(3).unwrap();
+            engine.sample(step, &Sampling::GREEDY, None, true).unwrap();
+            assert_eq!(engine.active_len(), 4);
+            engine.trim(4).unwrap();
+            assert!(!engine.has_pending());
+            assert_eq!(engine.tokens(), [1, 2, 3, 7]);
+            // The confirmed token is not fed again.
+            engine.forward(7).unwrap();
+            assert_eq!(engine.processed, [1, 2, 3, 7, 7]);
+            assert_eq!(
+                engine.trim(6),
+                Err(EngineError::InvalidRange {
+                    start: 6,
+                    end: 6,
+                    len: 5
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn hybrid_trim_with_a_pending_step_allows_only_both_ends() {
+        let mut engine = hybrid(100);
+        engine.reserve(0, 100).unwrap();
+        prefill(&mut engine, &seq(0..10));
+        let step = engine.forward(10).unwrap();
+        engine.sample(step, &Sampling::GREEDY, None, true).unwrap();
+        assert_eq!(
+            engine.trim(10),
+            Err(EngineError::NotTrimmable {
+                len: 10,
+                active: 12
+            })
+        );
+        assert!(engine.has_pending(), "nothing changed");
+        engine.trim(11).unwrap();
+        assert_eq!(engine.tokens(), seq(0..11));
+    }
+
+    #[test]
     fn no_pipelining_without_room_in_the_allocation() {
         let mut engine = engine(100);
         engine.reserve(0, 3).unwrap();
@@ -1018,11 +1067,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error,
-            EngineError::InvalidRange {
-                start: 0,
-                end: 8,
-                len: 0
-            }
+            EngineError::TooManyCheckpoints { planned: 4, max: 3 }
         );
         assert_eq!(engine.active_len(), 0);
     }

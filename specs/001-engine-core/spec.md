@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-engine-core`
 
-**Created**: 2026-10-14 · **Revised**: 2026-10-15 (design sprint 3: hybrid default, reshaped engine contract, audit fixes; open model architecture, D015)
+**Created**: 2026-10-14 · **Revised**: 2026-10-15 (design sprint 3: hybrid default, reshaped engine contract, audit fixes; open model architecture, D015; lean 0.1 cut, D025: Devstral to 0.2, one syntax per family, generation request for 002/003)
 
 **Status**: Draft
 
@@ -18,7 +18,7 @@
 
 ### Session 2026-10-15
 
-- Q: Which models? → A: Qwen3-8B (dense, correctness reference), Qwen3-Coder-30B-A3B (attention MoE), Qwen3.6-35B-A3B (hybrid: 30 Gated DeltaNet + 10 gated attention layers, MoE 256 experts, `model_type` `qwen3_5_moe`). The default is confirmed by `mrun bench` before release (D015). *Extended below: 0.1 adds gpt-oss-20b and Devstral Small 2.*
+- Q: Which models? → A: Qwen3-8B (dense, correctness reference: internal test reference, no alias), Qwen3-Coder-30B-A3B (attention MoE), Qwen3.6-35B-A3B (hybrid: 30 Gated DeltaNet + 10 gated attention layers, MoE 256 experts, `model_type` `qwen3_5_moe`). The default is confirmed by `mrun bench` before release (D015). *Extended below: 0.1 adds gpt-oss-20b; Devstral Small 2 moved to 0.2 (010 T010; 0.1 scope cut, 2026-10-15).*
 - Q: What is "greedy parity"? → A: The token chosen is the argmax over log-probabilities (`logits − logsumexp(logits)`) computed in the logits dtype, exactly as mlx-lm `generate_step` does, with the same prefill chunk split. Any fused (compiled) op mlx-lm uses must be bitwise-equal in mrun: either compiled the same way or proven equal unfused.
 - Q: What is the sequence state? → A: **Positional state**, the K/V of every attention layer (cut at any position by offset), plus, for models with linear-attention layers, **position-bound state** (convolution + delta-rule state per linear layer), which exists only at the position it was computed for. Models with position-bound state resume earlier positions from checkpoints (ARCHITECTURE "Sequence state").
 - Q: How large is a prefill chunk? → A: Depth-adaptive: `clamp(2048 × 16384 / depth, 128, 2048)` tokens where depth is the chunk's start position; chunks also end at caller-given boundaries. Cancellation is checked after every layer with one layer in flight. A cancelled partial chunk is discarded; whole chunks are kept.
@@ -29,7 +29,7 @@
 ### Session 2026-10-15 (open model architecture, D015)
 
 - Q: One model or many? → A: An open set of **families**. A family module maps `config.json` and weight names onto a shared block library (attention: full GQA, sliding window with optional sinks; Gated DeltaNet; dense SwiGLU and MoE feed-forward; norms; RoPE variants) and composes the layer stack; it is a port of the mlx-lm reference with a parity test. The design of the block library and registry (contract, tiers, locality) and the post-0.1 families are spec 010; 001 delivers the 0.1 blocks, registry and family modules; 002 owns the syntax registry.
-- Q: Which families ship in 0.1? → A: `qwen3_5_moe` (Qwen3.6-35B-A3B, default candidate), `qwen3_moe` (Qwen3-Coder-30B-A3B), `gpt_oss` (gpt-oss-20b, MXFP4), `mistral` (Devstral Small 2 24B, dense) and `qwen3` (Qwen3-8B, correctness reference).
+- Q: Which families ship in 0.1? → A: `qwen3_5_moe` (Qwen3.6-35B-A3B, default candidate), `qwen3_moe` (Qwen3-Coder-30B-A3B), `gpt_oss` (gpt-oss-20b, MXFP4) and `qwen3` (Qwen3-8B, internal test reference, no alias). `mistral` (Devstral Small 2 24B) is 0.2 (010 T010).
 - Q: How are sliding-window layers (gpt-oss) stored? → A: Full KV is kept and the window is applied when attending, so they are positional state like any attention layer: trimmable and movable at any position. A rotating buffer would make earlier positions unrecoverable; the cost is small (gpt-oss: 12 of 24 layers, 24 KiB per token).
 - Q: What happens with an unknown `model_type`? → A: Refused at load, before weights are read, with the list of supported families.
 
@@ -196,11 +196,10 @@ uninterrupted run that used the same chunk split.
   `qwen3_5_moe` (Qwen3.6-35B-A3B: 30 Gated DeltaNet + 10 gated attention layers, MoE; text model
   only, vision and `mtp.*` tensors ignored), `qwen3_moe` (Qwen3-Coder-30B-A3B-Instruct: full
   attention, MoE), `gpt_oss` (gpt-oss-20b: MXFP4 experts, attention alternating sliding window 128
-  and full, both with per-head sinks, MoE with biases), `mistral` (Devstral Small 2 24B,
-  `model_type` `mistral3` with text config `ministral3`: dense full attention, YaRN RoPE with
-  position-scaled queries; vision tower and projector ignored) and `qwen3` (Qwen3-8B, dense
-  reference). An unknown `model_type` MUST be refused before weights are read, naming it and
-  listing the supported families (message: 004 E034); unsupported quantization modes, layouts or tensor names MUST be
+  and full, both with per-head sinks, MoE with biases) and `qwen3` (Qwen3-8B, dense internal test
+  reference, no alias). (`mistral`, Devstral Small 2: moved to 0.2, 010 T010.) An unknown
+  `model_type` MUST be refused before weights are read, naming it and listing the supported
+  families (message: 004 E034); unsupported quantization modes, layouts or tensor names MUST be
   rejected with a named reason.
 - **FR-003**: Every loaded model MUST have a content identity over all files that determine output:
   weights, `config.json`, `generation_config.json`, `tokenizer.json`, `tokenizer_config.json`,
@@ -246,14 +245,21 @@ uninterrupted run that used the same chunk split.
   cached state first; total state bytes MUST never exceed the state capacity.
 - **FR-011**: Sampling MUST support temperature, top-p, top-k, min-p, seed, stop sequences and max
   tokens, validated before execution; temperature 0 is greedy as defined in the clarifications.
-  An optional token mask (002) MUST be applied between forward and sample.
+  The generation request carries the rendered prompt (`RenderedPrompt`: tokens, message marks
+  `{start, role}`, `system_tools_end`, `generation_start`) and an optional decode hook (002
+  FR-036): `on_token(id)` sees every sampled or forced token and returns the mask for the next
+  step (applied between forward and sample), `forced_tokens()` returns tokens appended without
+  sampling, and `ignore_eos()` makes EOS an ordinary token. Token events are lossless: one per
+  output token id, with the text emitted now and the bytes still held back (stop matching); the
+  EOS token that ended generation is reported in the `Stop` reason.
 - **FR-012**: Model work MUST run on one dedicated worker thread that owns all engine state. Events
   MUST flow through a bounded channel usable from sync and async code; a consumer that stops
   reading for the stall timeout (default 10 s) cancels its request and is never waited on again;
   `Finished` MUST always be delivered, exactly once, without blocking; a panic in a request MUST be
   caught, reported as an error finish, and followed by a state reset.
 - **FR-013**: Every finished request MUST report prompt tokens, cached tokens, generated tokens,
-  applied output limit, time to first token (first sampled token), prompt-processing speed,
+  applied output limit, time to first token (from the worker's dequeue to the first sampled
+  token), prompt-processing speed,
   generation speed and finish reason (stop, length, cancelled, rejected, error).
 - **FR-014**: A conformance command MUST compare greedy token IDs against stored reference outputs
   for each supported model and report the first mismatch with the log-probability margin there.
@@ -280,7 +286,8 @@ uninterrupted run that used the same chunk split.
   shared block library and composes the layer stack; family-specific logic MUST NOT appear outside
   that module and its chat syntax (constitution V). The family registry maps `model_type` (and,
   for wrapped configs, `text_config.model_type`) to a module, its state kinds and its chat syntax
-  (002); its full design is spec 010. Each module is a port of the pinned mlx-lm reference with a
+  (002): exactly one `SyntaxId` per family in 0.1 (`qwen3_moe` uses Qwen XML only); its full
+  design is spec 010. Each module is a port of the pinned mlx-lm reference with a
   parity test (SC-001).
 - **FR-024**: Sliding-window attention layers MUST keep the full KV of every position and apply the
   window when attending (attending only to the last `window` positions, in position order), so
@@ -295,7 +302,7 @@ uninterrupted run that used the same chunk split.
 ### Key Entities
 
 - **Family**: A module composing shared blocks for one `model_type`, with its state kinds and
-  chat syntax (registry in 010).
+  one `SyntaxId` (registry in 010).
 - **Model**: Loaded weights with family, configuration, layer kinds, tokenizer, template, EOS set
   and content identity.
 - **Sequence state**: Positional state (K/V of every attention layer, sliding-window layers
@@ -307,8 +314,8 @@ uninterrupted run that used the same chunk split.
   plus, where present, position-bound state at `end`).
 - **Session**: Committed tokens of the conversation and the tokens the state holds; the reuse
   policy of `mrun run` (003's prefix cache is the other policy of the same generation loop).
-- **Request**: Prompt, sampling, limits, stop sequences, optional mask, cancellation; produces
-  events and one `Finished`.
+- **Request**: Rendered prompt (tokens and marks), sampling, limits, stop sequences, optional
+  decode hook, cancellation; produces lossless token events and one `Finished`.
 - **Memory budget**: Physical memory, working set, reserve, weights, scratch, position-bound state,
   state capacity in bytes and tokens, probed depth.
 
@@ -316,14 +323,16 @@ uninterrupted run that used the same chunk split.
 
 ### Measurable Outcomes
 
-- **SC-001**: For each 0.1 family (Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, gpt-oss-20b, Devstral
-  Small 2 24B, Qwen3-8B), greedy outputs match mlx-lm at the pinned commit token for token on 100%
+- **SC-001**: For each 0.1 family (Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, gpt-oss-20b, Qwen3-8B),
+  greedy outputs match mlx-lm at the pinned commit token for token on 100%
   of the reference set (≥ 20 prompts up to 8K tokens, 256 output tokens), on the same
   weights and chunk split (all but the last prompt token in 2,048-token chunks).
 - **SC-002**: Generation speed is ≥ 90% of mlx-lm's on the same weights at 1K and 16K context for
-  each model on the target Mac.
+  each model on the target Mac. Qwen3.6 is also measured against Inco Splash (005 cell
+  `splash-bf16`); that cell is reported and does not gate.
 - **SC-003**: Prompt-processing speed is ≥ 90% of mlx-lm's (`--prefill-step-size 2048`) at 16K
-  context for each model on the target Mac.
+  context for each model on the target Mac. Qwen3.6 is also measured against Inco Splash (005 cell
+  `splash-bf16`); that cell is reported and does not gate.
 - **SC-004**: For each model, interrupting prompt processing at random points makes mrun ready for
   the next prompt within 300 ms, p95 over 50 trials per depth bucket: 16K, 64K and the model's
   maximum admissible depth (buckets above capacity skipped). The maximum-depth bucket is at risk:
@@ -345,7 +354,7 @@ uninterrupted run that used the same chunk split.
   state capacity plus one layer.
 - **SC-009**: 100% of template golden fixtures (≥ 10 per 0.1 family, including tools and tool
   results) render to the same text and token IDs as Hugging Face `apply_chat_template` at the
-  pinned version (Devstral Small 2: compared against mistral-common per 010 OQ-3).
+  pinned version.
 - **SC-010**: 100% of load-refusal fixtures (unknown `model_type`, unknown wrapped
   `text_config.model_type`, unsupported quantization mode, unknown tensor name) are refused before
   weights are read, and the unknown-architecture message lists every supported family.
@@ -363,8 +372,9 @@ uninterrupted run that used the same chunk split.
 - Linux builds compile and run engine-independent tests; the MLX engine is validated on macOS.
 - Qwen3.6-35B-A3B dimensions (expected: 32 value / 16 key linear heads of 128, conv kernel 4;
   2 KV heads of 256 on attention layers) are read from `config.json` and checked at load; so are
-  gpt-oss-20b (expected: 24 layers, 64 query / 8 KV heads of 64, window 128, 32 experts top-4) and
-  Devstral Small 2 (expected: 40 layers, 8 KV heads of 128) [dimensions to confirm on the pinned
-  weights].
-- Post-0.1 families (GLM-4.7-Flash MLA, Gemma 4, Nemotron-H Mamba2) and the block library's
-  design are spec 010; nothing in 001 depends on them.
+  gpt-oss-20b (expected: 24 layers, 64 query / 8 KV heads of 64, window 128, 32 experts top-4)
+  [dimensions to confirm on the pinned weights].
+- Post-0.1 families (Devstral Small 2 `mistral` in 0.2; later GLM-4.7-Flash MLA, Gemma 4,
+  Nemotron-H Mamba2) and the block library's design are spec 010; nothing in 001 depends on them.
+- Qwen3-8B (`qwen3`) is an internal test reference (parity, goldens, the MVP): no alias, no client
+  or bench cells (D015).
