@@ -168,6 +168,8 @@ pub struct ScriptedEngine {
     /// Requests a yield once this many prefill layers have run in total (one-shot).
     pub yield_after_layers: Option<u64>,
     pub panic_on_forward: bool,
+    /// Sleep before each sampled token (keepalive, deadline and disconnect tests).
+    pub step_delay: Option<std::time::Duration>,
     /// Incremented by every `reset_all` call (shared so tests can observe the worker thread).
     pub reset_all_calls: Arc<AtomicUsize>,
     pub layers_run: u64,
@@ -261,6 +263,7 @@ impl ScriptedEngine {
             cancel_after_layers: None,
             yield_after_layers: None,
             panic_on_forward: false,
+            step_delay: None,
             reset_all_calls: Arc::default(),
             layers_run: 0,
             processed: Vec::new(),
@@ -563,6 +566,9 @@ impl Engine for ScriptedEngine {
             return Err(EngineError::InvalidStep);
         }
         self.current = None;
+        if let Some(delay) = self.step_delay {
+            std::thread::sleep(delay);
+        }
         let token = self.script.get(self.next).copied().unwrap_or(SCRIPT_EOS);
         self.next += 1;
         if let Some(mask) = mask

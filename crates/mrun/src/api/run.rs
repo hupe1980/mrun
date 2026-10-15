@@ -66,23 +66,7 @@ pub async fn start(
     timing: Timing,
 ) -> Result<Turn, ApiError> {
     let syntax = ChatSyntax::get(loaded.syntax);
-    let rendering = {
-        let loaded = loaded.clone();
-        let request = request.clone();
-        tokio::task::spawn_blocking(move || {
-            render::render(
-                &request,
-                &RenderContext {
-                    template: &loaded.template,
-                    tokenizer: &loaded.tokenizer,
-                    syntax: loaded.syntax,
-                    supports_thinking: loaded.supports_thinking,
-                },
-            )
-        })
-        .await
-        .map_err(|_| ApiError::new(ErrorKind::Internal, "rendering failed"))??
-    };
+    let rendering = render_request(&loaded, &request).await?;
     for log in &rendering.logs {
         log_render(log);
     }
@@ -141,6 +125,28 @@ pub async fn start(
         requested_max,
         warnings,
     })
+}
+
+/// Renders off the async runtime (templates and tokenization of long prompts take a while).
+pub async fn render_request(
+    loaded: &Arc<Loaded>,
+    request: &ChatRequest,
+) -> Result<render::Rendered, ApiError> {
+    let loaded = loaded.clone();
+    let request = request.clone();
+    tokio::task::spawn_blocking(move || {
+        render::render(
+            &request,
+            &RenderContext {
+                template: &loaded.template,
+                tokenizer: &loaded.tokenizer,
+                syntax: loaded.syntax,
+                supports_thinking: loaded.supports_thinking,
+            },
+        )
+    })
+    .await
+    .map_err(|_| ApiError::new(ErrorKind::Internal, "rendering failed"))?
 }
 
 pub fn prompt_too_long(prompt: u32, capacity: u32) -> ApiError {

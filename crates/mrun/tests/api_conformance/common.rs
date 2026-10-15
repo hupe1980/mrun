@@ -56,6 +56,8 @@ pub struct Setup {
     pub capacity: u32,
     pub queue: usize,
     pub timing: Timing,
+    /// Delay per generated token.
+    pub step_delay: Option<Duration>,
 }
 
 impl Default for Setup {
@@ -67,6 +69,7 @@ impl Default for Setup {
                 keepalive: Duration::from_secs(10),
                 queue_wait: Duration::from_secs(600),
             },
+            step_delay: None,
         }
     }
 }
@@ -101,9 +104,14 @@ pub async fn start_with(replies: &[&str], setup: Setup) -> Server {
         script.push(SCRIPT_EOS);
     }
     let capacity = setup.capacity;
+    let step_delay = setup.step_delay;
     let factory: EngineFactory = Box::new(move |_| {
         let handle = EngineHandle::spawn(
-            move || Ok(ScriptedEngine::new(script, capacity)),
+            move || {
+                let mut engine = ScriptedEngine::new(script, capacity);
+                engine.step_delay = step_delay;
+                Ok(engine)
+            },
             tokenizer.clone(),
             DEFAULT_STALL_TIMEOUT,
         )?;

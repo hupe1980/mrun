@@ -4,6 +4,7 @@ pub mod chat_completions;
 pub mod collect;
 pub mod decode;
 pub mod handler;
+pub mod messages;
 pub mod model;
 pub mod run;
 pub mod sse;
@@ -28,6 +29,8 @@ pub fn router(state: ServerState) -> Router {
         .route("/health", get(health))
         .route("/api/hello", head(hello).get(hello))
         .route("/v1/chat/completions", post(chat_completions::handle))
+        .route("/v1/messages", post(messages::handle))
+        .route("/v1/messages/count_tokens", post(messages::count_tokens))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
