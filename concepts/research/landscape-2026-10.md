@@ -83,7 +83,7 @@ template [V].
 | Client (latest tag) | Wire protocol to a local server | Notes |
 |---|---|---|
 | OpenCode v2.0.29 (2026-10-14; repo `anomalyco/opencode`) | **Chat Completions** via `@ai-sdk/openai-compatible`; Anthropic via `@ai-sdk/anthropic` + `baseURL` | Docs show llama.cpp and LM Studio as `openai-compatible` [V docs]. mrun's pinned client. |
-| Claude Code | **Anthropic Messages** (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`), streaming, `tool_use`, thinking blocks; `count_tokens` used if present | A per-request attribution header at the top of the system prompt defeats exact prefix reuse unless `CLAUDE_CODE_ATTRIBUTION_HEADER=0` is set in `~/.claude/settings.json` [V via Ollama launcher; magnitude U]. Clients recommend 64k+ context [V Ollama docs]. |
+| Claude Code | **Anthropic Messages** (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`), streaming, `tool_use`, thinking blocks; `count_tokens` used if present | Before v2.1.181 a per-request attribution header at the top of the system prompt defeated exact prefix reuse unless `CLAUDE_CODE_ATTRIBUTION_HEADER=0` was set; since then it is stable per conversation for custom base URLs (fact check 2026-10-15). `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` removes a volatile token-count reminder in `~/.claude/settings.json` [V via Ollama launcher; magnitude U]. Clients recommend 64k+ context [V Ollama docs]. |
 | OpenAI Codex CLI rust-v0.162.1 (2026-10-09) | **Responses only**: `wire_api = "chat"` now errors ("no longer supported") [V `model-provider-info/src/lib.rs:100,130`] | Built-in OSS providers `ollama` and `lmstudio` (port 1234), both Responses [V]. |
 | Crush v0.98.1 (2026-10-09) | `openai-compat` or Anthropic-compatible provider types | [V README] |
 | Goose v1.54.0 (2026-10-08) | OpenAI, Anthropic and Ollama providers, plus **embedded llama.cpp** | [V source] |
@@ -273,3 +273,19 @@ Claim the advantage only on "TTFT and wall-clock on a recorded agent session" ag
 - Devstral 2 (2025-12-09): https://mistral.ai/news/devstral-2-vibe-cli/ ; Muse Glimmer (2026-08-10): https://artificialanalysis.ai/articles/muse-glimmer
 - Claude Code cache/attribution header: https://mykolaaleksandrov.dev/posts/2026/06/claude-code-llamacpp-prompt-cache-fix/
 - arXiv 2511.05502: https://arxiv.org/abs/2511.05502 ; MLX vs llama.cpp blog: https://yage.ai/share/mlx-apple-silicon-en-20260331.html
+
+## Addendum 2026-10-15 (fact check)
+
+- **Models**: add Laguna XS 2.1 (33B total / 3B active MoE, sliding-window 512 + global layers,
+  fits 48 GB, mlx-lm `laguna.py`); Qwen3.8-Flash-Next (~125B/6B) does not fit; Qwen4-27B was
+  announced 2026-09-22 without weights. Qwen3-Coder-Next released 2026-02-03.
+- **llama.cpp** is at b11633; `llama-server`'s default port changed to 9931 (2026-10-09); it gained
+  checkpoint save/restore and a MoE host-memory cache.
+- **Ollama** v0.40.5-rc0; its Claude Code launcher also sets `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`,
+  `AUTO_MODE_SERVER=0` and `MAX_CONTEXT_TOKENS`.
+- **oMLX main** added MTP snapshot restore on cache hits, requeueing under memory pressure, caching
+  of cancelled prompts and batched prefill.
+- **Claude Code ≥ 2.1.273** sends gateway hint headers with `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`
+  (e.g. `x-claude-code-context-compacted`).
+- **Codex** added `model_auto_compact_token_limit_scope`; **OpenCode** accepts `limit.input`.
+Source: [fact-check-2026-10-15](fact-check-2026-10-15.md).

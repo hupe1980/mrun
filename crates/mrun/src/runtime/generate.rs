@@ -160,6 +160,15 @@ fn run<E: Engine>(
         return FinishReason::Rejected("prompt plus output limit is too large".into());
     };
 
+    // Admit before touching the cache, so a rejected request leaves the conversation intact.
+    match engine.reserve(total) {
+        Ok(()) => {}
+        Err(error @ EngineError::Capacity { .. }) => {
+            return FinishReason::Rejected(error.to_string());
+        }
+        Err(error) => return FinishReason::Error(error.to_string()),
+    }
+
     // Reuse the longest exact prefix, always leaving the last prompt token to process.
     let common = session
         .kv_tokens
@@ -171,14 +180,6 @@ fn run<E: Engine>(
     engine.trim(common as u32);
     session.kv_tokens.truncate(common);
     *prefilled = common as u32;
-
-    match engine.reserve(total) {
-        Ok(()) => {}
-        Err(error @ EngineError::Capacity { .. }) => {
-            return FinishReason::Rejected(error.to_string());
-        }
-        Err(error) => return FinishReason::Error(error.to_string()),
-    }
     stats.cached_tokens = common as u32;
     if !sink.send(Event::Started {
         prompt: prompt.len() as u32,
@@ -510,6 +511,27 @@ mod tests {
             0,
             "nothing processed when rejected"
         );
+    }
+
+    #[test]
+    fn rejected_request_keeps_the_cached_conversation() {
+        let tokenizer = byte_tokenizer();
+        let first = run_with(
+            ScriptedEngine::new(Vec::new(), 20),
+            Session::default(),
+            request(ids(&tokenizer, "abcdefgh"), 1),
+        );
+        let cached = first.session.tokens().to_vec();
+        let rejected = run_with(
+            first.engine,
+            first.session,
+            request(ids(&tokenizer, "xyz"), 100),
+        );
+        assert!(matches!(
+            finished(&rejected.events).0,
+            FinishReason::Rejected(_)
+        ));
+        assert_eq!(rejected.session.tokens(), cached);
     }
 
     #[test]

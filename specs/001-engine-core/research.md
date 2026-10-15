@@ -5,7 +5,8 @@ Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [candle-capabilities](
 
 ## R1: Engine library and bindings
 
-- **Decision**: MLX v0.32.3 through mlx-c v0.7.0, wrapped by our own `mlx-sys` (vendored,
+- **Decision**: MLX v0.32.4 (2026-10-14; SDPA, gather_qmm, split-K quantized matmul and Metal
+  deadlock fixes over 0.32.3) through mlx-c v0.7.0, wrapped by our own `mlx-sys` (vendored,
   hash-checked, bindings checked in) and a ~60-function safe layer in `mrun-engine::mlx`.
 - **Rationale**: D010. mlx-rs 0.32 doesn't link on Linux, lacks quant `mode`, `device_info`,
   `metal_is_available`. Our own layer exposes exactly what the two model graphs need.

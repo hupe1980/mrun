@@ -119,7 +119,8 @@ without the attribution-header setting) and check that `mrun doctor` reports eac
   `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
   `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`), the context window and output
   limit from the running server's `/v1/models`, cache-stability settings
-  (`CLAUDE_CODE_ATTRIBUTION_HEADER=0`), and the API key by environment reference when one is
+  (`CLAUDE_CODE_ATTRIBUTION_HEADER=0`, `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`), gateway hint headers
+  (`CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`), and the API key by environment reference when one is
   configured.
 - **FR-006**: `mrun connect <client>` MUST print the equivalent persistent configuration; with
   `--write` it MUST show a diff, back up the original (mode 0600), write atomically, and

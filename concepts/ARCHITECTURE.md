@@ -8,7 +8,7 @@ One binary, two crates plus a sys crate:
 
 ```text
 crates/
-├── mlx-sys/     # bindgen over vendored mlx-c v0.7.0 + MLX v0.32.3 (cmake); checked-in bindings
+├── mlx-sys/     # bindgen over vendored mlx-c v0.7.0 + MLX v0.32.4 (cmake); checked-in bindings
 ├── mrun-engine/ # Engine trait + identity + budget (no MLX); behind feature `mlx`: safe MLX layer,
 │                # model graphs (qwen3, qwen3_moe), KV cache, sampler, loader, scratch probe
 └── mrun/        # the binary: cli, config, hub, chat (tokenizer, template, tool parsing,

@@ -17,7 +17,7 @@ and OpenCode (`13afea6`) are handled explicitly ([research](research.md)).
 ## Technical Context
 
 **Language/Version**: Rust 1.94.0 (edition 2024)
-**Primary Dependencies**: axum 0.8, tokio 1.53, tower-http (limits, trace), serde/serde_json
+**Primary Dependencies**: axum 0.8, tokio 1.53, tower-http 0.7 (limits, trace), serde/serde_json
 (`preserve_order`), llguidance 1.9.1 + toktrie 1.9.1, minijinja 3 (via 001's chat layer),
 ulid (ids), base64, subtle (constant-time key compare)
 **Storage**: None (stateless; reasoning round-trips inside client-held `encrypted_content`/signature)

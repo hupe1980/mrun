@@ -39,6 +39,7 @@ description: "Tasks for 003 Prefix Cache"
 - [ ] T014 [P] [US4] `cache/evict.rs`: LRU with turn-type order, never pinned, `clear_cache()` after evicting; tests
 - [ ] T015 [US4] `runtime/pressure.rs`: macOS dispatch memory-pressure source → worker queue, handled between steps (warning → 50%, critical → all unpinned); Linux no-op; injected-event test asserting < 1 s and running request unaffected
 - [ ] T016 [US4] `mrun cache clear` + `POST /mrun/cache/clear`; running request unaffected — test
+- [ ] T016a [US4] Compaction hint (FR-013): on `x-claude-code-context-compacted`, mark the previous live path's segments as first eviction candidates; test with a scripted two-request sequence
 
 ## Phase 7: Polish
 

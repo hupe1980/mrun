@@ -16,7 +16,7 @@ stores aliases and verified manifests under `~/.mrun`.
 
 **Language/Version**: Rust 1.94.0 (edition 2024), workspace pinned by `rust-toolchain.toml`
 **Primary Dependencies**: clap 4.6 + clap_complete 4.6 (CLI), hf-hub 1.0 (HF cache layout and
-downloads, tokio API), reqwest 0.13 (HEAD/range requests, used through hf-hub), sha2 0.11
+downloads; async by default), reqwest 0.13 (HEAD/range requests, used through hf-hub), sha2 0.11
 (verification), indicatif 0.18 (progress), toml 1.1 + serde (config), similar (config diffs)
 **Storage**: HF hub cache (`$HF_HUB_CACHE` or `$HF_HOME/hub` or `~/.cache/huggingface/hub`);
 `~/.mrun/` (`MRUN_HOME`) for `config.toml`, `manifests/*.toml`, `backups/`

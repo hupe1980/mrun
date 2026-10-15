@@ -19,7 +19,7 @@ streaming chat; `mrun run --check` runs the greedy conformance set against store
 ## Technical Context
 
 **Language/Version**: Rust 1.94.0 (edition 2024); C/C++17 for vendored MLX built via CMake
-**Primary Dependencies**: MLX v0.32.3 + mlx-c v0.7.0 (`a341b49`), vendored and hash-checked;
+**Primary Dependencies**: MLX v0.32.4 + mlx-c v0.7.0 (`a341b49`), vendored and hash-checked;
 bindgen output checked in (no libclang at build time); `tokenizers` 0.23 (HF tokenizer.json);
 `minijinja` 3 + `minijinja-contrib` (pycompat) for chat templates (tokenizers built without its
 `http` feature: no network, FR-015); `safetensors` via MLX loader;

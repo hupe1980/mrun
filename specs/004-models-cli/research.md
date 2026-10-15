@@ -45,12 +45,15 @@
     when a key is configured, otherwise a dummy), `ANTHROPIC_MODEL`,
     `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` (all the served
     id), `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `CLAUDE_CODE_AUTO_COMPACT_WINDOW` from capacity,
-    `CLAUDE_CODE_ATTRIBUTION_HEADER=0`.
+    `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` (removes a volatile
+    per-turn token count that breaks prefix reuse) and `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` (Claude
+    Code ≥ 2.1.273 then sends hint headers such as `x-claude-code-context-compacted`, which 003 uses
+    to drop superseded prefixes).
   - Codex: provider `mrun` with `base_url`, `wire_api = "responses"`, `env_key` (when keyed),
     `model_context_window` and `model_auto_compact_token_limit` from capacity (output limit from
     `/v1/models` `max_output_tokens`).
   - OpenCode: provider using `@ai-sdk/openai-compatible` with `baseURL`, model
-    `limit.context`/`limit.output`.
+    `limit.context`/`limit.input`/`limit.output`.
 - **Rationale**: Analysis I3 (all model slots, else background/subagent requests use `claude-*`
   ids), I4 (clients default to 200K–272K context; mrun's capacity is ≈ 100–110K on 48 GB), S4
   (global settings redirect all Claude Code use; launch is scoped). Key names are re-verified

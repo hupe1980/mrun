@@ -19,7 +19,7 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 
 ## Phase 2: Foundational (blocks all stories)
 
-- [ ] T004 `crates/mlx-sys`: vendor mlx-c v0.7.0 (`a341b49`) as a submodule and MLX v0.32.3 as a sha256-pinned tarball; `build.rs` builds via CMake with `FETCHCONTENT_SOURCE_DIR_MLX`, Metal + Foundation + Accelerate on macOS, CPU + OpenBLAS/LAPACKE on Linux; metallib next to the binary
+- [ ] T004 `crates/mlx-sys`: vendor mlx-c v0.7.0 (`a341b49`) as a submodule and MLX v0.32.4 (`36969c0`) as a sha256-pinned tarball; `build.rs` builds via CMake with `FETCHCONTENT_SOURCE_DIR_MLX`, Metal + Foundation + Accelerate on macOS, CPU + OpenBLAS/LAPACKE on Linux; metallib next to the binary
 - [ ] T005 `crates/mlx-sys/src/bindings.rs` generated once (`regen.sh`) and checked in; smoke test evaluating `add`
 - [ ] T006 `crates/mrun-engine/src/mlx/` [feature mlx]: `Array` (RAII, `!Send`, `!Sync`), error handler → `Result`; ops: zeros, astype, reshape, transpose, matmul, quantized_matmul and gather_qmm with mode, take (embedding), argpartition, take_along_axis, sort, cumsum, argmax, logsumexp, softmax precise, where, slice, slice_update, concatenate, random key/categorical; `fast::{sdpa, rope, rms_norm}`; eval/async_eval; stream; safetensors load; memory (active/peak/cache, limits, clear_cache, wired limit); `device_info`; `deep_copy` (zeros + slice_update + eval) with a pointer-inequality debug assertion; CPU unit tests per op
 - [ ] T007 **M0 gate on the M4 Pro**: `crates/mrun-engine/examples/spike.rs` runs 4-bit quantized matmul, gather_qmm, sdpa and memory APIs on Metal with timings; record go/no-go in research R1

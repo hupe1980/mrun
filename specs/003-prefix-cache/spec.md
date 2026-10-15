@@ -162,6 +162,9 @@ request and simulate memory pressure; verify eviction order and that requests su
   (prompt excerpts) on non-loopback binds, and MUST NOT expose excerpts in any HTTP response.
 - **FR-012**: The data model MUST allow entries to carry model-state checkpoints at chosen token
   boundaries, so hybrid-attention models can be supported later without redesign.
+- **FR-013**: When a client signals that it compacted its context (Claude Code's
+  `x-claude-code-context-compacted` hint header), cached state for the superseded conversation MUST
+  become the first eviction candidate.
 
 ### Key Entities
 

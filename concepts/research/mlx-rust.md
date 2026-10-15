@@ -9,7 +9,7 @@ the CLI. Read [landscape-2026-10.md](landscape-2026-10.md) first.
 | Repo | Commit (date) | Latest tag (date) |
 |---|---|---|
 | oxideai/mlx-rs (now `oxiglade/mlx-rs`) | `9051034` (2026-09-15) | crates `mlx-rs 0.32.0`, `mlx-sys 0.6.0` (2026-09-12) |
-| ml-explore/mlx | `bebd642` (2026-10-14) | v0.32.3 (2026-09-28) |
+| ml-explore/mlx | `36969c0` (2026-10-14) | v0.32.4 (2026-10-14; was v0.32.3 when this study was written) |
 | ml-explore/mlx-c | `a341b49` = v0.7.0 (2026-09-28) | v0.7.0 |
 | ml-explore/mlx-lm | `ba8a08f` (2026-10-10) | v0.32.0 (2026-09-30) |
 | jundot/omlx | `6feea9f` (2026-10-14) | v0.7.0 (2026-10-01); v0.7.1.dev1 |
@@ -254,7 +254,7 @@ tok/s prefill**. Measure them with `mlx_lm.benchmark -p 2048 -g 128` on the same
   MLX. Copy its *build approach* instead: a vendored, SHA-pinned MLX tarball; `target_os` gating; Linux CPU and
   BLAS detection; checked-in bindgen output.
 - **Plan**: a crate `mrun-mlx-sys` with mlx-c as a git submodule, **pinned to v0.7.0 (`a341b49`), with MLX
-  pinned to v0.32.3** (it includes the #3922 gather_qmm fix) by overriding `FETCHCONTENT_SOURCE_DIR_MLX` to a
+  pinned to v0.32.4** (updated 2026-10-15 per the fact check; includes the #3922 gather_qmm fix and later SDPA/gather_qmm fixes) by overriding `FETCHCONTENT_SOURCE_DIR_MLX` to a
   vendored, hash-checked source. Check in the generated bindings so normal builds need no libclang. `build.rs`
   links Foundation, Metal and Accelerate only on macOS, turns Metal off and requires OpenBLAS/LAPACKE on Linux,
   and puts the metallib next to the binary.

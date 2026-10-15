@@ -119,7 +119,7 @@ data: {"type":"message_stop"}
 - **Configuration:**
   - `ANTHROPIC_BASE_URL=http://127.0.0.1:8484`, without `/v1`; Ollama passes its bare host [V `OL cmd/launch/claude.go:69`].
   - Credentials: `ANTHROPIC_AUTH_TOKEN` (sent as Bearer) or `ANTHROPIC_API_KEY` (sent as x-api-key). Ollama sets `ANTHROPIC_API_KEY=` and `ANTHROPIC_AUTH_TOKEN=ollama` [V].
-  - Models: `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` (Haiku is used for background tasks) and `CLAUDE_CODE_SUBAGENT_MODEL` [V `OL claude.go:172-178`; `CC /model-config`].
+  - Models: `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` (on a custom base URL, background tasks use the main model unless `ANTHROPIC_DEFAULT_HAIKU_MODEL` is set; fact check 2026-10-15) and `CLAUDE_CODE_SUBAGENT_MODEL` [V `OL claude.go:172-178`; `CC /model-config`].
   - `CLAUDE_CODE_MAX_CONTEXT_TOKENS` applies directly to unrecognized IDs; `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the compaction window [V `CC /model-config`].
 - **Endpoints** [V `CC` protocol]:
   - `POST /v1/messages?beta=true`, always streamed in practice [U].
