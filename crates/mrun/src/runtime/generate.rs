@@ -25,6 +25,10 @@ impl EventSink for Vec<Event> {
 
 /// Per-request decode logic that runs on the engine thread (tool-call parser, grammar).
 pub trait DecodeHook: Send {
+    /// Mask for the first sampled step (a grammar armed from the start of the answer).
+    fn first_mask(&mut self) -> Option<TokenMask> {
+        None
+    }
     /// Sees every output token, sampled or forced; returns the mask for the next sampled step.
     fn on_token(&mut self, id: u32) -> Option<TokenMask>;
     /// Tokens to append next without sampling; asked whenever none are queued.
@@ -461,6 +465,10 @@ fn run<E: Engine, P: ReusePolicy>(
     let mut forced = VecDeque::new();
     let mut last = prompt.tokens[prompt.tokens.len() - 1];
     let mut decode_started = None;
+    if let Some(hook) = &mut hook {
+        mask = hook.first_mask();
+        forced.extend(hook.forced_tokens());
+    }
     loop {
         if cancel.is_cancelled() {
             return Ok(FinishReason::Cancelled);

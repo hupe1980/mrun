@@ -5,6 +5,7 @@
 
 use clap::Parser;
 use mrun::api::run::Timing;
+use mrun::chat::constrain::GrammarEnv;
 use mrun::chat::template::ChatTemplate;
 use mrun::chat::tokenizer::test_support::byte_tokenizer;
 use mrun::cli::serve::{self, EngineFactory, Loaded, RunningServer, ServeArgs};
@@ -97,10 +98,20 @@ pub async fn start(replies: &[&str]) -> Server {
 }
 
 pub async fn start_with(replies: &[&str], setup: Setup) -> Server {
+    let tokenizer = byte_tokenizer();
+    let replies = replies
+        .iter()
+        .map(|r| tokenizer.encode(r).unwrap())
+        .collect();
+    start_tokens(replies, setup).await
+}
+
+/// Replies as token ids: what the engine samples; grammar-forced tokens are not in them.
+pub async fn start_tokens(replies: Vec<Vec<u32>>, setup: Setup) -> Server {
     let tokenizer = Arc::new(byte_tokenizer());
     let mut script = Vec::new();
     for reply in replies {
-        script.extend(tokenizer.encode(reply).unwrap());
+        script.extend(reply);
         script.push(SCRIPT_EOS);
     }
     let capacity = setup.capacity;
@@ -115,6 +126,7 @@ pub async fn start_with(replies: &[&str], setup: Setup) -> Server {
             tokenizer.clone(),
             DEFAULT_STALL_TIMEOUT,
         )?;
+        let grammar = Some(Arc::new(GrammarEnv::new(&tokenizer, &[]).unwrap()));
         Ok(Loaded {
             model_id: "scripted-model".into(),
             handle,
@@ -123,6 +135,7 @@ pub async fn start_with(replies: &[&str], setup: Setup) -> Server {
             syntax: SyntaxId::Hermes,
             supports_thinking: true,
             defaults: Sampling::GREEDY,
+            grammar,
         })
     });
     let mut inner = serve::start_with(args(setup.queue), factory, setup.timing)
@@ -206,4 +219,41 @@ impl Server {
             text,
         }
     }
+}
+
+/// The tokens of `text` the engine would sample under `lark` (forced tokens removed), for
+/// scripting replies to constrained requests. `prefix` is free text before the grammar arms
+/// (the opener of an `auto` call).
+pub fn sampled(lark: &str, prefix: &str, text: &str) -> Vec<u32> {
+    let tokenizer = byte_tokenizer();
+    let env = GrammarEnv::new(&tokenizer, &[]).unwrap();
+    let mut matcher = env.matcher(lark).unwrap();
+    let mut out = tokenizer.encode(prefix).unwrap();
+    let ids = tokenizer.encode(text).unwrap();
+    let mut i = 0;
+    while i < ids.len() {
+        let forced = matcher.compute_ff_tokens();
+        if forced.is_empty() {
+            matcher.consume_token(ids[i]).unwrap();
+            out.push(ids[i]);
+            i += 1;
+        } else {
+            for id in forced {
+                assert_eq!(ids[i], id, "text disagrees with a forced token at {i}");
+                matcher.consume_token(id).unwrap();
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The grammar mrun plans for a Chat Completions `body` on this harness's model.
+pub fn plan(body: &Value) -> mrun::chat::constrain::Plan {
+    let tokenizer = byte_tokenizer();
+    let env = GrammarEnv::new(&tokenizer, &[]).unwrap();
+    let request =
+        mrun::api::chat_completions::decode(body, mrun::api::decode::DecodeOptions::default())
+            .unwrap();
+    mrun::chat::constrain::plan(&request, SyntaxId::Hermes, &env)
 }

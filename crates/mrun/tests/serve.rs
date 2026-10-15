@@ -37,6 +37,7 @@ fn scripted() -> EngineFactory {
             syntax: SyntaxId::Hermes,
             supports_thinking: true,
             defaults: Sampling::GREEDY,
+            grammar: None,
         })
     })
 }

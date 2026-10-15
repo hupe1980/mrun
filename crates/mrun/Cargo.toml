@@ -31,6 +31,8 @@ thiserror.workspace = true
 tokenizers.workspace = true
 tokio = { version = "1.53", features = ["rt-multi-thread", "net", "signal", "macros", "sync", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+llguidance = { version = "1.9.1", default-features = false, features = ["lark"] }
+toktrie = "1.9.1"
 
 [dev-dependencies]
 # Integration tests are built against the library with `test-support`.

@@ -9,7 +9,8 @@ use crate::api::model::{
     ApiError, ApiKind, ChatRequest, ErrorKind, Finish, GenEvent, Usage, Warning,
 };
 use crate::api::status::{Active, Tracker};
-use crate::chat::hook::RequestHook;
+use crate::chat::constrain;
+use crate::chat::hook::{Constraint, RequestHook};
 use crate::chat::render::{self, RenderContext, RenderLog};
 use crate::chat::syntax::registry::ChatSyntax;
 use crate::chat::syntax::{ParseEnd, ParseLog, ParseOut, ParserConfig};
@@ -100,9 +101,10 @@ pub async fn start(
     let mut generate = GenerateRequest::new(rendering.prompt, requested_max.max(1));
     generate.sampling = request.sampling.resolve(loaded.defaults);
     generate.stop = request.stop.clone();
-    generate.hook = RequestHook {
-        ignore_eos: request.ignore_eos,
-    }
+    generate.hook = RequestHook::new(
+        request.ignore_eos,
+        constraint(&loaded, &request, rendering.reasoning_open),
+    )
     .boxed();
     let cancel = generate.cancel.clone();
     let generation = loaded.handle.generate(generate).map_err(|e| match e {
@@ -158,6 +160,41 @@ pub async fn render_request(
     })
     .await
     .map_err(|_| ApiError::new(ErrorKind::Internal, "rendering failed"))?
+}
+
+/// Compiles the request's grammars; a grammar that fails to compile leaves the request
+/// unconstrained (logged `strict-unsupported`).
+fn constraint(loaded: &Loaded, request: &ChatRequest, reasoning_open: bool) -> Option<Constraint> {
+    let env = loaded.grammar.clone()?;
+    let plan = constrain::plan(request, loaded.syntax, &env);
+    let compile = |lark: &str| match env.matcher(lark) {
+        Ok(matcher) => Some(matcher),
+        Err(error) => {
+            eprintln!("mrun: strict-unsupported ({error})");
+            None
+        }
+    };
+    let on_opener = match (&plan.on_opener, constrain::opener(loaded.syntax)) {
+        (Some(lark), Some(opener)) => env.special(opener).zip(compile(lark)),
+        _ => None,
+    };
+    let answer = plan.answer.as_deref().and_then(compile);
+    let ban = plan
+        .ban_opener
+        .then(|| constrain::opener(loaded.syntax).and_then(|o| env.special(o)))
+        .flatten()
+        .map(|token| constrain::ban(env.vocab(), token));
+    if on_opener.is_none() && answer.is_none() && ban.is_none() {
+        return None;
+    }
+    let reasoning_end = reasoning_open.then(|| env.special("</think>")).flatten();
+    Some(Constraint {
+        env,
+        on_opener,
+        answer,
+        reasoning_end,
+        ban,
+    })
 }
 
 pub fn prompt_too_long(prompt: u32, capacity: u32) -> ApiError {

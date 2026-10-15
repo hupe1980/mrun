@@ -42,6 +42,11 @@ impl Tokenizer {
             .map_err(|error| TokenizerError(error.to_string()))
     }
 
+    /// The Hugging Face tokenizer (vocabulary access for grammar engines).
+    pub fn inner(&self) -> &tokenizers::Tokenizer {
+        &self.inner
+    }
+
     pub fn token_id(&self, token: &str) -> Option<u32> {
         self.inner.token_to_id(token)
     }

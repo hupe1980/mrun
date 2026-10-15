@@ -193,3 +193,113 @@ async fn xapi_body_over_64mib_413() {
         .unwrap();
     assert_eq!(reply.status().as_u16(), 413);
 }
+
+fn read_tool(strict: bool) -> Value {
+    json!([{"type": "function", "function": {"name": "read", "strict": strict,
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}},
+            "required": ["path"], "additionalProperties": false}}}])
+}
+
+#[tokio::test]
+async fn chat_tool_choice_required_forces_call() {
+    // Only the argument value and the choices after it are sampled; the opener, the envelope,
+    // the key and the closer are forced and never come from the model (xapi_forced_tokens_not_sampled).
+    let body = json!({"messages": [{"role": "user", "content": "go"}],
+        "tools": read_tool(false), "tool_choice": "required"});
+    let lark = common::plan(&body).answer.unwrap();
+    let full =
+        "<tool_call>\n{\"name\": \"read\", \"arguments\": {\"path\":\"a.rs\"}}\n</tool_call>";
+    let script = common::sampled(&lark, "", full);
+    // The tool is not strict, so only the envelope is forced; its arguments are free JSON.
+    assert!(
+        script.len() * 3 < full.len(),
+        "most of the call is forced: {} sampled",
+        script.len()
+    );
+    let server = common::start_tokens(vec![script], Setup::default()).await;
+    let reply = server.post("/v1/chat/completions", &body).await;
+    let message = &reply.json()["choices"][0]["message"];
+    assert_eq!(
+        message["tool_calls"][0]["function"]["name"], "read",
+        "{}",
+        reply.text
+    );
+    let args: Value = serde_json::from_str(
+        message["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(args, json!({"path": "a.rs"}));
+    assert_eq!(reply.json()["choices"][0]["finish_reason"], "tool_calls");
+}
+
+#[tokio::test]
+async fn chat_strict_tool_args_validate_schema() {
+    let body = json!({"messages": [{"role": "user", "content": "go"}], "tools": read_tool(true)});
+    let lark = common::plan(&body).on_opener.unwrap();
+    let good = common::sampled(
+        &lark,
+        "<tool_call>",
+        "\n{\"name\": \"read\", \"arguments\": {\"path\":\"a.rs\"}}\n</tool_call>",
+    );
+    // A model trying to write a number where the schema wants a string.
+    let tokenizer = mrun::chat::tokenizer::test_support::byte_tokenizer();
+    let mut bad = common::sampled(
+        &lark,
+        "<tool_call>",
+        "\n{\"name\": \"read\", \"arguments\": {\"path\":\"",
+    );
+    bad.pop();
+    bad.extend(tokenizer.encode("1}").unwrap());
+    let server = common::start_tokens(vec![good, bad], Setup::default()).await;
+    let reply = server.post("/v1/chat/completions", &body).await;
+    assert_eq!(
+        reply.json()["choices"][0]["finish_reason"],
+        "tool_calls",
+        "{}",
+        reply.text
+    );
+    // The masked token cannot be produced: the scripted engine refuses it, which surfaces as
+    // an engine error (a real model samples an allowed token instead).
+    let reply = server.post("/v1/chat/completions", &body).await;
+    assert_ne!(reply.status, 200, "{}", reply.text);
+}
+
+#[tokio::test]
+async fn chat_tool_choice_none_no_calls() {
+    let server = common::start(&["plain answer", "<tool_call>\n{}"]).await;
+    let body = json!({"messages": [{"role": "user", "content": "go"}],
+        "tools": read_tool(false), "tool_choice": "none"});
+    let reply = server.post("/v1/chat/completions", &body).await;
+    assert_eq!(
+        reply.json()["choices"][0]["message"]["content"],
+        "plain answer"
+    );
+    // The opener is banned for the whole reply (xapi_tool_choice_none_bias_pipelined).
+    assert_ne!(server.post("/v1/chat/completions", &body).await.status, 200);
+}
+
+#[tokio::test]
+async fn chat_response_format_json_object() {
+    let mut body = user("json please");
+    body["response_format"] = json!({"type": "json_object"});
+    let lark = common::plan(&body).answer.unwrap();
+    let script = common::sampled(&lark, "", "{\"a\":1}");
+    let tokenizer = mrun::chat::tokenizer::test_support::byte_tokenizer();
+    let server = common::start_tokens(
+        vec![script, tokenizer.encode("hello").unwrap()],
+        Setup::default(),
+    )
+    .await;
+    let reply = server.post("/v1/chat/completions", &body).await;
+    let content = reply.json()["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        serde_json::from_str::<Value>(&content).unwrap(),
+        json!({"a": 1})
+    );
+    assert_ne!(server.post("/v1/chat/completions", &body).await.status, 200);
+}

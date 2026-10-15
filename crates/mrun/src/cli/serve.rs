@@ -8,6 +8,7 @@ use crate::api::decode::DecodeOptions;
 use crate::api::record::Recorder;
 use crate::api::run::Timing;
 use crate::api::status::Tracker;
+use crate::chat::constrain::GrammarEnv;
 use crate::chat::template::ChatTemplate;
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::handle::EngineHandle;
@@ -79,6 +80,8 @@ pub struct Loaded {
     pub supports_thinking: bool,
     /// Sampling defaults from the model's generation config.
     pub defaults: Sampling,
+    /// Constrained decoding over the model's vocabulary; `None` disables it.
+    pub grammar: Option<Arc<GrammarEnv>>,
 }
 
 /// Engine readiness, observed by `/health` and the API routes.
