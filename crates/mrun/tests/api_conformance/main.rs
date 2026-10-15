@@ -3,3 +3,4 @@
 mod chat;
 mod common;
 mod messages;
+mod responses;

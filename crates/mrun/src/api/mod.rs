@@ -7,6 +7,7 @@ pub mod handler;
 pub mod messages;
 pub mod model;
 pub mod record;
+pub mod responses;
 pub mod run;
 pub mod sse;
 pub mod status;
@@ -35,6 +36,7 @@ pub fn router(state: ServerState) -> Router {
         .route("/v1/models", get(status::models))
         .route("/mrun/status", get(status::status))
         .route("/v1/messages/count_tokens", post(messages::count_tokens))
+        .route("/v1/responses", post(responses::handle))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),

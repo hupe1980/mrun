@@ -186,7 +186,19 @@ pub fn stream_response(turn: Turn, mut encoder: impl StreamEncode) -> Response {
             };
             Some((Ok(Bytes::from(frames)), (turn, encoder, None, done)))
         });
-    let mut response = Response::new(Body::from_stream(stream));
+    sse_response(Body::from_stream(stream))
+}
+
+/// An SSE response that reports `error` in-stream: the encoder's opening frames, then its
+/// failure event (Responses prompt-too-long, which Codex handles only in this form).
+pub fn stream_error_response(mut encoder: impl StreamEncode, error: ApiError) -> Response {
+    let mut frames = encoder.open();
+    frames.extend(encoder.encode(&GenEvent::Failed(error)));
+    sse_response(Body::from(frames.concat()))
+}
+
+fn sse_response(body: Body) -> Response {
+    let mut response = Response::new(body);
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
