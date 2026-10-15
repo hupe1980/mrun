@@ -13,15 +13,16 @@ D003 Candle, D005 local-only planning, D016 evidence gating) are history: see gi
 | D012 | Memory budgeted by construction, not per-allocation hooks | Accepted |
 | D013 | Specs, concepts and Spec Kit tooling are tracked in git | Accepted |
 | D014 | Ship Anthropic Messages, OpenAI Chat Completions and stateless Responses together | Accepted 2026-10-14 |
-| D015 | Models: an open set of families (block library + family modules + syntax registry); 0.1: Qwen3.6, Qwen3-Coder, gpt-oss, Devstral, Qwen3-8B reference | Revised 2026-10-15 |
-| D017 | Prefix store: live path plus moved-out branches; checkpoints for hybrids; plain LRU | Revised 2026-10-15 |
+| D015 | Models: an open set of families (block library + family modules + syntax registry); 0.1: Qwen3.6, Qwen3-Coder, gpt-oss (Qwen3-8B internal reference); Devstral 0.2 | Revised 2026-10-15 (lean 0.1) |
+| D017 | Prefix store: live path plus moved-out branches; checkpoints for hybrids; plain LRU; five miss causes | Revised 2026-10-15 (lean 0.1) |
 | D018 | One active sequence; FIFO queue; batching only if traces show agents waiting on each other | Accepted 2026-10-15 |
 | D019 | Contiguous per-layer attention arrays, no paging; state moves between live path and branches | Accepted 2026-10-15 |
 | D020 | Resident model, never unloaded on an idle timer | Accepted 2026-10-15 |
 | D021 | Fix client-side cache breakers on the server only when narrow and named (attribution nonce) | Accepted 2026-10-15 |
-| D022 | Login service loads the model lazily on the first request; `--preload` is opt-in | Accepted 2026-10-15 |
+| D022 | Login service loads the model lazily on the first request; `--preload` is opt-in | Deferred 2026-10-15 (no launchd service in 0.1, D025) |
 | D023 | Persisted prefix entries bound to cache key + on-disk format + MLX version (not mrun version) | Accepted 2026-10-15 |
-| D024 | Speculation ships n-gram/suffix drafting first; MTP gated on measured acceptance; sidecar never in the cache key | Accepted 2026-10-15 |
+| D024 | Speculation ships n-gram/suffix drafting first; MTP and DFlash2 drafts gated on measured acceptance; sidecar never in the cache key | Revised 2026-10-15 |
+| D025 | Lean release 0.1: three aliases, loopback only, five miss causes, three warnings, `connect` prints only, Homebrew tap with an ad-hoc-signed tarball; service, `/metrics`, notarization, SBOM, config file, regression mode deferred | Accepted 2026-10-15 |
 
 ## D010: Engine is MLX
 
@@ -48,29 +49,34 @@ defaults to one sixth of physical memory, between 2 and 8 GiB (8 GiB on a 48 GB 
   that composes shared blocks (full GQA, sliding-window with sinks and MLA attention; Gated
   DeltaNet and later Mamba2; dense and mixture-of-experts feed-forward), plus an ordered set of
   accepted tool-call and reasoning syntaxes from a registry (Hermes JSON, Qwen XML, Harmony,
-  Mistral, GLM XML); the template probe at load picks the first that matches. Each module
-  is a port of the mlx-lm reference with a parity test. Unknown architectures are refused with the
-  list of supported families. No plugin system: adding a family is one module and one test.
-- **Release 0.1** covers every state kind and the most used tool formats: Qwen3.6-35B-A3B (hybrid
-  linear attention; vendor-reported 73.4% SWE-bench Verified; ≈20 KiB per token, so its 262K
-  window fits a 48 GB Mac), Qwen3-Coder-30B-A3B (full attention MoE), gpt-oss-20b (sliding window
-  with sinks, Harmony format), Devstral Small 2 (dense, Mistral tool format), and Qwen3-8B as the
-  dense correctness reference for small Macs.
-- **After 0.1** (spec 010): GLM-4.7-Flash (MLA), Gemma 4 (sliding window + global), Nemotron-H
-  (Mamba2 hybrid), then families by demand.
-- **Default**: whichever 0.1 model wins the agent suite of `mrun bench` on the M4 Pro (task in 005);
-  Qwen3.6 is the expected winner. A 0.1 alias whose model fails a Tier 1 gate (incl. 010 SC-002,
-  5 of 5 client runs) ships with `tier: 2` in its manifest, is labelled by `mrun show`/`ls`, and
-  cannot be the default.
+  Mistral, GLM XML). At 0.1 each family names exactly one syntax and load checks that the
+  template renders its markers, else refuses (ordered syntax sets wait for a model that needs
+  them). Each module is a port of the mlx-lm reference with a parity test. Unknown architectures
+  are refused with the list of supported families. No plugin system: adding a family is one module
+  and one test.
+- **Release 0.1** (lean, D025) covers every 0.1 state kind with three aliases: `qwen3.6`
+  (Qwen3.6-35B-A3B, hybrid linear attention; vendor-reported 73.4% SWE-bench Verified; ≈20 KiB per
+  token, so its 262K window fits a 48 GB Mac), `qwen3-coder` (Qwen3-Coder-30B-A3B, full attention
+  MoE) and `gpt-oss` (gpt-oss-20b, sliding window with sinks, Harmony format). Qwen3-8B (`qwen3`)
+  is an internal dense test reference: parity and goldens only, no alias, no client or bench cells.
+- **0.2** (spec 010): Devstral Small 2 (`mistral`, Mistral tool format). **Later**: GLM-4.7-Flash
+  (MLA), Gemma 4 (sliding window + global), Nemotron-H (Mamba2 hybrid), then families by demand.
+- **Default**: whichever 0.1 alias wins the agent suite of `mrun bench` on the M4 Pro (task in 005);
+  Qwen3.6 is the expected winner. An alias that misses the client gate (002 SC-001) is dropped from
+  the release; there are no tier labels in 0.1.
 
 ## D017: Prefix store
 
 The live path is the active sequence state. Other conversations are branches whose state was moved
 out when the live path switched; switching back moves it in again. Moves go one layer at a time, so
 state is never held twice and long conversations survive subagents. Hybrid models resume from
-checkpoints captured during prefill at message boundaries. Eviction is plain LRU over branch
-leaves: two 2026 studies found LRU near-optimal for single long sessions, and turn-type or
-session-priority tiers did not pay for themselves. Earlier ideas dropped in the third audit:
+checkpoints captured during prefill at message boundaries (at most 8 per path; the shallowest
+other than the first is dropped). Eviction is plain LRU over branch leaves: two 2026 studies found
+LRU near-optimal for single long sessions, and turn-type or session-priority tiers did not pay for
+themselves. Misses report five causes (`new`, `changed`, `evicted`, `model`, `disabled`) plus the
+divergence position, its message index and role, and the checkpoint gap; `template` re-renders are
+a bench-side diagnostic. Dropped in the lean cut: soft pins for queued requests, `--debug-cache`,
+the `x-mrun-cache` request header. Earlier ideas dropped in the third audit:
 copy-based restore (capped conversations at about half of capacity), idle warm-up, session and
 compaction hints, `cache_control` boundaries.
 
@@ -99,9 +105,9 @@ prompt; it defeats all reuse for users who start Claude Code without `mrun launc
 only that value with a fixed one of the same length (as llama.cpp does). Broader prompt rewriting
 is rejected: an unanchored version elsewhere truncated users' system prompts.
 
-## D022: Lazy model load in the login service
+## D022: Lazy model load in the login service (deferred)
 
-A login service that loads the default model claims ≈20 GB at every login, whether or not an agent
+Deferred with the launchd service (D025); kept for the post-0.1 service. A login service that loads the default model claims ≈20 GB at every login, whether or not an agent
 runs that day. `serve --service` (008) creates the engine on the first dequeued request, sends
 keepalives or progress to waiting requests while loading, and reports `loaded` in `/health`; the
 model then stays resident (D020). Before load, capacity comes from the cached probe or the 004 fit
@@ -123,3 +129,30 @@ measured offline with an existing implementation (Ollama's MLX runner MTP module
 cross-check) and shows α₁ ≥ 0.8 and a modeled speed-up ≥ 1.15×. If it ships, the MTP sidecar is
 recorded in the manifest and shown by `mrun show`, but never enters the model identity or cache
 key: the head does not change target state.
+
+## D025: Lean release 0.1
+
+**Context.** The 2026-10-15 implementability audit found 0.1 carrying five families, five client
+gates, nine miss causes, eight warnings, a persistent-config writer, a login service, metrics and
+notarization. Splash (VISION) raised the cost of a late release.
+
+**Decision.** 0.1 ships what an agent user on one Mac needs and what mrun's differentiators rest
+on (exact reuse with explained misses, fixed budget, client fidelity, fair benchmark):
+- Families and aliases per D015; one syntax per family; Mistral parser and Devstral in 0.2.
+- One client gate: each alias × Claude Code, Codex and OpenCode, started with `mrun launch`,
+  completes the scripted task 3 of 3 times (002 SC-001). Pinned client versions run on every PR;
+  the latest releases (Claude Code npm `stable` and `latest`) are checked by hand before a release.
+- Loopback only; non-loopback binds with API keys later.
+- Five miss causes (D017); three in-band warnings (`tool-args-invalid`, `max-tokens-clamped`,
+  `image-omitted`), everything else logged on the server.
+- `mrun connect` prints configuration only; `doctor` checks chip and budget, low-power mode, port,
+  server reachability and client pitfalls; no config file (flags and `MRUN_*` only).
+- Deferred tool loading and constrained decoding (llguidance) stay.
+- Distribution: Homebrew tap and a CI-built, ad-hoc-signed tarball, `--version`, an idle-sleep
+  assertion while requests run. Deferred: Developer ID signing and notarization, SBOM, launchd
+  service with lazy load (D022), `/metrics`.
+- Bench: competitors llama.cpp, Ollama, oMLX, mlx-lm and Splash, started by hand; regression mode,
+  automated start/stop, thermal slope and RSS sampling later.
+
+**Consequence.** Every cut keeps its spec ID and is marked "Removed (0.1 scope cut, 2026-10-15)"
+or moved to a "Later" section.

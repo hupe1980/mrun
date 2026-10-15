@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-14
 
-**Status**: Draft (revised 2026-10-15 after the third audit; open model architecture, D015)
+**Status**: Draft (revised 2026-10-15 after the third audit; open model architecture, D015; lean 0.1 cut, D025)
 
 **Input**: User description: "`mrun serve` exposes OpenAI Chat Completions, Anthropic Messages (with count_tokens) and stateless OpenAI Responses on loopback, with streaming, tool calls and structured output, so Claude Code, Codex and OpenCode complete real tool loops against a local model. One internal request model; truthful usage and finish reasons; bounded queue; cancellation on disconnect."
 
@@ -28,9 +28,17 @@
 
 ### Session 2026-10-15 (open model architecture, D015)
 
-- Q: How are tool calls and reasoning parsed across model families? → A: Through a syntax registry: one streaming parser per syntax (Hermes JSON, Qwen XML, Harmony, Mistral `[TOOL_CALLS]`; GLM XML with 010). The family names an ordered set of accepted syntaxes; the template probe at load picks the first that matches (FR-032). Every FR-004 rule applies to every syntax.
+- Q: How are tool calls and reasoning parsed across model families? → A: Through a syntax registry: one streaming parser per syntax (0.1: Hermes JSON, Qwen XML, Harmony; Mistral `[TOOL_CALLS]` with 0.2, GLM XML with 010). Each family names one syntax; load checks that the template renders that syntax's markers, else refuses (FR-032). Every FR-004 rule applies to every syntax.
 - Q: How is thinking controlled on gpt-oss, which always reasons? → A: By reasoning effort (low/medium/high) mapped from Anthropic `thinking` and OpenAI `reasoning_effort` (research §3b); "off" means `low`. Its reasoning is always returned in the API's reasoning field.
-- Q: Models without a thinking mode (Qwen3-Coder, Devstral Small 2)? → A: Served without thinking, with a `thinking-unsupported` warning when the request asked for it.
+- Q: Models without a thinking mode (Qwen3-Coder)? → A: Served without thinking; a request that asked for it is logged server-side (`thinking-unsupported`).
+
+### Session 2026-10-15 (lean 0.1 cut, D025)
+
+- One client gate (SC-001): each 0.1 alias × each client, started with `mrun launch`, 3 of 3 runs. Pinned client versions run on every PR; the latest releases are checked by hand before a release (Claude Code npm `stable` and `latest`).
+- In-band warnings are `tool-args-invalid`, `max-tokens-clamped` and `image-omitted`; every other condition is logged on the server.
+- Removed: progress in keepalives (FR-026), the `--thinking` server override, non-loopback binds with API keys (FR-012 second part, Later), the Mistral parser (FR-034, Later, with Devstral in 0.2).
+- Codex never sends `max_output_tokens` and, from 0.163, ends the turn on `response.incomplete`: Responses requests without a limit get `capacity − prompt` (FR-019).
+- `--record` keeps the request body, arrival time and allow-listed session headers, including Claude Code's `x-claude-code-prev-tool-durations` (FR-021).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -42,9 +50,9 @@ the local model.
 
 **Why this priority**: This is the product. Without working agent loops the engine is a demo.
 
-**Independent Test**: With `mrun serve` running and each client configured by hand-written config
-(as documented in the quickstart), run a scripted read-edit-test task in a fixture repository and
-confirm it completes with the tests passing, for each of the three clients.
+**Independent Test**: Start each client with `mrun launch` (004) against each 0.1 alias, run the
+scripted read-edit-test task in a fixture repository and confirm it completes with the tests
+passing (SC-001). Before 004 lands, the quickstart's hand-written client configs are used.
 
 **Acceptance Scenarios**:
 
@@ -113,7 +121,7 @@ timeouts and that the next request runs normally.
 ### Edge Cases
 
 - Tool definitions with deeply nested or very large schemas: rejected above documented limits.
-- A strict schema llguidance cannot compile: generated unconstrained, `strict-unsupported` warning.
+- A strict schema llguidance cannot compile: generated unconstrained; logged (`strict-unsupported`).
 - Parallel tool calls requested: the model may emit several; each is reported with a stable id.
 - A tool result referencing an unknown call id: rejected with the id named.
 - Streaming split inside a multi-byte character or inside tool-call JSON: output stays valid.
@@ -123,15 +131,15 @@ timeouts and that the next request runs normally.
 - `max_tokens` above capacity or absent: clamped / defaulted per FR-019; rejected only when the
   prompt itself does not fit.
 - History tool-call arguments that are not a JSON object, sent to a template that re-serializes
-  arguments (Qwen3-Coder, Qwen3.6, gpt-oss): rendered as raw text with a warning (FR-004).
+  arguments (Qwen3-Coder, Qwen3.6, gpt-oss): rendered as raw text; logged (FR-004).
 - gpt-oss emitting a call to a built-in tool (`browser.*`, `python`): not reported as a call;
-  `tool-unknown` warning.
+  logged (`tool-unknown`).
 - A history assistant message with several tool calls sent to gpt-oss (whose template renders one
-  call per message): split into single-call messages with a `history-calls-split` warning.
+  call per message): split into single-call messages; logged (`history-calls-split`).
 - A streaming request queued for more than 300 s: the stream stays alive for every client.
 - Images inside tool results (Claude Code reading a PNG, Codex `view_image`): replaced per FR-020.
 - A browser page on the same machine calling the server: rejected by the Host/Origin policy.
-- Non-loopback bind requested: refused unless an explicit flag and an API key are configured.
+- Non-loopback bind requested: refused; 0.1 binds loopback only (FR-012).
 
 ## Requirements *(mandatory)*
 
@@ -151,14 +159,16 @@ timeouts and that the next request runs normally.
   message header), so decoding stays pipelined; `required` and named choices are
   enforced by grammar.
 - **FR-004**: Tool-call arguments MUST be valid JSON matching the declared schema when the client
-  requests strict tools (`strict: true` or equivalent), using constrained decoding. A strict schema
-  that llguidance cannot compile is generated unconstrained with a `strict-unsupported` warning
-  (FR-022), never rejected. Non-strict arguments are never modified. If they are not valid JSON:
+  requests strict tools (`strict: true` or equivalent), using constrained decoding; tokens the
+  grammar forces (scaffold such as `</parameter>\n<parameter=`) are appended without sampling,
+  which is exact and saves steps (SchemaFill, delta §5). A strict schema that llguidance cannot
+  compile is generated unconstrained and logged (`strict-unsupported`), never rejected. Non-strict
+  arguments are never modified. If they are not valid JSON:
   Chat Completions and Responses return the call with its raw arguments string, and such raw
   strings are accepted unvalidated in later history; Anthropic Messages (whose `input` must be an
   object) returns the model's raw call text as a text block instead of a tool call. Either way a
   `tool-args-invalid` warning is reported. When streaming, argument text is forwarded as it arrives
-  only where it is the model's raw JSON (Hermes, Harmony and Mistral syntaxes on Chat/Responses);
+  only where it is the model's raw JSON (Hermes and Harmony syntaxes on Chat/Responses);
   arguments synthesized from other syntaxes (Qwen3-Coder and Qwen3.6 XML) and all Anthropic
   `tool_use` input
   are buffered per call and emitted when the call closes, so the fallback above is always
@@ -166,13 +176,14 @@ timeouts and that the next request runs normally.
   function) MAY be recognized, because it does not change argument content. Values are never
   coerced or evaluated (research §3); argument text that contains the syntax's own closing tags (a
   file edit of a parser) MUST round-trip unchanged; a call to an undeclared tool is passed through
-  with a `tool-unknown` warning.
+  and logged (`tool-unknown`).
   These rules apply to every syntax in the registry (FR-032).
-  **History re-rendering is byte-stable per template**: Qwen3 and Mistral render string arguments
-  verbatim, so the previous reply re-renders exactly. Qwen3-Coder, Qwen3.6 (`|items`, `tojson`) and
-  gpt-oss (`tojson`) re-serialize arguments, so the next turn may miss at the previous reply with
-  cause `template` (003). On those templates, history arguments that do not parse as a JSON object
-  are rendered verbatim in place of the parameter list or JSON, with a `history-args-raw` warning.
+  **History re-rendering is byte-stable per template**: Qwen3 renders string arguments verbatim,
+  so the previous reply re-renders exactly. Qwen3-Coder, Qwen3.6 (`|items`, `tojson`) and gpt-oss
+  (`tojson`) re-serialize arguments, so the next turn may miss at the previous reply, reported as
+  cause `changed` at that message (003; bench diagnoses it as a template re-render). On those
+  templates, history arguments that do not parse as a JSON object are rendered verbatim in place of
+  the parameter list or JSON and logged (`history-args-raw`).
 - **FR-005**: Structured output (JSON schema response format) MUST be supported with the same
   constrained decoding and the same `strict-unsupported` fallback.
 - **FR-006**: The Responses API MUST be stateless: `previous_response_id` and item references MUST
@@ -194,8 +205,9 @@ timeouts and that the next request runs normally.
 - **FR-010**: The server MUST run one generation at a time with a FIFO queue (default 16 waiting).
   The queue deadline covers waiting time only (default 600 s, configurable). Streaming responses
   MUST send headers at once and, in every phase (queued, prefilling, generating, including while a
-  tool call is buffered per FR-004), a keepalive whenever 10 s pass without an event, in a form
-  the client's idle timer counts: Responses `response.created` at once, then
+  tool call is buffered per FR-004), a keepalive whenever 10 s pass without an event (well under
+  the 180 s after which Claude Code before 2.1.299 aborts a silent custom-base-URL stream), in a
+  form the client's idle timer counts: Responses `response.created` at once, then
   `response.in_progress` (Codex drops SSE comments and aborts after 300 s without an event);
   Anthropic `ping` (Claude Code aborts after 300 s without bytes); Chat SSE comments. Full-queue
   and deadline errors MUST be immediate and explicit; `retry-after` is integer seconds, at most 60
@@ -203,16 +215,16 @@ timeouts and that the next request runs normally.
 - **FR-011**: Client disconnect MUST cancel work promptly, within 300 ms, whether the request is
   queued, prefilling, generating or non-streaming, and release its reservation. Disconnects are
   detected by watching each connection for close, not only by failed writes.
-- **FR-012**: The server MUST bind to loopback by default and accept only loopback `Host` headers
+- **FR-012**: The server MUST bind to loopback only and accept only loopback `Host` headers
   (`127.0.0.1`, `localhost`, `[::1]` with the server port), reject requests carrying a browser
-  `Origin` other than the server's own, and send no CORS headers. Binding elsewhere MUST require an
-  explicit flag and an API key read from `MRUN_API_KEY` or `--api-key-file` (never a command-line
-  value), compared in constant time.
+  `Origin` other than the server's own, and send no CORS headers. A non-loopback `--host` MUST be
+  refused at startup. *Second part removed (0.1 scope cut, 2026-10-15; see Later): binding
+  elsewhere with an API key from `MRUN_API_KEY` or `--api-key-file`, compared in constant time.*
 - **FR-013**: Reasoning/thinking output MUST be separated from answer text per each API's
   conventions. Thinking control is per family (FR-035). Thinking is on only when the request asks for it (Anthropic `thinking` enabled or
   adaptive; OpenAI `reasoning_effort` / Responses `reasoning.effort` not in {none, minimal}; a bare
-  `reasoning` object does not count). A server setting `--thinking client|off|on` (default
-  `client`) overrides clients. Anthropic `budget_tokens` is honored by closing the thinking block
+  `reasoning` object does not count). *The `--thinking client|off|on` server override is removed
+  (0.1 scope cut, 2026-10-15).* Anthropic `budget_tokens` is honored by closing the thinking block
   when the budget is reached. For Qwen3.6, history is rendered with the template's
   preserve-thinking option (`preserve_thinking`), with reasoning replayed per FR-016, so earlier
   reasoning stays in the prompt and a new user turn does not re-process the previous tool loop
@@ -231,8 +243,11 @@ timeouts and that the next request runs normally.
 - **FR-018**: A request naming a model that is not loaded MUST be served by the loaded model when
   only one model is served (clients send names such as `claude-*` for background and subagent
   work); responses report the actual model id.
-- **FR-019**: When a request gives no output limit, mrun MUST apply a server default (16,384 tokens,
-  configurable); when the requested limit exceeds what fits, mrun MUST clamp it to the available
+- **FR-019**: When a request gives no output limit, mrun MUST apply a server default: 16,384 tokens
+  (configurable) for Chat Completions; `capacity − prompt` for Responses, because Codex never sends
+  `max_output_tokens` and, from 0.163, ends the turn on `response.incomplete` (a long `apply_patch`
+  would otherwise fail). Anthropic requires `max_tokens`. When the requested limit exceeds what
+  fits, mrun MUST clamp it to the available
   capacity (001 FR-009) and report the applied limit (`x-mrun-max-tokens` header or `: mrun` SSE
   comment) with a `max-tokens-clamped` warning. Rejection happens only when the prompt itself does
   not fit.
@@ -241,23 +256,27 @@ timeouts and that the next request runs normally.
   vision input]` and an `image-omitted` warning reported per FR-022, so sessions that read an image
   file stay usable; `--reject-tool-images` restores strict rejection.
 - **FR-021**: `mrun serve --record <dir>` (input to feature 005) MAY write, per request: the request
-  body, the allow-listed session headers (`x-claude-code-session-id`, `thread-id`,
-  `x-session-id`), arrival and response-end times, and the output token count, so `mrun bench` can
-  group conversations and replay reply lengths. Recording is enabled only on the command line
-  (never via config or environment), only on loopback, with files mode 0600, a startup warning,
-  and a visible flag in `/mrun/status`.
-- **FR-022**: Every response MUST report mrun metadata (cached and processed tokens, miss cause and
-  divergence and checkpoint gap from feature 003, effective output limit, warnings such as `tool-args-invalid`,
-  `tool-unknown`, `image-omitted`, `max-tokens-clamped`, `strict-unsupported`,
-  `history-args-raw`, `history-calls-split`, `thinking-unsupported`). Non-streaming responses carry it in `x-mrun-*` headers; streaming responses
+  body, the arrival time and the allow-listed session headers (`x-claude-code-session-id`,
+  `thread-id`, `x-session-id`, and `x-claude-code-prev-tool-durations`, which Claude Code sends
+  with `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` and which gives the tool gap). Reply lengths are
+  derived by 005 from the next request's history, so nothing about the response is written.
+  Recording is a maintainer flag: enabled only on the command line (never via environment), with
+  files mode 0600, a startup warning, and a visible flag in `/mrun/status`.
+- **FR-022**: Every response MUST report mrun metadata: cached and processed tokens; from feature
+  003 the miss cause (`new`, `changed`, `evicted`, `model`, `disabled`), the divergence position
+  with its message index and role, and the checkpoint gap; the effective output limit; and the
+  warnings `tool-args-invalid`, `max-tokens-clamped` and `image-omitted`. Every other condition
+  (`tool-unknown`, `strict-unsupported`, `history-args-raw`, `history-calls-split`,
+  `thinking-unsupported`) is written to the server log only, without prompt content (FR-014).
+  Non-streaming responses carry it in `x-mrun-*` headers; streaming responses
   carry it in SSE comment lines (`: mrun {json}`) emitted before the first content event and before
   the final event, because headers are sent before the result is known. Bodies stay strictly
   standard. The last request's metadata is also in `/mrun/status`.
 - **FR-023**: *Removed 2026-10-15* (Anthropic diagnostics: no supported client sends
   `diagnostics.previous_message_id`). A `diagnostics` request field is accepted and ignored.
-- **FR-031**: A request header `x-mrun-ignore-eos: on`, honored only on loopback binds, MUST make
-  generation continue to the output limit (benchmark fairness, 005 FR-007); it is ignored
-  elsewhere and never changes response formats.
+- **FR-031**: A request header `x-mrun-ignore-eos: on` MUST make generation continue to the output
+  limit (benchmark fairness, 005 FR-007; carried by the request's decode hook); it never changes
+  response formats.
 - **FR-024**: Anthropic `context_management` (server-side context edits and compaction) MUST be
   accepted and ignored: mrun never rewrites or summarizes client context, and Claude Code sends the
   field by default. Claude Code compacts on its own based on `CLAUDE_CODE_MAX_CONTEXT_TOKENS`,
@@ -268,10 +287,8 @@ timeouts and that the next request runs normally.
   because it changes on every request and would otherwise defeat all prefix reuse for users who
   start Claude Code without `mrun launch` (same approach as llama.cpp; D021). Nothing else in that
   block or elsewhere is altered.
-- **FR-026**: While a request is queued or its prompt is processed, progress (`queued` position,
-  or `prefill` processed/total tokens) MUST be visible in Chat Completions keepalive comments and
-  in `/mrun/status`. Anthropic `ping` and Responses `response.in_progress` keepalives carry no
-  progress.
+- **FR-026**: *Removed (0.1 scope cut, 2026-10-15)*: progress in Chat keepalive comments.
+  `/mrun/status` still shows the active request's phase and prefill progress (FR-001).
 - **FR-027**: Responses `namespace` tools (Codex sends MCP and sub-agent tools this way on every
   request) MUST be flattened to functions named `<namespace>__<tool>` and calls MUST be returned
   with `name` and `namespace` restored; history items carrying `namespace` are re-joined the same
@@ -294,27 +311,31 @@ timeouts and that the next request runs normally.
   Session headers are used only for recording (FR-021).
 
 - **FR-032**: Tool-call and reasoning parsing MUST go through a syntax registry
-  (`chat/syntax/`): one streaming parser per syntax. A family (001 FR-023) names an ordered set of
-  accepted syntaxes; a template probe at load picks the first that matches (so `qwen3_moe` repos with
-  Hermes or Qwen XML templates both load); no match MUST refuse the load naming the family, its
-  accepted syntaxes and the template's detected syntax. 0.1 syntaxes: Hermes JSON (Qwen3), Qwen XML (Qwen3-Coder, Qwen3.6),
-  Harmony (gpt-oss), Mistral `[TOOL_CALLS]` (Devstral Small 2). No syntax-specific logic outside
-  its parser and its registry entry (constitution V).
+  (`chat/syntax/`): one streaming parser per syntax. Each family names one syntax (`SyntaxId`,
+  defined in `mrun-engine`, 001 FR-023); load checks the template renders that syntax's markers,
+  else refuses, naming the family, its syntax and the markers that were missing. 0.1 syntaxes:
+  Hermes JSON (Qwen3), Qwen XML (Qwen3-Coder, Qwen3.6), Harmony (gpt-oss). No syntax-specific logic
+  outside its parser and its registry entry (constitution V). Parsers run on the engine thread
+  through the request's decode hook (FR-036).
 - **FR-033**: Harmony MUST map `analysis` to reasoning, `final` and recipient-less `commentary` to
   text, and messages addressed `to=functions.NAME` (in the role header or after the channel, with
   any `<|constrain|>` suffix stripped) to tool calls whose arguments are the message body up to
-  `<|call|>`; `<|call|>` and `<|return|>` end generation. Other recipients are not reported as
-  calls (`tool-unknown`). History arguments are passed to the template as objects.
-- **FR-034**: Mistral syntax MUST parse `[TOOL_CALLS]NAME[ARGS]{json}` (repeated for parallel
-  calls) on token ids, with content allowed before the first call; argument text containing the
-  marker strings round-trips unchanged.
+  `<|call|>`; `<|call|>` and `<|return|>` end generation (the engine reports which EOS token
+  ended it). Other recipients are not reported as calls (logged, `tool-unknown`). History arguments
+  are passed to the template as objects.
+- **FR-034**: *Moved to Later (0.1 scope cut, 2026-10-15; with Devstral in 0.2)*: Mistral syntax.
 - **FR-035**: Thinking control MUST be per family: Qwen3 and Qwen3.6 via `enable_thinking`;
   gpt-oss via reasoning effort (`low|medium|high` in the template's `Reasoning:` line), mapped from
   OpenAI `reasoning_effort`/`reasoning.effort` and Anthropic `thinking` (budget bands, adaptive
   effort) as in research §3b, with "off" = `low`, its reasoning always returned in the API's
   reasoning field, and Anthropic `budget_tokens` enforced by closing the analysis message;
-  Qwen3-Coder and Devstral Small 2 have none and report `thinking-unsupported` when asked.
-  `--thinking off|on` maps to the same per-family settings.
+  Qwen3-Coder has none and logs `thinking-unsupported` when asked.
+- **FR-036**: Per-request decode logic MUST run on the engine thread through a decode hook on the
+  generation request (001): `on_token(id) -> Option<TokenMask>` feeds the syntax parser and the
+  llguidance matcher and returns the next mask, `forced_tokens()` returns tokens the grammar forces
+  (appended without sampling, FR-004), and `ignore_eos` implements FR-031. Token events carry every
+  sampled id with its text (held-back text as a separate field) and the EOS token in the stop
+  reason, so the parser sees every token.
 
 ### Key Entities
 
@@ -326,20 +347,21 @@ timeouts and that the next request runs normally.
 - **Usage**: Input tokens, cached input tokens, output tokens, reasoning tokens.
 - **Queue Entry**: Request, arrival time, deadline, cancellation signal (fired by a connection
   close watcher).
-- **Record** (only with `--record`): request body, session headers, arrival and end times, output
-  tokens.
+- **Record** (only with `--record`): request body, arrival time, allow-listed session headers.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: OpenCode, Claude Code and Codex (pinned versions) each complete the scripted
-  read-edit-test task against Qwen3.6-35B-A3B (`mlx-community/Qwen3.6-35B-A3B-4bit`) and
-  Qwen3-Coder-30B-A3B (`mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit`) with no client-side
-  protocol errors, 5 of 5 runs each; one Claude Code run crosses the configured capacity and
-  compacts without errors.
-- **SC-002**: The API conformance suite (at least 60 cases across the three APIs: streaming,
-  tools, errors, limits, cancellation, keepalives) passes 100%.
+- **SC-001** (the client gate, referenced by 004, 008 and 010): Each 0.1 alias (`qwen3.6`,
+  `qwen3-coder`, `gpt-oss`) × each client (Claude Code, Codex, OpenCode at pinned versions),
+  started via `mrun launch`, completes the scripted task 3 of 3 times with no client-side protocol
+  errors; one of the Claude Code runs on `qwen3-coder` crosses the capacity and compacts.
+- **SC-002**: The API conformance suite passes 100% and covers, per API: streaming event order and
+  terminators; tool-call deltas, parallel calls and tool results; strict tools and JSON formats;
+  usage and cached tokens; finish reasons incl. length inside a tool call; errors before and after
+  headers; validation limits; keepalives in every phase; disconnect in every phase; and the
+  cross-cutting cases of FR-025, FR-027–FR-031 (named list: research, Conformance test list).
 - **SC-003**: With strict tools whose schemas compile, 100% of completed tool calls in the
   conformance and client suites validate against their schemas.
 - **SC-004**: Serving overhead is small: time to first token through the API is within 50 ms of
@@ -347,26 +369,41 @@ timeouts and that the next request runs normally.
   engine's (measured by this feature's overhead test).
 - **SC-005**: After a client disconnect in any phase (queued, prefilling, generating,
   non-streaming), the request's work stops and the next queued request starts within 300 ms (p95).
-- **SC-006**: Default configuration exposes nothing beyond loopback, rejects non-loopback `Host`
-  and foreign `Origin` headers, and writes no prompt content to disk or logs; `--record` cannot be
-  enabled by config or environment (verified by an audit test).
-- **SC-007**: The syntax conformance cases (research §3b; ≥ 8 per syntax for Harmony and Mistral,
-  plus the shared FR-004 cases for every syntax) pass 100%, and gpt-oss-20b and Devstral Small 2
-  each run the scripted read-edit-test task with each of the three clients 5 times with zero
-  client-side protocol errors (task completion is recorded, not gated).
+- **SC-006**: The server binds loopback only, rejects non-loopback `Host` and foreign `Origin`
+  headers, and writes no prompt content to disk or logs; `--record` cannot be enabled by the
+  environment (verified by an audit test).
+- **SC-007**: The syntax conformance cases pass 100%, covering for every 0.1 syntax: markers split
+  at every token boundary, parallel calls (Hermes, Qwen XML), values containing the syntax's own
+  closing markers, `"null"`/`"true"` kept as strings, truncated calls reported incomplete,
+  invalid-argument fallback per API, undeclared tools; and for Harmony: both recipient positions,
+  constrain-suffix stripping, built-in recipients, multi-call history split, effort mapping and
+  budget closing the analysis message (named list: research §3b). The client part is SC-001.
 
 ## Assumptions
 
 - Builds on the engine from feature 001; cross-request prefix reuse (and therefore large cached
   input numbers) arrives with feature 003. This feature reports cached tokens truthfully, which may
   be zero.
-- `mrun connect` / `mrun launch` (feature 004) configure clients, including
-  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS` and `ENABLE_TOOL_SEARCH=auto:10`
-  for Claude Code; for testing here, client configs are written by hand.
+- `mrun launch` (feature 004) configures clients, including `CLAUDE_CODE_MAX_CONTEXT_TOKENS`,
+  `CLAUDE_CODE_MAX_OUTPUT_TOKENS` and `ENABLE_TOOL_SEARCH=auto:10` for Claude Code; SC-001 runs
+  through it. Until 004 lands, client configs are written by hand (quickstart).
 - Claude Code's attribution block is stable per conversation for custom base URLs since v2.1.181;
   older versions change the `cch=` nonce every turn, which FR-025 neutralizes server-side, so no
   client setting is needed.
 - Vision input is out of scope (see FR-020 for how images are handled).
-- Real-client smoke tests (SC-001) use hand-written client configs; serving overhead (SC-004) is
-  measured by an engine-vs-API timing test in this feature, so 002's gates do not depend on 004/005.
+- Serving overhead (SC-004) is measured by an engine-vs-API timing test in this feature; only
+  SC-001 depends on 004 (`mrun launch`).
 - Ollama's native `/api` endpoints and stateful Responses storage are non-goals.
+
+## Later
+
+Moved out of 0.1 on 2026-10-15 (D025); IDs kept:
+
+- FR-012 second part: non-loopback binds with an API key (`MRUN_API_KEY`, `--api-key-file`,
+  constant-time compare, `Authorization: Bearer` or `x-api-key`).
+- FR-026: progress (`queued` position, `prefill` done/total) in Chat keepalive comments.
+- FR-034 and the Mistral parser (with Devstral, 0.2): `[TOOL_CALLS]NAME[ARGS]{json}` on token ids,
+  parallel calls, literal marker text in arguments round-trips; `[TOOL_CALLS]` bias for `none`.
+- `--thinking client|off|on` server override (FR-013, FR-035).
+- A nightly matrix against the latest client releases (replaced by pinned smoke on every PR plus a
+  manual pre-release check).

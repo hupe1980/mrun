@@ -15,9 +15,9 @@ Detailed field mapping per API is in [research §1, §5](research.md); this is t
 | parallel_tool_calls | bool | Chat/Responses flag; Anthropic `disable_parallel_tool_use` inverted |
 | response_format | Text \| JsonObject \| JsonSchema{schema, strict} | Chat `response_format`, Responses `text.format`, Anthropic `output_config.format` |
 | sampling | {temperature, top_p, top_k, min_p, seed} | defaults from model generation_config |
-| max_output_tokens | u32 | `max_completion_tokens` > `max_tokens`; `max_tokens`; `max_output_tokens`; absent → server default 16,384; clamped to capacity at admission (001 FR-009), reported as `x-mrun-max-tokens` / `: mrun` comment |
+| max_output_tokens | u32 | `max_completion_tokens` > `max_tokens`; `max_tokens`; `max_output_tokens`; absent → server default 16,384 (Chat) or `capacity − prompt` (Responses; Codex never sends it, FR-019); clamped to capacity at admission (001 FR-009), reported as `x-mrun-max-tokens` / `: mrun` comment |
 | stop | Vec<String> (≤ 4 × 256 B) | `stop` / `stop_sequences` |
-| reasoning | Off \| On{budget, effort: Option<Low \| Medium \| High>} | Anthropic thinking enabled/adaptive; `reasoning_effort` / `reasoning.effort` not in {none, minimal}; a bare `reasoning` object does not enable; overridden by `--thinking`. Applied per family (FR-035): `enable_thinking` (Qwen3, Qwen3.6), effort `low\|medium\|high` with Off = `low` (gpt-oss, research §3b mapping), none (Qwen3-Coder, Devstral Small 2 → `thinking-unsupported`) |
+| reasoning | Off \| On{budget, effort: Option<Low \| Medium \| High>} | Anthropic thinking enabled/adaptive; `reasoning_effort` / `reasoning.effort` not in {none, minimal}; a bare `reasoning` object does not enable. Applied per family (FR-035): `enable_thinking` (Qwen3, Qwen3.6), effort `low\|medium\|high` with Off = `low` (gpt-oss, research §3b mapping), none (Qwen3-Coder → logged `thinking-unsupported`) |
 | prefill | bool | Anthropic trailing assistant message |
 | stream, include_usage | bool | |
 
@@ -32,36 +32,45 @@ re-rendered history depends on the template:
 | Template | History arguments | Previous reply re-renders |
 | --- | --- | --- |
 | Qwen3 (Hermes JSON) | string rendered verbatim | byte-identical |
-| Qwen3-Coder, Qwen3.6 (XML) | parsed to an object, rendered via `\|items` and `tojson` | may differ → 003 cause `template` at the reply |
-| gpt-oss (Harmony) | parsed to an object, rendered via `tojson`; one call per message (multi-call history split, `history-calls-split`); analysis rendered only inside the current tool loop | may differ → `template` at the reply; a new user turn drops the loop's analysis → `template` at its first analysis |
-| Devstral Small 2 (Mistral) | string rendered verbatim (`''` → `{}`) | byte-identical |
+| Qwen3-Coder, Qwen3.6 (XML) | parsed to an object, rendered via `\|items` and `tojson` | may differ → 003 cause `changed` at the reply (bench: `template`) |
+| gpt-oss (Harmony) | parsed to an object, rendered via `tojson`; one call per message (multi-call history split, logged `history-calls-split`); analysis rendered only inside the current tool loop | may differ → `changed` at the reply; a new user turn drops the loop's analysis → `changed` at its first analysis |
 
 On re-serializing templates (XML, Harmony), `raw_args` that does not parse as a JSON object is
-rendered verbatim in place of the parameter list or JSON, with a `history-args-raw` warning
-(FR-004).
+rendered verbatim in place of the parameter list or JSON and logged (`history-args-raw`, FR-004).
 
 ## Syntax (registry entry, FR-032)
 
-| Field | Hermes JSON | Qwen XML | Harmony | Mistral |
-| --- | --- | --- | --- | --- |
-| families | `qwen3`, `qwen3_moe` (2nd) | `qwen3_moe` (1st), `qwen3_5_moe` | `gpt_oss` | `mistral` |
-| template probe | `<tool_call>\n{"name": "mrun_probe"` | `<function=mrun_probe>` | `to=functions.mrun_probe` | `[TOOL_CALLS]mrun_probe[ARGS]` |
-| message_starts | `<\|im_start\|>`, `<tool_response>` | same (ChatML) | `<\|start\|>` | `[INST]`, `[TOOL_RESULTS]`, `[SYSTEM_PROMPT]` |
-| reasoning | `<think>…</think>` (prompt-tail aware) | same (Qwen3.6); none (Qwen3-Coder) | `analysis` channel | none (`[THINK]` recognized) |
-| call opener (`none` bias) | `<tool_call>` | `<tool_call>` | recipient ` to` inside a header | `[TOOL_CALLS]` |
-| arguments | raw JSON, streamed | synthesized, buffered | raw JSON to `<\|call\|>`, streamed | raw JSON, streamed |
-| parallel calls | yes | yes | no (stops at `<\|call\|>`) | yes |
-| thinking control | `enable_thinking` | `enable_thinking` (Qwen3.6) | `reasoning_effort` | none |
-| history (`ChatSyntax::history()`) | arguments verbatim; `reasoning_content` | arguments as object; `reasoning_content`, preserve-thinking (Qwen3.6) | arguments as object, one call per message; `thinking` | arguments verbatim; `thinking` blocks |
+`SyntaxId` is defined in `mrun-engine` (the family registry names one per family); the parser,
+registry entry and history rules live in `mrun/src/chat/syntax/`.
 
-Order in `families` = accepted-set order (010 data-model ProbeResult). Template probe: render the
-fixed probe conversation (010 R8) and match the rendered text against the signatures above;
-markers must be added tokens.
+| Field | Hermes JSON | Qwen XML | Harmony |
+| --- | --- | --- | --- |
+| families | `qwen3` | `qwen3_moe`, `qwen3_5_moe` | `gpt_oss` |
+| template check | `<tool_call>\n{"name": "mrun_probe"` | `<function=mrun_probe>` | `to=functions.mrun_probe` |
+| message_starts | `<\|im_start\|>`, `<tool_response>` | same (ChatML) | `<\|start\|>` |
+| reasoning | `<think>…</think>` (prompt-tail aware) | same (Qwen3.6); none (Qwen3-Coder) | `analysis` channel |
+| call opener (`none` bias) | `<tool_call>` | `<tool_call>` | recipient ` to` inside a header |
+| arguments | raw JSON, streamed | synthesized, buffered | raw JSON to `<\|call\|>`, streamed |
+| parallel calls | yes | yes | no (stops at `<\|call\|>`) |
+| thinking control | `enable_thinking` | `enable_thinking` (Qwen3.6) | `reasoning_effort` |
+| history (`ChatSyntax::history()`) | arguments verbatim; `reasoning_content` | arguments as object; `reasoning_content`, preserve-thinking (Qwen3.6) | arguments as object, one call per message; `thinking` |
+
+Template check: render the fixed probe conversation (010 R8) and require the family's syntax
+signature above in the rendered text; markers must be added tokens. A miss refuses the load.
+Mistral (`[TOOL_CALLS]`, `[INST]`/`[TOOL_RESULTS]`/`[SYSTEM_PROMPT]` starts) is added with
+Devstral in 0.2.
 
 Validation (before queuing), configurable: body ≤ 64 MiB (base64 screenshots in agent history; images are dropped before rendering); messages ≤ 4,096; tools ≤ 256; each schema
 ≤ 64 KiB and depth ≤ 16; tool result call ids must match a prior tool call; images/audio/files in
 user content rejected with the JSON path; images inside tool results replaced by a placeholder
 (FR-020). The `model` field is informational when one model is served (FR-018).
+
+## DecodeHook (per request, engine thread; FR-036)
+
+`on_token(id) -> Option<TokenMask>` (feeds the `SyntaxParser` and, when armed, the llguidance
+matcher; returns the mask for the next step), `forced_tokens() -> Vec<u32>` (grammar-forced
+tokens appended without sampling), `ignore_eos: bool` (FR-031). Engine token events are lossless:
+every sampled id with its text and a separate held-back field; `Stop` carries the EOS token id.
 
 ## GenEvent (engine → encoders)
 
@@ -94,9 +103,9 @@ CancelToken, events: Sender}`; queue holds 16 waiting. A per-connection close wa
 
 ## Record (`--record` only, FR-021)
 
-One JSON line per request: `{request_id, api, arrived, ended (RFC 3339 ms), session: {header:
-value} (allow-list: x-claude-code-session-id, thread-id, x-session-id; values ≤ 256 B),
-output_tokens, outcome, body}`. Files mode 0600.
+One JSON line per request: `{api, arrived (RFC 3339 ms), session: {header: value} (allow-list:
+x-claude-code-session-id, thread-id, x-session-id, x-claude-code-prev-tool-durations; values
+≤ 256 B), body}`. Files mode 0600. Reply lengths are derived by 005 from the next request.
 
 ## Reasoning round-trip
 
@@ -107,7 +116,9 @@ output_tokens, outcome, body}`. Files mode 0600.
 
 ## RenderedPrompt (renderer → 003)
 
-`{tokens, messages: [{start, role, content_hash}], system_tools_end, generation_start}`. Content
-hashes cover role, visible text and tool calls as canonical JSON, never reasoning, so 003 can tell
-an edit from a template re-render. Render once; message starts are derived from the token stream using the syntax entry's message-start tokens (ChatML `<|im_start|>`/`<tool_response>`; Harmony `<|start|>`; Mistral `[INST]`, `[TOOL_RESULTS]`, `[SYSTEM_PROMPT]`), and the count is checked against the messages;
-prefix rendering only in tests.
+`{tokens, messages: [{start, role}], system_tools_end, generation_start}`. It is the prompt of
+001's `GenerateRequest`. Render once; message starts are derived from the token stream using the
+syntax entry's message-start tokens (ChatML `<|im_start|>`/`<tool_response>`; Harmony
+`<|start|>`), and the count is checked against the messages; prefix rendering only in tests.
+003 reports the divergence's message index and role from these marks. (Content hashes were
+dropped with the `template` cause, 2026-10-15.)

@@ -27,14 +27,21 @@ clients that time out during long prefills, and slow interruption.
 ## Where mrun must win (proved by `mrun bench`)
 
 Competitors ship prefix caching too: llama.cpp server, Ollama's MLX engine, oMLX, mlx-lm, LM
-Studio, and SGLang's MLX backend with a radix cache. oMLX even reports divergence points. mrun has
-to win on what agents feel, and prove it with a published, fair benchmark:
+Studio, and SGLang's MLX backend with a radix cache. oMLX even reports divergence points. Inco
+Splash (Apache-2.0, since 2026-09) is the closest: an Apple-Silicon agent server built around
+Qwen3.6-35B-A3B with its own Metal kernels, trained DFlash2 drafts, a persistent prefix cache and
+client launchers; it defaults to INT8 KV and unloads after 10 idle minutes. mrun has to win on
+what agents feel, and prove it with a published, fair benchmark. Its differentiators against
+Splash and the others: bf16 exact reuse with explained misses, a fixed memory budget with no idle
+unload, client fidelity, an open set of families on MLX (M1 and later), and a fair benchmark that
+runs every competitor in its best exact configuration:
 
 1. **Time to first token on repeated and branching turns.** Exact reuse across turns, subagents
    and tool loops, for attention and hybrid (linear-attention) models. Switching between a main
    conversation and a subagent moves state instead of discarding or duplicating it.
 2. **Explainable caching.** Every response reports cached and processed tokens; every miss names
-   the cause and the divergence point, in-band (headers or SSE comments) and in `mrun ps`.
+   one of five causes and the divergence point (position, message index and role), in-band
+   (headers or SSE comments) and in `mrun ps`.
 3. **Predictable memory.** Weights, attention state and cache live inside a budget fixed at
    startup. Prompts that cannot fit are refused with the numbers; output limits are clamped, never
    silently truncated; memory pressure sheds cache first.
@@ -43,13 +50,14 @@ to win on what agents feel, and prove it with a published, fair benchmark:
    either way). Work already done is kept for the retry.
 5. **All three agent APIs, faithfully.** Anthropic Messages, OpenAI Chat Completions and stateless
    Responses, including MCP tools, Codex namespaces and deferred tool loading, from one binary.
-6. **Delightful DX.** `mrun launch claude-code` takes a fresh install to a working agent: it offers
-   to pull the model and start the server, then configures the client for that process.
+6. **Delightful DX.** `mrun launch claude-code` takes a fresh install to a working agent with at
+   most two confirmations: it offers to pull the model and start the server, then configures the
+   client for that process.
 7. **Open to the best models that fit.** Model support is an open set of families built from shared
    blocks (full, sliding-window and compressed attention; linear attention; dense and
-   mixture-of-experts layers) with a registry of tool-call formats. Release 0.1 covers Qwen3.6
-   (hybrid), Qwen3-Coder, gpt-oss and Devstral; GLM, Gemma and Nemotron follow. The default is the
-   model that wins `mrun bench` on the target Mac.
+   mixture-of-experts layers) with a registry of tool-call formats. Release 0.1 is lean: Qwen3.6
+   (hybrid), Qwen3-Coder and gpt-oss (sliding window, Harmony); Devstral follows in 0.2, then GLM,
+   Gemma and Nemotron. The default is the model that wins `mrun bench` on the target Mac.
 
 ## Non-goals
 

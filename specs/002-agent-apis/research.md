@@ -180,7 +180,7 @@ wire_api = "responses"
   - Function calls are taken **only from `response.output_item.done`**. `function_call_arguments.*` events are ignored.
   - An item that fails to deserialize is **silently dropped** (debug log, :359). A reasoning item **must** include `summary: []` [V `models.rs:1082`].
   - `response.completed` needs `response.id`; `usage` is optional but used.
-  - `response.incomplete` with a reason other than `interrupted` becomes an error.
+  - `response.incomplete` with a reason other than `interrupted` becomes an error; since `bc9cad34` (0.163 alphas, 2026-10-12) it ends the turn without retry. Codex never sends `max_output_tokens`, so FR-019 defaults Responses requests to `capacity − prompt` (delta 2026-10-15).
   - `response.failed` with `error.code:"context_length_exceeded"` becomes `ContextWindowExceeded`, which triggers compaction [V `sse/responses_error.rs:47-48`]. An HTTP 400 with the same code is not mapped (`api_bridge.rs:124-160`), so streaming Responses always report overflow in-stream.
 - **Compaction.** Remote compaction is off for custom providers, so Codex compacts locally with ordinary requests [V `CX model-provider/src/capabilities.rs:31-41`].
 
@@ -354,11 +354,11 @@ Sources: vLLM local checkout `f46021a` (`vllm/parser/harmony.py`, `entrypoints/o
    - `cached = min(resume, P − 1)`; resume = match (attention) or restored checkpoint position (hybrid), per 003 FR-006. The last prompt token is always processed, so a fully matched prompt reports `P − 1`; a hybrid reports its checkpoint position (gap in mrun metadata).
    - Report `cache_creation_input_tokens: 0`: mrun bills nothing and has no write tier distinct from reads; a non-zero value would make clients estimate a cost.
    - Reasoning tokens are part of the output tokens in all three APIs.
-3. **Max tokens.** Chat: `max_completion_tokens` takes precedence over `max_tokens`. Anthropic: `max_tokens` is required. Responses: `max_output_tokens`. Each bounds reasoning plus answer. Absent → server default (16,384); clamp to `capacity − prompt` and report the clamp (FR-019); error only if fewer than 1 token remains.
+3. **Max tokens.** Chat: `max_completion_tokens` takes precedence over `max_tokens`. Anthropic: `max_tokens` is required. Responses: `max_output_tokens`. Each bounds reasoning plus answer. Absent → server default (Chat 16,384; Responses `capacity − prompt`, see Codex above); clamp to `capacity − prompt` and report the clamp (FR-019); error only if fewer than 1 token remains.
 4. **Thinking control.**
    - Anthropic `thinking.enabled` and `adaptive` → on; `disabled` and `between_tools` → off. `budget_tokens`: force `</think>` at the budget [U quality].
    - OpenAI `reasoning_effort` / Responses `reasoning.effort`: `none`/`minimal`/absent → off.
-   - Claude Code sends `adaptive` on every request, so an "only when requested" policy will think on Claude Code turns, including on the Qwen3.6 default. Decision (maintainer, 2026-10-15): thinking follows the client (unchanged); users who want none use `--thinking off` or `MAX_THINKING_TOKENS=0` [U effect behind a base URL].
+   - Claude Code sends `adaptive` on every request, so an "only when requested" policy will think on Claude Code turns, including on the Qwen3.6 default. Decision (maintainer, 2026-10-15): thinking follows the client (unchanged); users who want none set `MAX_THINKING_TOKENS=0` [U effect behind a base URL] (the `--thinking` override was cut from 0.1).
    - **Qwen3.6 history (decision)**: mrun renders history with the template's preserve-thinking option (`preserve_thinking`), replaying reasoning from signatures / `encrypted_content` (FR-016). Earlier reasoning stays in the prompt, so a new user turn appends instead of re-rendering (and re-processing) the previous tool loop without its reasoning. Cost: reasoning tokens stay in context; measured in 005.
 5. **Reasoning in history.** The Qwen3 template re-renders reasoning only inside the current tool loop (Qwen3.6: all turns, via preserve-thinking, see item 4). Replay it from Anthropic `thinking` blocks, Chat `reasoning_content`/`reasoning`, and Responses `reasoning.encrypted_content`. Codex never sends `reasoning_text` back, so mrun must put the reasoning text (versioned and base64-encoded) into `encrypted_content`. Signatures and encrypted blobs are opaque, unsigned, and never rejected.
 6. **Arguments round-trip.**
@@ -455,7 +455,7 @@ enum Finish { Stop, StopSequence, Length, ContextFull, ToolCalls, Cancelled }
 - Accept a missing `<tool_call>` before `<function=NAME>` only for declared names.
 - Strict tools and JSON formats arm an llguidance `Matcher` on trigger, using a `ParserFactory` cached per model. If grammar construction fails (unsupported JSON Schema feature), the request runs unconstrained with a `strict-unsupported` warning.
 
-**Conformance test list** (`tests/api_conformance/`, ≥60):
+**Conformance test list** (`tests/api_conformance/`; the named coverage of SC-002/SC-007). Since the lean cut (2026-10-15): `*_warning` cases other than `tool-args-invalid`, `max-tokens-clamped` and `image-omitted` assert a server-log entry instead of metadata; `chat_keepalive_comment_progress`, `xapi_nonloopback_requires_key`, `msg_x_api_key_and_bearer_auth` (accepted, not checked) and the `syn_mistral_*` cases (0.2) are out of 0.1; `template` cause assertions read `changed`.
 - **chat:**
   - `chat_basic_nonstream`, `chat_basic_stream_done_terminator`, `chat_stream_role_first_chunk`, `chat_include_usage_chunk_empty_choices`
   - `chat_usage_cached_tokens_inclusive`, `chat_tool_call_stream_first_fragment_has_id_name`, `chat_tool_call_args_fragments_concat_valid_json`, `chat_parallel_tool_calls_distinct_index_and_id`

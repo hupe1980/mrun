@@ -1,7 +1,8 @@
 # Architecture
 
-**Status**: Target design for the first release (2026-10-15, after the third audit). Only the
-portable foundation (engine trait, identity, chat layer, generation loop) is implemented.
+**Status**: Target design for the first release (2026-10-15, after the third audit and the lean
+0.1 cut, D025). Only the portable foundation (engine trait, identity, chat layer, generation loop,
+family registry) is implemented.
 
 ## Shape
 
@@ -11,7 +12,7 @@ One binary, two crates plus a sys crate:
 crates/
 ├── mlx-sys/     # bindgen over vendored mlx-c v0.7.0 + MLX v0.32.4 (cmake); checked-in bindings
 ├── mrun-engine/ # Engine trait + identity + budget (no MLX); behind feature `mlx`: safe MLX layer,
-│                # block library + family modules (qwen3, qwen3_moe, qwen3_5_moe, gpt_oss, mistral),
+│                # block library + family modules (qwen3, qwen3_moe, qwen3_5_moe, gpt_oss),
 │                # sequence state, sampler,
 │                # loader, scratch probe
 └── mrun/        # the binary: cli, config, hub, chat (tokenizer, template, tool parsing,
@@ -36,9 +37,9 @@ architecture, each small and tested on its own:
    Modules are ports of the mlx-lm reference and pass a parity test against it.
 2. **A chat syntax** (`mrun/src/chat/syntax/`): the model's own Jinja template renders prompts; a
    registry of tool-call and reasoning parsers covers the formats families use (Hermes JSON in
-   `<tool_call>`, Qwen XML, OpenAI Harmony channels, Mistral `[TOOL_CALLS]`, GLM XML). The family
-   names an ordered set of accepted syntaxes; the template probe at load picks the first that
-   matches (002 FR-032).
+   `<tool_call>`, Qwen XML, OpenAI Harmony channels; Mistral `[TOOL_CALLS]` with 0.2, GLM XML
+   later). Each family names one syntax (`SyntaxId`, defined in `mrun-engine`); load checks that
+   the template renders that syntax's markers, else refuses (002 FR-032).
 3. **Its state kinds**, which decide how the prefix cache restores it (below).
 
 An unknown `model_type` is refused at load with the list of supported families. Adding a family is
@@ -49,11 +50,11 @@ one module, one syntax entry if new, and a parity test: no plugin system (Princi
 | Qwen3.6-35B-A3B (≈20 GB) | `qwen3_5_moe`: 30 Gated DeltaNet + 10 gated attention, MoE | ≈20 KiB | ≈61 MiB per checkpoint | 0.1, default candidate |
 | Qwen3-Coder-30B-A3B (17.2 GB) | `qwen3_moe`: full attention, MoE | 96 KiB | none | 0.1 |
 | gpt-oss-20b (MXFP4, ≈13 GB) | `gpt_oss`: alternating sliding-window (128) and full attention with sinks, MoE; Harmony format | ≈48 KiB | none (full KV kept) | 0.1 |
-| Devstral Small 2 24B (≈14 GB) | `mistral`: dense full attention; Mistral tool format | ≈160 KiB | none | 0.1 |
-| Qwen3-8B (4.6 GB) | `qwen3`: dense full attention | 144 KiB | none | 0.1, correctness reference |
-| GLM-4.7-Flash, Gemma 4, Nemotron-H | MLA; sliding window + global; Mamba2 hybrid | — | — | After 0.1 (spec 010) |
+| Qwen3-8B (4.6 GB) | `qwen3`: dense full attention; Hermes JSON | 144 KiB | none | 0.1, internal test reference (no alias, no client or bench cells) |
+| Devstral Small 2 24B (≈14 GB) | `mistral`: dense full attention; Mistral tool format | ≈160 KiB | none | 0.2 (spec 010) |
+| GLM-4.7-Flash, Gemma 4, Nemotron-H | MLA; sliding window + global; Mamba2 hybrid | — | — | After 0.2 (spec 010) |
 
-The default model is chosen by `mrun bench` among the 0.1 models before release.
+The default model is chosen by `mrun bench` among the three 0.1 aliases before release.
 
 ## Sequence state
 
@@ -136,14 +137,16 @@ hanging off it.
 - **Models with position-bound state** (linear-attention hybrids): checkpoints are captured during prefill at the end of system+tools, at the
   start of the last user or tool message, and at the end of the prompt's messages, before the
   generation header (`generation_start`, where the next turn's re-rendered reply diverges). At
-  most 8 per conversation (≈ 0.5 GiB); the first, the two deepest and the newest at a user message
-  start are kept, and the one nearest the midpoint is dropped first. A moved-out tail keeps its
+  most 8 per path (≈ 0.5 GiB); when a ninth is captured, the shallowest checkpoint other than the
+  first is dropped. A moved-out tail keeps its
   end state inside its segment. A switch or edit resumes from the deepest checkpoint at or below
   the match and re-prefills the gap.
 - **Eviction**: least recently used branch leaves; the live path is never evicted while in use.
   Under memory pressure, branches go first, then an idle live path.
-- **Miss report** on every request: cached and processed tokens, divergence position, and a cause
-  (`new`, `system`, `edit`, `template`, `evicted`, `capacity`, `checkpoint`, `model`, `disabled`).
+- **Miss report** on every request: cached and processed tokens, the divergence position with the
+  message index and role it falls in, the checkpoint gap, and a cause (`new`, `changed`,
+  `evicted`, `model`, `disabled`). Whether a `changed` message was only re-rendered by the template
+  is diagnosed by `mrun bench`, which has the request bodies.
 
 Exactness: reuse requires identical tokens and model identity. Reused state equals recomputation
 up to the floating-point rounding any chunked prefill has; tests compare cache-on to cache-off
@@ -154,10 +157,15 @@ runs that use the same chunk split, so results must match bit for bit.
 - Tokenizer: `tokenizers` (HF `tokenizer.json`). Templates: `minijinja` configured like HF
   (`trim_blocks`, `lstrip_blocks`, a `tojson` without HTML escaping), golden-tested against HF
   renderings with tools.
-- Tool calls and reasoning: streaming parsers from the syntax registry (Hermes JSON, Qwen XML,
-  Harmony, Mistral, GLM XML). Values end only at the full closing sequence, are never coerced or evaluated, and code
-  containing the syntax's own tags round-trips. Strict tools and JSON response formats use
-  `llguidance` masks computed between forward and sample.
+- Tool calls and reasoning: streaming parsers from the syntax registry (0.1: Hermes JSON, Qwen
+  XML, Harmony). Values end only at the full closing sequence, are never coerced or evaluated, and
+  code containing the syntax's own tags round-trips. Strict tools and JSON response formats use
+  `llguidance` masks computed between forward and sample; tokens the grammar forces are appended
+  without sampling.
+- A `DecodeHook` on the generation request (`on_token(id) -> Option<TokenMask>`, `forced_tokens()`,
+  `ignore_eos`) runs the syntax parser and the grammar matcher on the engine thread; token events
+  carry every sampled id with its text (held-back text as a separate field) and the EOS token that
+  ended generation.
 - One internal `ChatRequest` / event model; three thin encoders.
 
 ## What is deliberately absent
