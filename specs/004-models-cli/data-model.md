@@ -46,10 +46,10 @@ manifest written. (`unpinned`/`unsupported` listing of cached repos: Later.)
 
 ## Settings (no config file in 0.1)
 
-Defaults < `MRUN_*` environment < flags. Settings and defaults: `MRUN_SERVER_PORT` 8484,
-`MRUN_SERVER_QUEUE` 16, `MRUN_SERVER_QUEUE_WAIT_S` 600, `MRUN_SERVER_MAX_OUTPUT` 16384,
-`MRUN_SERVER_REJECT_TOOL_IMAGES` false, `MRUN_MEMORY_FRACTION` 0.75, `MRUN_MEMORY_RESERVE_GIB`
-(computed: clamp(physical ÷ 6, 2, 8)), `MRUN_ENGINE_DEFAULT_MODEL` `qwen3.6`, `MRUN_CACHE_ENABLED`
-true, `MRUN_LIMITS_{BODY_MIB, MESSAGES, TOOLS, SCHEMA_KIB, SCHEMA_DEPTH}` 64/4096/256/64/16.
+Defaults < `MRUN_<FLAG>` environment (upper snake case of the flag name) < flags. Settings and defaults: `MRUN_PORT` 8484,
+`MRUN_QUEUE` 16, `MRUN_QUEUE_WAIT_S` 600, `MRUN_MAX_OUTPUT` 16384,
+`MRUN_REJECT_TOOL_IMAGES` false, `MRUN_MEMORY_FRACTION` 0.75, `MRUN_RESERVE_GIB`
+(computed: clamp(physical ÷ 6, 2, 8)), `MRUN_MODEL` `qwen3.6`, `MRUN_NO_CACHE`
+false, `MRUN_LIMITS_{BODY_MIB, MESSAGES, TOOLS, SCHEMA_KIB, SCHEMA_DEPTH}` 64/4096/256/64/16.
 `MRUN_HOME` and (007) `MRUN_CACHE_DIR` are paths. `~/.mrun/config.toml` and `mrun config` are
 Later (FR-010).

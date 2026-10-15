@@ -72,5 +72,5 @@ data model updated when this feature lands, T022). Request metadata adds `images
 ## Counters (FR-001)
 
 Live request counts only; session shares come offline from `mrun bench --trace-stats`.
-`/mrun/status` key `images` and `/metrics` (008): `requests_with_images{api, location}`, `images_total`,
+`/mrun/status` key `images` (and `/metrics` once 008 FR-010 returns): `requests_with_images{api, location}`, `images_total`,
 `images_omitted_total{reason}`, `encoder_runs_total`, `embedding_cache_hits_total`.

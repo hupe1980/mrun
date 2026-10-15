@@ -33,7 +33,7 @@ five things:
 | Milestone | Outcome | Specs | Gate |
 | --- | --- | --- | --- |
 | **M0 Foundation** | MLX binding spike on a Mac: load, quantized matmul, gather-qmm, SDPA, RoPE, a custom Metal kernel, memory APIs | 001 phase 1 | Go/no-go within one week |
-| **M1 Engine** | `mrun run` streams the 0.1 families (Qwen3.6, Qwen3-Coder, gpt-oss; Qwen3-8B as test reference) built from the shared block library, with the memory budget, checkpoints and per-layer cancellation | 001 (010's 0.1 family modules) | 001 SC-001…SC-010 (SC-004 max-depth bucket recorded; at risk, 001 R5) |
+| **M1 Engine** | `mrun run` streams the 0.1 families (Qwen3.6, Qwen3-Coder, gpt-oss; Qwen3-8B as test reference) built from the shared block library, with the memory budget, checkpoints and per-layer cancellation | 001 (010's 0.1 family modules) | 001 SC-001…SC-010 (SC-004: 16K and 64K gate; the max-depth bucket is reported only, 001 R5) |
 | **M2 Agent APIs** | Claude Code, Codex and OpenCode complete real tool loops, including MCP tools | 002 | 002 SC-002…SC-007; SC-001 (the client gate) with M4 |
 | **M3 Prefix cache** | Exact reuse across turns and branches for attention and hybrid models, with miss reports | 003 | 003 SC-001…SC-007; SC-001 synthetic part gates M3; the trace part is reported with M5 |
 | **M4 Models & DX** | `pull`, `launch`, `connect` (print), `doctor`, `ps`; default model confirmed | 004 | 004 SC-001…SC-006; 002 SC-001 for each alias |
@@ -48,8 +48,8 @@ Devstral and the Mistral syntax (0.2), non-loopback binds with API keys, `connec
 `doctor --agent`, the config file and `mrun config`, `--thinking`, `--debug-cache`,
 `x-mrun-cache`, soft pins, progress in keepalives, the launchd service with lazy load, `/metrics`,
 notarization and Developer ID signing, SBOM, bench regression mode, automated competitor
-start/stop, thermal slope, RSS sampling, the SGLang profile, tier labels and the family-locality
-CI check.
+start/stop, thermal slope, RSS sampling, the SGLang profile, the bench quality suite and gap
+replay (005 Later), tier labels and the family-locality CI check.
 
 ## After 0.1 (each needs its measure-first check)
 
@@ -66,8 +66,8 @@ CI check.
 ## Dropped in this sprint
 
 8-bit KV (hybrid default removes the need), idle warm-up prefill, session and compaction hints for
-eviction, `cache_control` boundaries, Anthropic `diagnostics` (no client sends it), quality suite
-and gap replay in bench, priming in bench replay, cost-aware eviction for attention models.
+eviction, `cache_control` boundaries, Anthropic `diagnostics` (no client sends it), priming in
+bench replay, cost-aware eviction for attention models.
 
 ## Not planned
 

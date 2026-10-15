@@ -41,7 +41,7 @@ description: "Tasks for 006 Speculative Decoding"
 ## Phase 4: US4 — visibility and control (P2)
 
 - [ ] T015 [P] [US4] `crates/mrun/src/spec/stats.rs` + `crates/mrun/src/api/*`: `spec` metadata (headers, final `: mrun` comment), `x-mrun-speculation: off`, other values ignored; `/mrun/status` `spec` key; conformance tests on all three APIs
-- [ ] T016 [P] [US4] `crates/mrun/src/config.rs` + `cli/serve.rs` + `cli/run.rs`: `--speculation auto|off|ngram`, `[speculation] mode`, `MRUN_SPECULATION_MODE`; summary line `accepted/drafted`; `run --check` forces `off` (FR-017); snapshot tests
+- [ ] T016 [P] [US4] `crates/mrun/src/config.rs` + `cli/serve.rs` + `cli/run.rs`: `--speculation auto|off|ngram`, `MRUN_SPECULATION` (config key `[speculation] mode` only once 004 FR-010 returns); summary line `accepted/drafted`; `run --check` forces `off` (FR-017); snapshot tests
 
 ## Phase 5: US3 — MTP drafting (P2) — Removed
 

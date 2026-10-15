@@ -184,8 +184,9 @@ reports each with a fix.
 - **FR-009**: `mrun serve --detach` MUST run the server in the background with logs in
   `~/.mrun/server.log`, return once `/health` reports the model loaded, and exit 3 or 4 with the
   load error otherwise; `mrun stop` MUST stop it gracefully.
-- **FR-010**: Configuration MUST work with zero files: defaults, then `MRUN_*` environment
-  variables, then flags (except settings that are command-line only, such as `--record`).
+- **FR-010**: Configuration MUST work with zero files: defaults, then `MRUN_<FLAG>` environment
+  variables (upper snake case of the flag name, e.g. `MRUN_PORT`), then flags (except the
+  command-line-only `--record` and `--allow-over`).
   *Removed (0.1 scope cut, 2026-10-15; see Later): `~/.mrun/config.toml` and `mrun config`.*
 - **FR-011**: Every error MUST say what failed and what to do next; exit codes MUST be documented
   and distinct for usage, model, fit, server, network and doctor failures (code 7 is reserved for
@@ -219,7 +220,8 @@ reports each with a fix.
 - **SC-003**: Interrupted downloads resume without re-downloading completed bytes in 100% of tests;
   corruption that changes size or modification time is detected on every use, and any corruption
   is detected by `mrun verify`.
-- **SC-004**: Every alias meets the client gate (002 SC-001) through `mrun launch`.
+- **SC-004**: Every alias meets the client gate (002 SC-001) through `mrun launch`. Covered by
+  002 SC-001 (no separate gate).
 - **SC-005**: A snapshot test lists every error in the catalog, and each has a next step.
 - **SC-006**: For 100% of unsupported-architecture fixtures (mock hub), `pull` exits 3 having
   downloaded no weight bytes, and the message lists every supported family; every curated alias
@@ -240,4 +242,5 @@ backups and `apiKeyHelper` (FR-006); `doctor --agent`, model-integrity, free-spa
 `template-tools-late` checks (FR-007); `~/.mrun/config.toml` and `mrun config` (FR-010); listing
 unpinned and unsupported cached repositories (FR-003); the inode fast check (FR-004); `tier`
 labels (FR-002); the `devstral` alias (0.2). The config file returns no later than the first
-post-0.1 feature that defines keys for it (006 `[speculation]`, 007 `[cache] persist`).
+post-0.1 feature that defines keys for it (006 `[speculation]`, 007 `[cache] persist`, 009
+`vision`).

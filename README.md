@@ -51,7 +51,7 @@ Requires the Rust toolchain pinned in `rust-toolchain.toml`.
 cargo test --workspace     # portable tests, Linux or macOS
 ```
 
-Building the MLX engine needs macOS 15+ on Apple Silicon with Xcode or the Command Line Tools.
+Building the MLX engine (`--features mlx`, off by default) needs macOS 15+ on Apple Silicon with Xcode or the Command Line Tools.
 Development follows the [Spec Kit](https://github.com/github/spec-kit) workflow.
 The website is a [Zola](https://www.getzola.org/) site in `site/`
 (`zola --root site serve`).

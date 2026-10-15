@@ -41,7 +41,7 @@ conformance on real weights, exactness of moves/checkpoints, bench cells
 **Target Platform**: macOS 15+ on Apple Silicon; Linux x86_64/aarch64 for CI (CPU)
 **Project Type**: Rust workspace producing one CLI/server binary
 **Performance Goals**: ≥ 90% of mlx-lm decode (1K, 16K) and prefill (16K) per model; cancel
-≤ 300 ms p95 at 16K, 64K and max depth; first token ≤ 15 s cold for 8B
+≤ 300 ms p95 at 16K and 64K (max depth reported only); first token ≤ 15 s cold for 8B
 **Constraints**: Budget by construction (III); exact greedy parity (II); no network; input caps
 **Scale/Scope**: 4 families (one model each), 1 live sequence; capacity on 48 GB ≈ 262K (Qwen3.6,
 max position), ≈ 105–120K (Qwen3-Coder), 131,072 (gpt-oss-20b, max position; ≈ 14.7 GiB of KV
@@ -78,7 +78,7 @@ specs/001-engine-core/
 ```text
 crates/
 ├── mlx-sys/                   # build.rs (cmake), vendor/ (mlx-c submodule, MLX tarball), src/bindings.rs
-├── mrun-engine/               # feature `mlx` (default) pulls in mlx-sys
+├── mrun-engine/               # feature `mlx` (off by default) pulls in mlx-sys
 │   ├── src/
 │   │   ├── engine.rs          # Engine trait, chunk_len, plan/step/segment/checkpoint types, errors (no MLX)
 │   │   ├── identity.rs        # identity + EOS union (R10)
@@ -97,14 +97,15 @@ crates/
 │   └── tests/                 # tiny CPU models, conformance, exactness (macOS)
 └── mrun/src/
     ├── main.rs  cli/run.rs  errors.rs
-    ├── chat/{limits.rs, tokenizer.rs, template.rs, stop.rs}
+    ├── chat/{limits.rs, tokenizer.rs, template.rs, stop.rs, prompt.rs}
     └── runtime/{handle.rs, generate.rs, session.rs, scripted.rs}
 scripts/{gen_reference.py, gen_template_golden.py, bench_reference.sh}
 ```
 
 **Structure Decision**: Three crates (ARCHITECTURE): `mlx-sys` isolates the C/C++ build;
 `mrun-engine` holds the MLX-free contract and the MLX implementation behind a feature; `mrun`
-holds everything engine-agnostic. `cargo test -p mrun --no-default-features` never builds MLX.
+holds everything engine-agnostic. `cargo test -p mrun` (default features) never builds MLX; `--features mlx` (on `mrun`, forwarding
+`mrun-engine/mlx`) builds it.
 
 ## Complexity Tracking
 
@@ -114,4 +115,5 @@ holds everything engine-agnostic. `cargo test -p mrun --no-default-features` nev
 | Separate engine crate | Keeps MLX out of fast iteration; one-thread ownership | Single crate builds MLX for every test |
 | Custom Metal kernel (GDN) | No MLX op implements the gated delta recurrence at speed; parity needs mlx-lm's exact kernel | Ops loop (`gated_delta_ops`) is per-token and not bitwise-equal to the kernel; kept only as CPU/test reference |
 | Position-bound rollback (chunk start, pending step) | Whole-chunk commit and pipelining on non-trimmable state | Disabling pipelining for hybrids costs decode speed; re-prefill on every cancel loses progress |
+| SC-004 max-depth bucket reported, not gated (until 006 or a chunk-floor change makes it measurable) | One layer at the 128-token chunk floor may take ~200 ms at 262K (R5), so 300 ms p95 is not reliably reachable | Gating it would block 0.1 on a bound the current chunk floor cannot meet; a smaller floor costs prefill speed |
 | Full KV on sliding-window layers | Positional state stays exact at any position (trim, moves, 003 reuse) | A rotating buffer (mlx-lm `RotatingKVCache`) saves 24 KiB/token on gpt-oss but makes earlier positions unrecoverable, so every branch or edit would need checkpoints |

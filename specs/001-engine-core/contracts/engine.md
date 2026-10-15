@@ -131,9 +131,9 @@ pub enum EngineError {
 - **Cancellation and yield**: at most one layer in flight during prefill; cancel and yield checked
   after each layer and each decode token. A cancel discards the partial chunk; a yield finishes it.
   `Prefilled.committed` counts whole chunks only.
-- **Pipelining**: at most one pending step. `trim`, `reserve`, `checkpoint`, `split_off` roll a
-  pending step back first (families with position-bound state keep the pre-step copy until the
-  step is confirmed).
+- **Pipelining**: at most one pending step. `reserve`, `checkpoint`, `split_off` roll a pending
+  step back first; `trim(active_len())` confirms it and `trim(active_len() − 1)` rolls it back
+  (families with position-bound state keep the pre-step copy until the step is confirmed).
 - **Exactness**: chunk ends depend only on depth and the plan, so two runs with the same tokens and
   plan compute identical splits. Checkpoints, segments and restores never alias live buffers
   (debug builds assert distinct data pointers). Sliding-window layers attend to the last `window`

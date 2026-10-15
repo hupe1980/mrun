@@ -24,5 +24,5 @@ MRUN_TEST_MODELS=mlx-community/Qwen3-8B-4bit,qwen3.6,gpt-oss \
 6. `memory_pressure -S -l warn` while a long prefill runs: prefill yields at the next chunk end,
    branch bytes drop within 1 s and the request completes.
 7. `mrun cache clear` while idle: `mrun ps` shows zero branches and an empty live path.
-8. `mrun bench --suite agent --trace agent/opencode-refactor` with and without `--no-cache`
-   (reported with SC-001).
+8. `mrun bench --suite agent --trace agent/opencode-refactor` against `mrun serve`, then against
+   `mrun serve --no-cache` (reported with SC-001).

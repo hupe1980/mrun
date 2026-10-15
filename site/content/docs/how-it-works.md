@@ -39,9 +39,9 @@ explanations.
 ## One engine, one thread
 
 All GPU work runs on a single engine thread that owns the model and the attention state. HTTP
-handlers only parse, queue and stream. Requests run one at a time in arrival order; others wait
-in a bounded queue with keepalives so clients don't time out. Requests run one after another,
-which keeps latency predictable and reuse exact. Whether batching would help is measured with
+handlers only parse, queue and stream. Requests run one at a time in arrival order, which keeps
+latency predictable and reuse exact; others wait in a bounded queue with keepalives so clients
+don't time out. Whether batching would help is measured with
 `mrun bench` before it is added (see the [roadmap](@/docs/roadmap.md)).
 
 ## MLX from Rust
@@ -79,4 +79,4 @@ See [Models](@/docs/models.md) for the supported families.
 - **Memory is a budget, not a hope.** Everything that can grow is accounted for at startup.
 - **Standard wire formats.** Response bodies are exactly what each API defines. mrun's extra
   information travels in headers and SSE comments that clients ignore.
-- **Local and private.** Loopback by default, no telemetry, no prompt logging.
+- **Local and private.** Loopback only, no telemetry, no prompt logging.

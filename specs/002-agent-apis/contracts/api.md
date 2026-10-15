@@ -30,7 +30,7 @@ Cross-cutting:
   re-prefilled between a hybrid checkpoint and the match, 003; warnings: `tool-args-invalid`,
   `max-tokens-clamped`, `image-omitted`; other conditions go to the server log):
   - non-streaming: headers `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`,
-    `x-mrun-cache-divergence`, `x-mrun-cache-message` (`<index>:<role>`), `x-mrun-cache-gap`,
+    `x-mrun-cache-divergence`, `x-mrun-cache-message` (`<index>:<role>` of the API message containing the divergence: its index in the request's `messages`/`input` array), `x-mrun-cache-gap`,
     `x-mrun-max-tokens`, `x-mrun-warning` (comma-separated);
   - streaming: SSE comment lines `: mrun {json}` before the first content event (cache, limit) and
     before the final event (warnings); clients ignore comments;
@@ -85,7 +85,7 @@ codes above.
 
 ## `GET /mrun/status` (schema_version 1)
 
-`{schema_version, version, model: {id, identity, architecture, quantization}, budget: {budget,
+`{schema_version, version, model: {id, identity, family, syntax, architecture, quantization}, budget: {budget,
 weights, scratch, kv_capacity_tokens, kv_bytes_per_token}, active: {id, api, prompt_tokens,
 cached, phase, progress} | null, queued: n, cache: CacheStats (003), recording: bool,
 power: {assertion: bool, since?} (008), last: {cached, processed, cause, divergence, message,

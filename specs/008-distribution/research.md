@@ -8,8 +8,8 @@ need `xattr -d com.apple.quarantine`.
 
 ## R1: Channel: tap with a prebuilt binary
 
-- **Decision**: Tap `hupe1980/homebrew-tap`, formula `mrun.rb` downloading the notarized release
-  tarball (`url` + `sha256`), `depends_on arch: :arm64`, `depends_on macos: :sequoia`. The real
+- **Decision**: Tap `hupe1980/homebrew-tap`, formula `mrun.rb` downloading the ad-hoc-signed release
+  tarball (notarized once R3 returns) (`url` + `sha256`), `depends_on arch: :arm64`, `depends_on macos: :sequoia`. The real
   binary and `mlx.metallib` go to `libexec/`; `bin/mrun` is created with `write_exec_script`, so the
   process image path is `libexec/mrun` and MLX finds the colocated `mlx.metallib` (MLX looks next to
   the binary that contains it; a symlinked path in `bin/` would not resolve [U, verified in the

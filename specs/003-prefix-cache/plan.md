@@ -47,7 +47,7 @@ attention (≈ 20 KiB/token) plus checkpoints of ≈ 61 MiB each (8 per path ≈
 | III Memory budget | Static admission (001); lazy eviction before every growth; one copy per token; peak ≤ one layer (SC-004); pressure sheds branches first | Pass |
 | IV Local, private | In memory only; reports carry positions and roles, never text; side channel documented | Pass |
 | V Own runtime | Pure Rust tree; MLX only through `Engine` | Pass |
-| VI Simple | Plain LRU, one opt-out header, three controls, no tuning knobs | Pass |
+| VI Simple | Plain LRU, no per-request opt-out, two controls (`--no-cache`, `mrun cache clear`), no tuning knobs | Pass |
 
 Post-design re-check: Pass.
 

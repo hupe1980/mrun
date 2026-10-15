@@ -13,10 +13,10 @@
 ## Build and test
 
 ```sh
-cargo build --release
-cargo test --workspace                          # unit, ScriptedEngine, tiny CPU models
-cargo test -p mrun --no-default-features        # no MLX build
-MRUN_TEST_MODELS=qwen3-8b,qwen3-coder,qwen3.6,gpt-oss cargo test -p mrun-engine --release -- --ignored
+cargo build --release --features mlx
+cargo test --workspace                          # unit, ScriptedEngine, tiny CPU models (no MLX build)
+MRUN_TEST_MODELS=mlx-community/Qwen3-8B-4bit,qwen3-coder,qwen3.6,gpt-oss \
+  cargo test -p mrun-engine --features mlx --release -- --ignored
 ```
 
 ## Scenarios

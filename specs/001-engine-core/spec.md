@@ -259,7 +259,7 @@ uninterrupted run that used the same chunk split.
   caught, reported as an error finish, and followed by a state reset.
 - **FR-013**: Every finished request MUST report prompt tokens, cached tokens, generated tokens,
   applied output limit, time to first token (from the worker's dequeue to the first sampled
-  token), prompt-processing speed,
+  or forced token), prompt-processing speed,
   generation speed and finish reason (stop, length, cancelled, rejected, error).
 - **FR-014**: A conformance command MUST compare greedy token IDs against stored reference outputs
   for each supported model and report the first mismatch with the log-probability margin there.
@@ -335,9 +335,9 @@ uninterrupted run that used the same chunk split.
   `splash-bf16`); that cell is reported and does not gate.
 - **SC-004**: For each model, interrupting prompt processing at random points makes mrun ready for
   the next prompt within 300 ms, p95 over 50 trials per depth bucket: 16K, 64K and the model's
-  maximum admissible depth (buckets above capacity skipped). The maximum-depth bucket is at risk:
-  with the 128-token chunk floor one layer may take up to ~200 ms at 262K (R5); the result is
-  recorded either way.
+  maximum admissible depth (buckets above capacity skipped). The 16K and 64K buckets gate; the
+  maximum-depth bucket is reported only (with the 128-token chunk floor one layer may take up to
+  ~200 ms at 262K, R5).
 - **SC-005**: 100% of admission boundary tests pass: capacity − 1 prompt tokens completes with one
   output token; capacity tokens is rejected before processing with both numbers; an oversized
   output limit is clamped to capacity − prompt and reported.

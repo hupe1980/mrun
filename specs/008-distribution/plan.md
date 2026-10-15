@@ -90,7 +90,8 @@ and workflows; the tap repository holds only the rendered formula.
 - 002 API contract: `/mrun/status` adds `power: {assertion: bool, since?}`.
 - 004 CLI contract: long `--version`.
 - 001: macOS 15.0 deployment target; `ci.yml` stays 001's (T004a).
-- Later: `GET /metrics`, `/health` `loaded` and estimated capacity before a lazy load,
+- Later: `GET /metrics`, `/health` `loaded:false` during a lazy load, estimated capacity before
+  a lazy load,
   `mrun service install|uninstall [--preload]`, `serve --service`, `doctor` install source and
   service state; 006/007 metric families.
 - Folded by T024.

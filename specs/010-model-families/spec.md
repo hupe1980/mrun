@@ -21,6 +21,9 @@ architecture. 0.1 ships Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, gpt-oss-20b, Devst
 the Qwen3-8B reference; GLM-4.7-Flash, Gemma 4 and Nemotron-H follow. Adding a family touches only
 its module, a syntax entry if new, an alias and tests."
 
+*Input as originally written; superseded by the lean cut (Status, Clarifications): Devstral
+Small 2 is 0.2, not 0.1.*
+
 ## Clarifications
 
 ### Session 2026-10-15
@@ -64,6 +67,9 @@ its module, a syntax entry if new, an alias and tests."
   locality CI check (FR-019, SC-007), the `--info` accuracy gate (SC-008) and ordered syntax sets.
 - Q: Which family comes first after 0.1? → A: Devstral Small 2 (`mistral`, Mistral syntax) in 0.2;
   its design below is unchanged.
+- Q: Do non-alias repos load in 0.1? → A: 0.1 loads non-alias repos of the four 0.1
+  architectures via 004 FR-001 without a `tier` label; post-0.1 Tier 2 adds the label, refusal
+  fixtures and `mrun show` marking (T014).
 
 ## User Scenarios & Testing *(mandatory)*
 

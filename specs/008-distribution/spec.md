@@ -132,9 +132,10 @@ checksums and the tap pull request.
   agent running `serve --service`, lazy model load, `--preload`; D022).
 - **FR-006**: *Removed (0.1 scope cut, 2026-10-15; see Later)*: `mrun service uninstall`.
 - **FR-007**: *Removed (0.1 scope cut, 2026-10-15; see Later)*: service-mode rotating log and pid
-  file (`serve --detach`, 004 FR-009, logs to `~/.mrun/server.log`).
-- **FR-008**: *Removed (0.1 scope cut, 2026-10-15; see Later)*: `mrun stop` and `doctor` service
-  states.
+  file. (0.1 has 004 FR-009's `serve --detach`, which logs to `~/.mrun/server.log` without
+  rotation.)
+- **FR-008**: *Removed (0.1 scope cut, 2026-10-15; see Later)*: the service-aware `mrun stop`
+  message and `doctor` service states (`mrun stop` itself is 004).
 - **FR-009**: While any request is running or queued, mrun MUST hold an IOKit power assertion that
   prevents idle system sleep (not display sleep), named "mrun: inference in progress", and release
   it 60 s after the queue empties; the assertion state appears in `/mrun/status`.
@@ -196,7 +197,7 @@ and the [contracts](contracts/):
   prompt.
 - `mrun service install [--preload]` / `uninstall` as a launchd user agent (`RunAtLoad`,
   `KeepAlive {SuccessfulExit: false}`, `ThrottleInterval 10`), `serve --service` with rotating
-  logs, lazy model load on the first request (D022), `/health` `loaded`, estimated capacity before
-  load, `doctor` service states (US2, FR-005–FR-008, FR-016, SC-002).
+  logs, lazy model load on the first request (D022), `/health` `loaded:false` during a lazy load,
+  estimated capacity before load, `doctor` service states (US2, FR-005–FR-008, FR-016, SC-002).
 - `GET /metrics` per the [metrics contract](contracts/metrics.md) (US4, FR-010, SC-003).
 - CycloneDX SBOM (FR-014); install source in `doctor` (FR-004).

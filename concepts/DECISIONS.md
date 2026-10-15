@@ -75,8 +75,8 @@ other than the first is dropped). Eviction is plain LRU over branch leaves: two 
 LRU near-optimal for single long sessions, and turn-type or session-priority tiers did not pay for
 themselves. Misses report five causes (`new`, `changed`, `evicted`, `model`, `disabled`) plus the
 divergence position, its message index and role, and the checkpoint gap; `template` re-renders are
-a bench-side diagnostic. Dropped in the lean cut: soft pins for queued requests, `--debug-cache`,
-the `x-mrun-cache` request header. Earlier ideas dropped in the third audit:
+a bench-side diagnostic. Deferred by the lean cut (003 Later; 007 reintroduces the header): soft
+pins for queued requests, `--debug-cache`, the `x-mrun-cache` request header. Earlier ideas dropped in the third audit:
 copy-based restore (capped conversations at about half of capacity), idle warm-up, session and
 compaction hints, `cache_control` boundaries.
 
@@ -128,7 +128,8 @@ cost no model memory. MTP drafting on Qwen3.6 proceeds only after its per-positi
 measured offline with an existing implementation (Ollama's MLX runner MTP module, vLLM as a
 cross-check) and shows α₁ ≥ 0.8 and a modeled speed-up ≥ 1.15×. If it ships, the MTP sidecar is
 recorded in the manifest and shown by `mrun show`, but never enters the model identity or cache
-key: the head does not change target state.
+key: the head does not change target state. DFlash2 drafts pass the same gate (α₁ ≥ 0.8, modeled
+≥ 1.15×) and also need a usable license and published drafts for the target model.
 
 ## D025: Lean release 0.1
 

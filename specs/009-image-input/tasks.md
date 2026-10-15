@@ -13,7 +13,7 @@ description: "Tasks for 009 Image Input"
 
 - [ ] T001 [P] Read the pinned `qwen3.6` revision's `model.safetensors.index.json`, `config.json` and `preprocessor_config.json`: vision tensors present, precision, bytes, `vision_config`, `min_pixels`/`max_pixels`; record in research R2/R3 (OQ-1)
 - [ ] T002 [P] Check mlx-c v0.7.0 for every op the tower needs (Conv3d or its reshape-matmul equivalent, fused SDPA with per-image splits, interleaved M-RoPE inputs); record in research
-- [ ] T003 [P] Live request counters `requests_with_images{api,location}`, `images_total`, `images_omitted_total{reason}` in `/mrun/status` (key `images`) and `/metrics` (needs 008's exporter; 002 parsing already sees the blocks); no session counting live; tests
+- [ ] T003 [P] Live request counters `requests_with_images{api,location}`, `images_total`, `images_omitted_total{reason}` in `/mrun/status` (key `images`; the `/metrics` part only once 008 FR-010 lands; 002 parsing already sees the blocks); no session counting live; tests
 - [ ] T004 [P] `mrun bench --trace-stats`: share of recorded sessions with images per client (needs 005 trace format); add the flag to the 005 contract and 004 CLI contract when it lands
 - [ ] T005 Encoder timing spike with Python mlx-vlm on the target Mac at 256, 1,500 and 2,560 image tokens; record (OQ-6)
 - [ ] T006 Gate decision recorded in research R10 with the data (in each of at least two clients ≥ 5% of recorded sessions contain an image, or ≥ 3 independent users request image input); stop here if it fails
@@ -72,7 +72,7 @@ description: "Tasks for 009 Image Input"
 - Gate: T001–T006 before everything else; T006 decides whether Phase 1 starts.
 - 001: engine, budget, probe (T014–T016). 002: parsing, renderer, metadata (T011, T012, T018).
   003: store (T020–T023). 004: launch, pull (T026, T027). 005: trace stats and harness (T004, T029).
-  008: `/metrics` exporter (T003).
+  008 (optional): `/metrics` exporter for the T003 `/metrics` part, once 008 FR-010 lands.
 - T007 → T008 → T009/T010 → T011 → T012 → T013 → T014 → T015 → T016 → T017 → T018 (MVP) → T019;
   T020 → T021 → T022 → T023 → T024; T025–T028 after T018; T027 → T014 when T001 found no tower; T034 → T014; T029–T033 last.
 

@@ -27,7 +27,7 @@ Metadata fields: `images`, `image_tokens`, `encoder_runs`, `embedding_hits`; mis
 
 | Item | Default | Notes |
 | --- | --- | --- |
-| `mrun serve --no-vision` / `vision = false` | vision on when the tower is present | frees tower memory |
+| `mrun serve --no-vision` / `MRUN_NO_VISION` (config `vision = false` once 004 FR-010 returns) | vision on when the tower is present | frees tower memory |
 | `--max-image-tokens N` / `max_image_tokens` | 2,560 | changes digests (images miss once) |
 | `--max-images N` / `max_images` | 64 per request | |
 | `--max-image-bytes MiB` / `max_image_bytes_mib` | 48 per request | decoded bytes; the base64 form must also fit 002's 64 MiB body cap |

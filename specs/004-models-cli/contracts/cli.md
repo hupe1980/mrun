@@ -48,7 +48,7 @@ and `mrun cache clear [--disk\|--all] [--model M]` (007).
 ## Configuration sources
 
 defaults < `MRUN_*` environment (`MRUN_<FLAG>` in upper snake case, for example
-`MRUN_SERVER_PORT`, `MRUN_MEMORY_RESERVE_GIB`) < flags. Command-line only (no environment
+`MRUN_PORT`, `MRUN_RESERVE_GIB`) < flags. Command-line only (no environment
 equivalent): `--record`, `--allow-over`. `MRUN_HOME` sets the state directory. No config file in
 0.1.
 

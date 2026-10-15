@@ -21,8 +21,8 @@ description: "Tasks for 003 Prefix Cache"
 - [ ] T003 Extend 001's `ScriptedEngine` (001 T011a; no duplicate double) with the profiles 003 tests use: positional only, sliding-window (positional, full KV) and position-bound (state only at computed positions), per-buffer view counts, peak-byte tracking, configurable capacity (Qwen3-Coder ≈ 105K tokens), injectable yield
 - [ ] T004 `cache/tree.rs` structure: nodes, live path, segment views over refcounted buffers, metadata-only edge splits, checkpoint and message marks (start, role); in-memory only, no file I/O in `cache/` (FR-013)
 - [ ] T004a `cache/tree.rs` lifecycle: merge on commit where the live path retraces a stored branch, evicted counters with reasons, one tree per `CacheKey` (a new key discards the old tree, FR-014)
-- [ ] T004b Invariants 1–6 as property tests in `crates/mrun/tests/prefix_tree_props.rs`; lookup microbench ≤ 1 ms at 100K tokens
-- [ ] T005 Consume 002's `RenderedPrompt` (message starts and roles, `system_tools_end`, `generation_start`) as `GenerateRequest.prompt`; tests on golden renders (needs 002 T004a)
+- [ ] T004b Invariants 1–6 as property tests (7 via the T012 mutation oracle, 8 via T008/T012) in `crates/mrun/tests/prefix_tree_props.rs`; lookup microbench ≤ 1 ms at 100K tokens
+- [ ] T005 Fill 001's `RenderedPrompt` (T011j) from the renderer (message starts and roles, `system_tools_end`, `generation_start`); tests on golden renders (needs 002 T004a)
 
 ## Phase 3: US1 — Fast repeated turns (P1) 🎯 MVP
 
@@ -52,7 +52,7 @@ description: "Tasks for 003 Prefix Cache"
 ## Phase 7: US5 — The cache never costs memory safety (P2)
 
 - [ ] T018 [P] [US5] `cache/evict.rs`: LRU units (leaf + same-buffer single-child chain), live-path checkpoints after all branches, MLX `clear_cache`; tests that growth-time eviction always succeeds after admission. (Soft pins: removed, 0.1 scope cut, 2026-10-15)
-- [ ] T019 [US5] `runtime/pressure.rs`: macOS source → atomic level read at per-layer check points and per token; during prefill a set level requests a yield and is acted on at the next whole-chunk end; warning halves branch bytes, critical evicts all branches and resets an idle live path; injected-event test < 1 s with the running request unaffected
+- [ ] T019 [US5] `runtime/pressure.rs`: macOS source calling 001's `PressureGauge::raise` → atomic level read at per-layer check points and per token; during prefill a set level requests a yield and is acted on at the next whole-chunk end; warning halves branch bytes, critical evicts all branches and resets an idle live path; injected-event test < 1 s with the running request unaffected
 - [ ] T020 [US5] Controls: `--no-cache`, `mrun cache clear` / `POST /mrun/cache/clear` (live reset when idle); tests. (`x-mrun-cache`: removed, 0.1 scope cut, 2026-10-15)
 
 ## Phase 8: Polish

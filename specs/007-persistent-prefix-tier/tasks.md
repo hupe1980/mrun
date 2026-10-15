@@ -53,12 +53,13 @@ markers; T003a adds them and must land before T003 can attribute restart misses.
 
 - [ ] T020 [P] Site page "Persistent cache": what is stored, where, privacy, how to clear, measured numbers
 - [ ] T021 Run quickstart scenarios 1–7 on the target Mac; record results
+- [ ] T021a Reintroduce `x-mrun-cache: off` (003 FR-012) on all three APIs: the request is served without reuse and nothing from it is persisted; conformance case per API
 - [ ] T022 [P] `crates/mrun/tests/persist_privacy.rs`: requests with `x-mrun-cache: off` produce no entry; entry files contain no request text, headers or session ids (byte scan for unique prompt markers); nothing written with persistence off (FR-015)
-- [ ] T023 [P] `crates/mrun/src/metrics.rs`: `mrun_cache_disk_writes_total`, `mrun_cache_disk_write_bytes_total`, `mrun_cache_disk_corrupt_total`, `mrun_cache_hit_tokens_total{tier="disk"}`, `mrun_cache_bytes{tier="disk"}` per 008 metrics contract; scripted test
+- [ ] T023 [P] (Gated on 008 `/metrics`, FR-010, returning) `crates/mrun/src/metrics.rs`: `mrun_cache_disk_writes_total`, `mrun_cache_disk_write_bytes_total`, `mrun_cache_disk_corrupt_total`, `mrun_cache_hit_tokens_total{tier="disk"}`, `mrun_cache_bytes{tier="disk"}` per 008 metrics contract; scripted test
 - [ ] T024 Fold cross-spec changes into the 001–005 contracts and specs/README index (plan "Cross-spec changes")
 
 ## Dependencies
 
 T001 → T002/T003a → T003 → T004 (gate). T005/T006 → T007 → T008 → T009 → T010/T011. T012 → T013 → T014 →
-T016. US3 after T008 (T017) and T014 (T018/T019). T002's restore half needs T014. T022 after T012;
+T016. US3 after T008 (T017) and T014 (T018/T019). T002's restore half needs T014. T021a → T022; T022 after T012;
 T023 after T012/T014; T024 any time after T006.

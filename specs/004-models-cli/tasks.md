@@ -49,7 +49,7 @@ description: "Tasks for 004 Models and CLI Experience"
 
 ## Dependencies
 
-T001 → T002/T003 → T004 → T005/T006 → T007 → T008/T009/T010 → 002 T016 → T018. T005a after T005
+T001 → T002/T003 → T004 → T005/T006 → T007 → T010 → T008/T009 → 002 T016 → T018. T005a after T005
 (default after 005 T012a); T013a after T007 and 001 T040. US2/US3 after T004–T006. `launch`,
 `connect` and `ps` need 002's `/v1/models` and `/mrun/status`; fit numbers need 001's budget
 function. The serve banner itself is owned by 002 (T012).

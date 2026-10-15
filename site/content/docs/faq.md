@@ -52,12 +52,13 @@ the better choice.
 ## Can several agents use it at once?
 
 Yes. Requests are queued and run one at a time, so a main agent and its subagents all get served,
-and the prefix cache keeps each branch's context. Batched decoding for concurrent sessions is on
-the roadmap.
+and the prefix cache keeps each branch's context. Batched decoding for concurrent sessions will be
+added only if recorded sessions show agents waiting on each other (see the
+[roadmap](@/docs/roadmap.md)).
 
 ## Does mrun send any data anywhere?
 
-No. It listens only on loopback by default, has no telemetry and does not log prompts. After
+No. It listens on loopback only, has no telemetry and does not log prompts. After
 `mrun pull` it works offline. Tools run inside your agent, never in the server.
 
 ## How good is a local model compared to a frontier API?

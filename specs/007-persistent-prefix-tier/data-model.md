@@ -4,7 +4,7 @@
 
 | Key | Default | Source |
 | --- | --- | --- |
-| `[cache] persist` | false | `--persist` / `--no-persist`, `MRUN_CACHE_PERSIST` |
+| `[cache] persist` | false | `--persist` / `--no-persist`, `MRUN_PERSIST` |
 | `[cache] persist_gib` | 32 | `MRUN_CACHE_PERSIST_GIB` |
 | `[cache] persist_max_age_days` | 30 | `MRUN_CACHE_PERSIST_MAX_AGE_DAYS` |
 | directory | `~/Library/Caches/mrun/prefix` | `MRUN_CACHE_DIR` (reserved name, not a config key) |
@@ -64,7 +64,7 @@ bytes}>, choice: memory | disk}`; `disk` when `disk.matched ≥ memory.matched +
 
 `source: memory | disk | none` for the reused tokens; causes add `disk-corrupt`.
 
-## TierStats (`/mrun/status`, `mrun cache`, metrics in 008)
+## TierStats (`/mrun/status`, `mrun cache`; metrics in 008 once `/metrics` returns)
 
 `{enabled, dir, cap_bytes, used_bytes, entries, per_key: [{key16, model alias?, bytes, entries}],
 writes_total, write_bytes_total, abandoned_total, disk_hits_total, disk_hit_tokens_total,

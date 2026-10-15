@@ -115,8 +115,9 @@ client ──HTTP──▶ api (Chat | Messages | Responses ─▶ ChatRequest; 
   total. Before any allocation the engine returns `NeedsMemory{bytes}` with nothing changed; the
   worker evicts cache and retries the call.
 - **Cancellation bound**: one layer in flight; prefill chunk = `clamp(2048 × 16K / depth, 128,
-  2048)` tokens so a layer stays near 100 ms up to 128K and ≤ ~200 ms at 262K (cancel at maximum
-  depth is at risk against the 300 ms target, 001 SC-004). A cancelled prefill keeps every whole
+  2048)` tokens, so by estimate (001 R5, not yet measured on the target Mac) a layer stays near
+  100 ms up to 128K and ≤ ~200 ms at 262K; 001 SC-004 gates cancel at 16K and 64K and reports
+  the maximum-depth bucket only. A cancelled prefill keeps every whole
   chunk; a yield (memory pressure) ends prefill after the current whole chunk and the worker
   continues with the same plan.
 

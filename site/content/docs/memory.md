@@ -53,7 +53,7 @@ what the request reserved.
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `--memory-fraction` / `MRUN_MEMORY_FRACTION` | 0.75 | Share of physical memory mrun may plan for |
-| `--reserve-gib` / `MRUN_MEMORY_RESERVE_GIB` | ⅙ of RAM, 2–8 GiB | Memory left for other applications |
+| `--reserve-gib` / `MRUN_RESERVE_GIB` | ⅙ of RAM, 2–8 GiB | Memory left for other applications |
 | `--allow-over` | off | Required to raise the budget above the default formula; the budget still never exceeds macOS's recommended GPU working set |
 
 You can always lower the budget. Raising the fraction above 0.75 or the reserve below its default

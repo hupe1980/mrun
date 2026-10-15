@@ -10,10 +10,14 @@ key; a new key discards the old tree (FR-014).
 | Field | Type | Notes |
 | --- | --- | --- |
 | tokens | Vec<u32> | P = len |
-| messages | Vec<MessageMark{start: u32, role}> | message starts and roles; give the divergence's message index and role |
+| messages | Vec<MessageMark{start: u32, role}> | message starts and roles; each mark maps to the API message it renders (Harmony split calls map to their API message; mid-conversation system messages keep their API index), so reports give API indices |
 | system_tools_end | u32 | end of system + tools region |
 | generation_start | u32 | start of the generation header (≤ P − 1); checkpoint position for position-bound state |
-| mode | Cached \| Off | `--no-cache` → Off |
+
+## PrefixStore configuration
+
+`{key: CacheKey, mode: Cached | Off}`: `--no-cache` → Off for the whole server (no per-request
+opt-out).
 
 ## Node
 
@@ -60,7 +64,7 @@ Drop rule when a path exceeds 8: drop the shallowest checkpoint other than the f
 | cached | u32 | `min(resume, P − 1)` |
 | processed | u32 | `P − cached` |
 | divergence | Option<u32> | first differing position against the closest stored path; None when the request extends it |
-| message | Option<{index: u32, role}> | the request's message containing `divergence` (index 0 is the system+tools region) |
+| message | Option<{index: u32, role}> | the API message containing `divergence`: its index in the request's `messages`/`input` array (not the rendered mark index) and role; a top-level system prompt or tool list reports role `system`/`tools` |
 | gap | u32 | `matched − resume` (> 0 only with position-bound state: the old `checkpoint` case) |
 | cause | Option<Cause> | None on a full hit |
 

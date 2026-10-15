@@ -146,7 +146,8 @@ number of maximum-size images under memory pressure; peak memory stays within th
 
 - **FR-001** (gate): Before implementation beyond the measurement tasks, mrun MUST count requests
   containing image blocks (by API and location: user message or tool result) live, in
-  `/mrun/status` under the key `images` and in `/metrics` (008); sessions are counted offline:
+  `/mrun/status` under the key `images` (and in `/metrics` once 008 FR-010 returns; the gate reads
+  `/mrun/status`); sessions are counted offline:
   `mrun bench --trace-stats` MUST report the share of recorded sessions (002 FR-021) containing
   images per client. The feature proceeds when, in each of at least two clients, ≥ 5% of recorded
   sessions contain an image, or when ≥ 3 independent users request image input; the decision and
@@ -180,7 +181,8 @@ number of maximum-size images under memory pressure; peak memory stays within th
   bytes to the digest and grid MAY skip decoding repeated images.
 - **FR-007**: The vision tower MUST be loaded at startup (never lazily), its weights measured and
   its peak scratch probed at the largest admissible image as part of 001 FR-008; state capacity is
-  sized from what remains. `--no-vision` (and config key) skips loading it. `mrun run --info`,
+  sized from what remains. `--no-vision` / `MRUN_NO_VISION` (config key once 004 FR-010
+  returns) skips loading it. `mrun run --info`,
   `mrun ps` and `/mrun/status` show vision weights, vision scratch and the embedding-cache cap.
 - **FR-008**: Prefix identity (003 FR-001) MUST include images: each placeholder position is keyed
   by (image digest, index within the image), so two prompts match through an image only if the full
@@ -253,13 +255,13 @@ number of maximum-size images under memory pressure; peak memory stays within th
 
 ## Assumptions
 
-- Vision per first-release family: `qwen3_5_moe` (Qwen3.6-35B-A3B): Qwen3-VL tower, ported here;
+- Vision per supported family (0.1, and Devstral from 0.2): `qwen3_5_moe` (Qwen3.6-35B-A3B): Qwen3-VL tower, ported here;
   `mistral3` (Devstral Small 2): the original has a vision tower, but `sanitize` drops it and no
   port is planned, so it is text-only (FR-013); `qwen3_moe` (Qwen3-Coder-30B-A3B), `gpt_oss`
   (gpt-oss-20b) and `qwen3` (Qwen3-8B): no tower. Other vision families are later work.
 - 001 provides the engine, budget and scratch probe; 002 the request parsing, renderer and metadata;
   003 the prefix store; 004 `pull`, manifests and `launch`; 005 trace recording and replay; 008
-  `/metrics`. The range-request sidecar mechanism for FR-015, if needed, is owned by 009 (T027).
+  `/metrics` (optional, once 008 FR-010 returns). The range-request sidecar mechanism for FR-015, if needed, is owned by 009 (T027).
 - Clients send images inline (verified for Codex and OpenCode; Claude Code per its API usage).
 
 ## Open Questions

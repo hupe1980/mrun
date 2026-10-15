@@ -3,7 +3,7 @@
 ## SpecMode
 
 `auto | off | ngram` (`mtp` added by the follow-up). Source order as 004: default (`off` until the FR-001 gate passes, then
-`auto`) < `[speculation] mode` < `MRUN_SPECULATION_MODE` < `--speculation` < request header
+`auto`) < `[speculation] mode` (once 004 FR-010 returns) < `MRUN_SPECULATION` < `--speculation` < request header
 `x-mrun-speculation: off` (can only turn off). `mrun run --check` forces `off` (FR-017).
 
 ## SpecPolicy (per request)

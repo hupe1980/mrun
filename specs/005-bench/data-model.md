@@ -42,12 +42,14 @@ timestamps are used only for ordering and are not stored.
 | machine | {chip, memory_bytes, macos, power_source, low_power, per_system: [{system, free_memory_before, swap}]} |
 | systems | SystemUnderTest[] |
 | resets | [{system, rep, step, ok}] |
-| cells | [{system, cell, api, status: `ok` \| `failed` \| `not-run` \| `n/a`, samples: number[], min, median, max, p95?, iqr?, unit, thermal_start, thermal_end, early_eos: n, malformed_tool_calls: n, template_rerenders?: {turns, tokens}, failures: [{rep, error}], turns?: [{n, conversation, ttft_ms, tfut_ms, input, cached, output, cause?, message_index?}], session_s?}] |
+| cells | [{system, cell, api, status: `ok` \| `failed` \| `not-run` \| `n/a`, samples: number[], min, median, max, p95?, iqr?, unit, thermal_start, thermal_end, early_eos: n, malformed_tool_calls: n, template_rerenders?: {turns, tokens}, failures: [{rep, error}], turns?: [{n, conversation, kind: `new` \| `repeated` \| `branching`, ttft_ms, tfut_ms, input, cached, output, cause?, message_index?}], session_s?}] |
 | comparability | [{cell, kind: `same-weights` \| `different-quantization` \| `lossy-kv` \| `n/a`}] |
 | method | {replay: `in-order`, reps: {synthetic, cancel, agent}} |
 | warnings | string[] (battery, thermal state not nominal, load, free memory lower than before the first system) |
 
-`p95` and `iqr` are present only when n ≥ 20. `failures[].error` includes `truncated input`.
+Turn kinds (SC-005): `repeated` = a request that appends to the previous request of the same
+conversation; `branching` = the first request after a request from a different conversation;
+`new` = a conversation's first request (takes precedence). `p95` and `iqr` are present only when n ≥ 20. `failures[].error` includes `truncated input`.
 
 ## Baseline (regression mode): Later
 

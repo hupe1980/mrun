@@ -94,7 +94,7 @@ reached only through the `Engine` trait.
   additive `EngineError::{Cancelled, Unsupported}` (see [contract](contracts/speculation.md)).
 - 002 metadata: `spec` object; request header `x-mrun-speculation`; `/mrun/status` key `spec`.
 - 003: exactness tests run with `--speculation off` (FR-017).
-- 004 CLI contract: `serve|run --speculation auto|off|ngram`; `run --check` forces `off`; config key.
+- 004 CLI contract: `serve|run --speculation auto|off|ngram`; `run --check` forces `off`; config key `[speculation] mode` only once 004 FR-010 returns.
 - 005: suite `spec`, edit-heavy trace classification, result fields (additive, schema v1);
   `--suite agent` comparisons with `--speculation off`.
 - 008 metrics (Later since the lean 0.1 cut): `mrun_spec_*` counters (label `drafter` ∈ {`ngram`}) once `/metrics` lands.

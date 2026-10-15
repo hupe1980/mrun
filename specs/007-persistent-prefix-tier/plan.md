@@ -89,15 +89,15 @@ Linux with the scripted engine.
 - 001 engine contract: `export_views`, `import_alloc`, `import_seal` (see contract).
 - 002: FR-021 recordings add a `server-start` marker line per serve process (FR-001 attribution);
   metadata `source` field and new causes; `POST /mrun/cache/clear?tier=memory|disk|all`.
-- 003: FR-013 becomes "memory only unless 007 persistence is enabled"; miss causes add
+- 003: reintroduce FR-012 (`x-mrun-cache: off`, removed from 0.1) on all three APIs; FR-013 becomes "memory only unless 007 persistence is enabled"; miss causes add
   `disk-corrupt`; lookup returns disk candidates.
-- 004: CLI contract adds `serve --persist/--no-persist`, `mrun cache`, `mrun cache clear
+- 004: restore FR-010 (config file, `mrun config`); CLI contract adds `serve --persist/--no-persist`, `mrun cache`, `mrun cache clear
   --disk|--all|--model`; config `[cache] persist, persist_gib, persist_max_age_days`, env
   `MRUN_CACHE_DIR`; `doctor` checks FileVault, tier permissions and lock.
 - 005: suite `persist` (timings with the model loaded); profile reset for mrun clears both tiers
   (`mrun cache clear --all`).
-- 008 metrics: `mrun_cache_disk_writes_total`, `mrun_cache_disk_write_bytes_total`,
-  `mrun_cache_disk_corrupt_total` (no read-speed gauge).
+- 008 metrics (only once 008 `/metrics`, FR-010, returns): `mrun_cache_disk_writes_total`,
+  `mrun_cache_disk_write_bytes_total`, `mrun_cache_disk_corrupt_total` (no read-speed gauge).
 - Folded by T024.
 
 ## Complexity Tracking

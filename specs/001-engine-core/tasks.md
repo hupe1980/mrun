@@ -40,7 +40,7 @@ split: the landed part is ticked, the remainder is a separate open task.
 - [X] T010a [P] Template environment (FR-021): `trim_blocks`, `lstrip_blocks`, `tojson` = Python `json.dumps(ensure_ascii=False, indent)`; hand-written tests (`tojson_matches_python_json_dumps`, `block_tags_trim_like_hugging_face`)
 - [X] T010e [P] Template environment, rest of T010a (FR-021): `strftime_now(fmt)` returning the server start date; the probe stubs a fixed date; tests
 - [ ] T010c Template goldens (SC-009): `scripts/gen_template_golden.py` (pinned transformers); fixtures for the Qwen3, Qwen3-Coder and Qwen3.6 templates (≥ 10 each: tools, tool calls/results, multi-turn, thinking on/off) checked on text and token IDs
-- [ ] T010d [P] Template goldens (SC-009) for the gpt-oss template (Harmony; `reasoning_effort` low/medium/high, tool calls and results, analysis dropped from earlier turns), ≥ 10, text and token IDs (needs the repo pinned by 004 T005). (Devstral goldens: 0.2, 010 T010)
+- [ ] T010d [P] Template goldens (SC-009) for the gpt-oss template (Harmony; `reasoning_effort` low/medium/high, tool calls and results, analysis dropped from earlier turns), ≥ 10, text and token IDs (needs the repo pinned by 004 T005a). (Devstral goldens: 0.2, 010 T010)
 - [X] T010f [P] `chat/template.rs`: `RenderOptions.reasoning_effort: Option<String>` passed to the template as `reasoning_effort` (left undefined when `None`, so the template default applies) for gpt-oss; `chat/prompt.rs`: `RenderedPrompt::from_tokens` and the pure `generation_start(without_header, with_header)` (common token prefix of a turn rendered without and with the generation prompt) used by T016; tests
 - [X] T010b [P] `chat/limits.rs`: `MAX_PROMPT_BYTES`, `MAX_STOPS`, `MAX_STOP_BYTES` in one place, used by `main.rs` and `stop.rs`
 - [X] T011 `runtime/{handle.rs, generate.rs, scripted.rs}` first version: worker thread with bounded events (cap 64, stall timeout), generic loop on the old trait (reserve → prefill all but last → decode → stop/UTF-8 → `Finished` → trim to state tokens), output-limit clamping, `ScriptedEngine`; tests for one `Finished`, cancel, stall, clamping, reuse
@@ -141,7 +141,7 @@ Reference sources: mlx-lm `ba8a08f` `mlx_lm/models/{gpt_oss.py, rope_utils.py, s
 - T012 + T013 + T014 → T015 → T016/T017 (MVP on Qwen3-8B).
 - US2/US3 after T015 (T024a after T011b). T026 after T009 + T015; T027 after T026; T027a after T027; T027b after T025; T027c after T031.
 - Hybrid: T029 + T030 → T031 → T032 → T033 (hybrid part) → T034. T033 attention part after T015; hybrid part after T032.
-- Families: T006 → T039 (before T013/T025/T031 compose blocks) → T040; T041 after T006; T042 after T039 + T040 + T041; T040c with T009 + T040b; T043a after T026; T027d after T042 + T043a; T045 after T042 + T033; T046 with T011a; T010d after the repos are pinned (004 T005).
+- Families: T040 (done, no MLX) → T039 after T006 (before T013/T025/T031 compose blocks); T041 after T006; T042 after T039 + T040 + T041; T040c with T009 + T040b; T043a after T026; T027d after T042 + T043a; T045 after T042 + T033; T046 with T011a; T010d after the repos are pinned (004 T005a).
 - Polish after the stories it measures.
 
 ## Parallel opportunities

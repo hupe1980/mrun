@@ -51,7 +51,7 @@ pub struct Prepared {
 ```rust
 impl ReusePolicy for PrefixStore { /* as above */ }
 impl PrefixStore {
-    fn new(key: CacheKey) -> Self;
+    fn new(key: CacheKey, mode: CacheMode) -> Self; // CacheMode::{Cached, Off}; `--no-cache` → Off
     /// Longest exact match over the live path and branches, the switch plan and the miss report.
     /// Pure: changes only `last_used`. Used by `initial_need` and `prepare`.
     fn lookup(&mut self, prompt: &RenderedPrompt) -> Plan;
@@ -81,7 +81,8 @@ nothing changed: the loop calls `evict(bytes, None)` and retries the call.
 
 1. Validate; admission (001): reject if `P ≥ capacity`; clamp output to `capacity − P`. Cache
    unchanged on rejection.
-2. `need = initial_need(prompt, total)`; `evict(need, Some(prompt))` when the engine lacks it.
+2. `need = initial_need(prompt, total)`; when `need > free` (`state_capacity_bytes − allocated()`),
+   `evict(need − free, Some(prompt))`.
 3. `prepare(prompt, total)` (`split_off(at, shrink = false)` when an `append` follows; mode Off:
    the whole live path is moved out, resume 0).
 4. Prefill `prompt[resume..P−1]` with `Prepared.chunks`; on `Err(NeedsMemory{bytes})` →

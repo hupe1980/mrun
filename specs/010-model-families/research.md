@@ -23,7 +23,8 @@ estimate.
   `syntaxes` (accepted set, default first), `tiny_configs` (for Tier 2 tests). 001 T040 builds the
   table for 0.1; module names follow 001 (`mistral` for `mistral3` + `ministral3`). No dynamic loading, no traits for
   third parties (Principle VI).
-- **Keys at 0.1**: `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`, `mistral3`+`ministral3`. Tier 2
+- **Keys at 0.1**: `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`. 0.2: `mistral3`+`ministral3`
+  (module `mistral`). Tier 2
   candidates for the same modules: `qwen3_5` (dense Qwen3.6-27B), bare `ministral3`. After
   0.1: `glm4_moe_lite`, `gemma4`+`gemma4_text` (and bare `gemma4_text`), `nemotron_h`.
 - **Rationale**: mlx-lm selects by `model_type` too (`models/<type>.py`); nested configs
@@ -149,7 +150,7 @@ estimate.
   - Gemma: convert `<|"|>`-delimited strings and bare keys to JSON without coercion; buffered per
     call; a string may contain `}` or `<tool_call|>` text, so the call ends only at a balanced
     brace followed by `<tool_call|>`.
-- **History stability** (feeds 003 `template` cause, MF-3): Harmony template drops a tool turn's
+- **History stability** (feeds 003 `changed` cause, counted as `template` by 005; MF-3): Harmony template drops a tool turn's
   analysis once a later final message exists and renders the last final as `<|return|>`
   (llama.cpp replaces it with `<|end|>` for continued inference, issue 15417) [V template
   `:277-311`]; GLM drops earlier reasoning unless `clear_thinking=false`; Qwen XML and GLM

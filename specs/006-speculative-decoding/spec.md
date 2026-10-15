@@ -177,7 +177,7 @@ speculation when diagnosing output differences.
   grammar, tokens the grammar forces are already appended without sampling by 002's decode hook
   (002 FR-004, FR-036), which is exact; drafting under masks stays later work.
 - **FR-010**: Speculation mode MUST be configurable: `--speculation auto|off|ngram` (`mtp` is added
-  by the follow-up), `MRUN_SPECULATION_MODE` (and `[speculation] mode` once the config file
+  by the follow-up), `MRUN_SPECULATION` (and `[speculation] mode` once the config file
   returns, 004 Later); per request,
   header `x-mrun-speculation: off` on all three APIs. `auto` is the default once FR-001's gate
   passes.

@@ -72,7 +72,8 @@ crates/mrun-engine/src/
 └── models/
     ├── mod.rs  registry.rs   # Family trait, lookup, supported()
     ├── blocks/{attention.rs, mla.rs, gated_delta.rs, mamba2.rs, ffn.rs, moe.rs, norm.rs, rope.rs, head.rs}
-    ├── qwen3.rs  qwen3_moe.rs  qwen3_5_moe.rs  gpt_oss.rs  mistral.rs   # 0.1 (built by 001)
+    ├── qwen3.rs  qwen3_moe.rs  qwen3_5_moe.rs  gpt_oss.rs   # 0.1 (built by 001)
+    ├── mistral.rs            # 0.2 (Devstral Small 2)
     └── glm4_moe_lite.rs  gemma4.rs  nemotron_h.rs    # after 0.1, each via the checklist
 crates/mrun-engine/src/kernels/{gated_delta.metal.inc, ssm_update.metal.inc}
 crates/mrun-engine/tests/families/<family>/           # tiny configs, weights, references

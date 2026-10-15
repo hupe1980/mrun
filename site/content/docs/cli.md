@@ -45,8 +45,8 @@ Planned after the first release: a background login service, writing client conf
 | `--reject-tool-images` | off | Reject images in tool results instead of replacing them |
 | `--record <dir>` | off | Record requests as a benchmark trace (stored locally, never uploaded) |
 
-Every flag except `--record` and `--allow-over` can also be set with an `MRUN_*` environment
-variable; see [Configuration](@/docs/configuration.md).
+Every flag except `--record` and `--allow-over` can also be set with an environment variable
+named after it (`--port` → `MRUN_PORT`, `--reserve-gib` → `MRUN_RESERVE_GIB`); see [Configuration](@/docs/configuration.md).
 
 ## Exit codes
 

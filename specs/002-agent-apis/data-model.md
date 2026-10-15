@@ -120,5 +120,7 @@ x-claude-code-session-id, thread-id, x-session-id, x-claude-code-prev-tool-durat
 001's `GenerateRequest`. Render once; message starts are derived from the token stream using the
 syntax entry's message-start tokens (ChatML `<|im_start|>`/`<tool_response>`; Harmony
 `<|start|>`), and the count is checked against the messages; prefix rendering only in tests.
-003 reports the divergence's message index and role from these marks. (Content hashes were
+Each mark maps to the API message it renders (Harmony split calls map to their API message;
+mid-conversation system messages keep their API index), so 003 reports the divergence's API
+message index and role. (Content hashes were
 dropped with the `template` cause, 2026-10-15.)

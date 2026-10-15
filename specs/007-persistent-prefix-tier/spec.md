@@ -13,7 +13,7 @@ eviction re-prefill is ≥ 10% of prefill time in maintainer recordings and SC-0
 
 ### Session 2026-10-15
 
-- Q: Is the tier on by default? → A: No. Constitution IV (v3.2.0) requires an explicit opt-in: `mrun serve --persist`, `[cache] persist = true` or `MRUN_CACHE_PERSIST=1`. `mrun launch` does not enable it.
+- Q: Is the tier on by default? → A: No. Constitution IV (v3.2.0) requires an explicit opt-in: `mrun serve --persist`, `[cache] persist = true` or `MRUN_PERSIST=1`. `mrun launch` does not enable it.
 - Q: What is written, and when? → A: Exact sequence-state bytes of branches (positional state for a token range) and checkpoints of position-bound state, written by a background writer: when a branch is moved out of the live path, and for the live path's committed tokens once the server is idle for 2 s after a turn. Families with position-bound state persist per turn only the end-of-prompt checkpoint (plus the system+tools checkpoint once). Eviction from memory waits at most for one in-flight 4 MiB block.
 - Q: What binds an entry to a model? → A: The full cache key of 003 (weights, tokenizer, template, state format) plus the on-disk format version and the MLX version (decided 2026-10-15: mrun patch releases keep entries). Any difference means the entry is invisible; it is never converted.
 - Q: Default size cap? → A: 32 GiB, capped further so the volume keeps at least 10% free; LRU by last use; entries unused for 30 days are deleted. All three are configurable.
@@ -136,7 +136,8 @@ sizes and files.
   all timings measured with the model loaded. The feature ships only if restart plus eviction
   re-prefill is ≥ 10% of prefill time in maintainer recordings and SC-001 holds.
 - **FR-002**: Persistence MUST be off unless enabled by `--persist`, `[cache] persist = true` or
-  `MRUN_CACHE_PERSIST=1`; `--no-persist` overrides config.
+  `MRUN_PERSIST=1`; `--no-persist` overrides config. The config file returns with this feature
+  (004 Later, FR-010); until then `--persist` / `MRUN_PERSIST`.
 - **FR-003**: Entries MUST hold the exact bytes of the in-memory sequence state, for every state
   kind the family declares in its 010 StateLayout (positional ranges and checkpoints of
   position-bound state), with their token ids; no conversion, quantization or compression
@@ -175,7 +176,8 @@ sizes and files.
   persistence and report it.
 - **FR-015**: Persisted entries MUST NOT include request text, headers, session ids or any data
   beyond token ids, state bytes and the fields in the data model; nothing is written when
-  persistence is off, and requests with `x-mrun-cache: off` are never persisted.
+  persistence is off, and requests with `x-mrun-cache: off` are never persisted (007 reintroduces
+  003 FR-012, `x-mrun-cache: off`, removed from 0.1).
 
 ### Key Entities
 

@@ -89,7 +89,7 @@ the round's k-th token, `commit(k)` and finish. `controller.observe(round)`.
 
 | Surface | Behavior |
 | --- | --- |
-| `mrun serve --speculation auto\|off\|ngram` | Mode; config `[speculation] mode`, env `MRUN_SPECULATION_MODE` (`mtp` added by the follow-up) |
+| `mrun serve --speculation auto\|off\|ngram` | Mode; config `[speculation] mode`, env `MRUN_SPECULATION` (`mtp` added by the follow-up) |
 | `mrun run --speculation …` | Same for the REPL; summary line adds `· 377/412 accepted` |
 | `mrun run --check` | Always runs with speculation `off` (FR-017) |
 | `mrun bench --suite spec [--offline]` | FR-001 cells; `--offline` needs only the tokenizer |

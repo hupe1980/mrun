@@ -14,7 +14,7 @@
 
 - Q: Do models think when the client doesn't ask? → A: No. Thinking is enabled only by the request (Anthropic `thinking`, OpenAI `reasoning_effort` / `reasoning`). (Maintainer decision.)
 - Q: How are concurrent requests handled? → A: One generation at a time, FIFO queue (600 s waiting deadline; 16 waiting since 2026-10-15, matching D018); batching is a later feature. (Maintainer decision.)
-- Q: Default port? → A: 127.0.0.1:8484 (avoids Ollama 11434, LM Studio 1234, llama.cpp 8080); `--port` and `MRUN_SERVER_PORT` override.
+- Q: Default port? → A: 127.0.0.1:8484 (avoids Ollama 11434, LM Studio 1234, llama.cpp 8080); `--port` and `MRUN_PORT` override.
 - Q: Are non-strict tool calls constrained? → A: Tool-call syntax is always parsed with the model's native format; argument schemas are enforced by constrained decoding only for strict tools and JSON response formats, keeping the default fast path unconstrained.
 - Q: What does `count_tokens` count? → A: Exactly the tokens mrun would process for that request with the loaded model's tokenizer and template.
 
@@ -23,7 +23,7 @@
 - Anthropic `diagnostics` (old FR-023) is dropped: no supported client sends `diagnostics.previous_message_id`. The field is accepted and ignored.
 - Keepalives are per API, because Codex's SSE parser drops comment lines and aborts after 300 s without an event: Responses sends `response.in_progress` events, Anthropic `ping`, Chat SSE comments.
 - Client cache hints are gone (003 dropped session and breakpoint hints): `cache_control`, `prompt_cache_key` and client session headers do not affect the cache.
-- A strict schema llguidance cannot compile runs unconstrained with a `strict-unsupported` warning instead of failing.
+- A strict schema llguidance cannot compile runs unconstrained and is logged (`strict-unsupported`) instead of failing.
 - `tool_choice: none` uses a fixed logit bias, not a grammar mask, so decode stays pipelined.
 
 ### Session 2026-10-15 (open model architecture, D015)
@@ -139,7 +139,8 @@ timeouts and that the next request runs normally.
 - A streaming request queued for more than 300 s: the stream stays alive for every client.
 - Images inside tool results (Claude Code reading a PNG, Codex `view_image`): replaced per FR-020.
 - A browser page on the same machine calling the server: rejected by the Host/Origin policy.
-- Non-loopback bind requested: refused; 0.1 binds loopback only (FR-012).
+- Non-loopback bind requested: 0.1 has no `--host` flag (usage error, exit 2) and binds loopback
+  only (FR-012).
 
 ## Requirements *(mandatory)*
 
@@ -217,8 +218,8 @@ timeouts and that the next request runs normally.
   detected by watching each connection for close, not only by failed writes.
 - **FR-012**: The server MUST bind to loopback only and accept only loopback `Host` headers
   (`127.0.0.1`, `localhost`, `[::1]` with the server port), reject requests carrying a browser
-  `Origin` other than the server's own, and send no CORS headers. A non-loopback `--host` MUST be
-  refused at startup. *Second part removed (0.1 scope cut, 2026-10-15; see Later): binding
+  `Origin` other than the server's own, and send no CORS headers. 0.1 has no `--host` flag:
+  passing one is a usage error (exit 2). *Second part removed (0.1 scope cut, 2026-10-15; see Later): binding
   elsewhere with an API key from `MRUN_API_KEY` or `--api-key-file`, compared in constant time.*
 - **FR-013**: Reasoning/thinking output MUST be separated from answer text per each API's
   conventions. Thinking control is per family (FR-035). Thinking is on only when the request asks for it (Anthropic `thinking` enabled or

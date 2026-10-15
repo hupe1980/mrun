@@ -182,7 +182,7 @@ early end-of-sequence; verify both counts appear next to that system's speed.
   continues; exit 5 only when every system (or the only system) is unreachable.
 - **FR-017**: For mrun cells, a turn whose miss cause is `changed` at a message whose API content
   (role, visible text, tool calls as canonical JSON; reasoning excluded) equals the previous
-  request's message at the same index MUST be counted as a `template` re-render; the report gives
+  request's message at the same API message index (as reported by mrun's miss report) MUST be counted as a `template` re-render; the report gives
   per-trace counts and the tokens they cost (the bench-side replacement for 003's old `template`
   cause).
 
@@ -206,7 +206,7 @@ early end-of-sequence; verify both counts appear next to that system's speed.
   failures, "not run" and "n/a" marked, and a "Losing cells" section that is present even when it
   says "none".
 - **SC-004**: *Removed (0.1 scope cut, 2026-10-15)*: regression-mode detection (with FR-010).
-- **SC-005**: Median repeated- and branching-turn TTFT ≤ the best competitor's on the agent suite
+- **SC-005**: Median repeated- and branching-turn TTFT (turn kinds per the data model) ≤ the best competitor's on the agent suite
   (competitors: llama.cpp, Ollama, oMLX, mlx-lm and Splash's `splash-bf16` cell, caches on, the
   default model or the closest each supports, quantization labeled); all cells published, losing
   cells included.
