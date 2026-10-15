@@ -1,7 +1,8 @@
 //! `EngineHandle`: owns an engine on a dedicated thread; callers stream events through a bounded
 //! channel (blocking `recv` or `recv_async`) and then read the request's `Finished` from a
 //! one-slot channel. A consumer that stops reading for the stall timeout cancels its request,
-//! and the engine never waits on that consumer again; `Finished` is still delivered.
+//! and the engine never waits on that consumer again; `Finished` is still delivered. The engine
+//! stays loaded until the last handle is dropped; idle time never unloads it.
 
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::generate::{
@@ -321,6 +322,50 @@ mod tests {
         });
         assert_eq!(text, "hey");
         assert_eq!(finished.reason, FinishReason::Stop { stop: None });
+    }
+
+    #[test]
+    fn the_model_stays_resident_across_idle_periods() {
+        let built = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let alive = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (counter, owned) = (built.clone(), alive.clone());
+        let script = long_script(&byte_tokenizer());
+        let (handle, tokenizer) = spawn(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut engine = ScriptedEngine::new(script, 10_000);
+            // The engine holds this Arc for as long as it exists.
+            engine.reset_all_calls = owned;
+            engine
+        });
+        let mut req = request(&tokenizer, "first");
+        req.max_tokens = 2;
+        handle.generate(req).unwrap().wait().unwrap();
+        // Idle for several stall timeouts: the worker blocks on its inbox and has no timer.
+        thread::sleep(Duration::from_millis(300));
+        assert_eq!(Arc::strong_count(&alive), 2, "engine still loaded");
+        handle.reset().unwrap();
+        let (events, finished) = handle
+            .generate(request(&tokenizer, "first"))
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(finished.reason, FinishReason::Length);
+        assert!(
+            matches!(events[0], Event::Started { cached: 0, .. }),
+            "state was reset"
+        );
+        assert_eq!(
+            built.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "loaded once"
+        );
+        assert_eq!(
+            alive.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "no reset_all"
+        );
+        assert_eq!(Arc::strong_count(&alive), 2);
+        drop(handle);
     }
 
     #[test]

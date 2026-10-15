@@ -36,7 +36,11 @@ pub fn run(
     sink: &mut dyn EventSink,
 ) -> Finished {
     let finished = generate(engine, session, &mut TOKENIZER.stream(), request, sink);
-    assert_eq!(engine.tokens(), session.tokens(), "session mirrors the state");
+    assert_eq!(
+        engine.tokens(),
+        session.tokens(),
+        "session mirrors the state"
+    );
     assert!(!engine.has_pending(), "no pending step after a finish");
     assert!(session.committed().starts_with(session.tokens()));
     assert!(engine.allocated() <= engine.budget().state_capacity_bytes);
