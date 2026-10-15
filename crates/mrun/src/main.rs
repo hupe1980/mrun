@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use mrun::chat::limits::MAX_PROMPT_BYTES;
+use mrun::cli::serve::{self, ServeArgs};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -18,6 +19,11 @@ enum Command {
         after_help = "Examples:\n  mrun run mlx-community/Qwen3-8B-4bit\n  mrun run ./models/qwen3 --prompt \"Explain this error\" --max-tokens 512"
     )]
     Run(RunArgs),
+    /// Serve the Anthropic Messages, OpenAI Chat Completions and Responses APIs on 127.0.0.1.
+    #[command(
+        after_help = "Examples:\n  mrun serve --model qwen3.6\n  MRUN_PORT=9000 mrun serve --model qwen3-coder"
+    )]
+    Serve(ServeArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -70,6 +76,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Run(args) => run(args),
+        Command::Serve(args) => ExitCode::from(serve::run(args, serve::default_factory())),
     }
 }
 

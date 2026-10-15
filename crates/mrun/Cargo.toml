@@ -13,9 +13,12 @@ authors.workspace = true
 [features]
 # `ScriptedEngine` and test fixtures, for integration tests and the test suites of later features.
 test-support = []
+# The MLX engine (macOS; builds MLX from source).
+mlx = ["mrun-engine/mlx"]
 
 [dependencies]
-clap = { version = "4.6.7", features = ["derive"] }
+axum = "0.8"
+clap = { version = "4.6.7", features = ["derive", "env"] }
 flume.workspace = true
 minijinja.workspace = true
 minijinja-contrib.workspace = true
@@ -24,11 +27,14 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokenizers.workspace = true
+tokio = { version = "1.53", features = ["rt-multi-thread", "net", "signal", "macros", "sync", "time"] }
 
 [dev-dependencies]
 # Integration tests are built against the library with `test-support`.
 mrun = { path = ".", features = ["test-support"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 tempfile.workspace = true
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
