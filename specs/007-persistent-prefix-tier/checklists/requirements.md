@@ -35,3 +35,6 @@
   the spec because they are privacy requirements (constitution IV), not implementation choices.
 - Constitution IV opt-in wording (v3.1.0) is satisfied by FR-002; 003 FR-010 must be updated when
   this feature is implemented (plan, cross-spec changes).
+- Analyze pass (2026-10-15): gate tightened (≥ 10% and SC-001); MLX-version binding with a positive
+  patch-upgrade case; FR-009 read-ahead removed; `disk-slower` dropped (≥ 512-token rule);
+  checkpoint and parent-chain rules, `F_FULLFSYNC`, `x-mrun-cache: off` privacy added.

@@ -11,9 +11,10 @@ from real use for scenario 1.
 
 1. **Measure first** (FR-001):
    ```sh
-   mrun bench --suite persist                       # read/write GB/s, 30K restore vs re-prefill
+   mrun bench --suite persist                       # read/write GB/s, 30K restore vs re-prefill (model loaded)
    mrun bench --suite persist --from ~/mrun-rec     # restart vs eviction attribution
    ```
+   Ship only if restart plus eviction re-prefill is ≥ 10% of prefill time and SC-001 holds.
 2. **Restart restore** (SC-001):
    ```sh
    mrun serve --persist --detach
@@ -27,13 +28,16 @@ from real use for scenario 1.
    request of `agent/opencode-refactor` with `max_tokens: 1`. The automated cell is
    `persist/restore-30k`.
 3. **Identity** (SC-002): restart with `--model qwen3-coder` → no disk hits (`source: none`, cause
-   `new`); edit the template override → no hits; downgrade/upgrade mrun → no hits.
+   `new`); edit the template override → no hits; an mrun build with a different MLX version → no
+   hits; an mrun patch upgrade with the same MLX version → disk hits continue.
 4. **Corruption**: flip a byte in a `.mrps` file → next match reports `disk-corrupt`, file gone,
    answer correct.
 5. **Control**: `mrun cache` shows usage per model; `mrun cache clear --disk --model qwen3-coder`;
    `mrun stop; mrun cache clear --all` works without a server.
 6. **Permissions**: `ls -la ~/Library/Caches/mrun/prefix` → `drwx------`, files `-rw-------`;
    `chmod 755` it and restart → persistence off with a `doctor` fix.
+7. **Privacy**: send a request with `-H 'x-mrun-cache: off'`, wait 3 s → no new `.mrps` file;
+   `grep` a unique prompt string over the tier directory → no match.
 
 Automated equivalents: `cargo test -p mrun --test persist_format --test persist_crash --test
-persist_identity --test persist_cap` (any OS).
+persist_identity --test persist_cap --test persist_privacy` (any OS).

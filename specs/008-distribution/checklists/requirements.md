@@ -35,3 +35,5 @@
   (`--preload` for login-time loading); resident afterwards (D020).
 - Platform names (Homebrew, launchd, Gatekeeper, Prometheus format) appear because they are the
   user-facing distribution channels named in the feature request, as in 004.
+- Analyze pass (2026-10-15): macOS 15 floor everywhere; lazy load with `--preload` (FR-005,
+  FR-016, SC-002 rewritten); last-request rate gauges and CI changelog-label job dropped.

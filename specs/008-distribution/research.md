@@ -3,7 +3,7 @@
 ## R1: Channel: tap with a prebuilt binary
 
 - **Decision**: Tap `hupe1980/homebrew-tap`, formula `mrun.rb` downloading the notarized release
-  tarball (`url` + `sha256`), `depends_on arch: :arm64`, `depends_on macos: :sonoma`. The real
+  tarball (`url` + `sha256`), `depends_on arch: :arm64`, `depends_on macos: :sequoia`. The real
   binary and `mlx.metallib` go to `libexec/`; `bin/mrun` is created with `write_exec_script`, so the
   process image path is `libexec/mrun` and MLX finds the colocated `mlx.metallib` (MLX looks next to
   the binary that contains it; a symlinked path in `bin/` would not resolve [U, verified in the
@@ -15,8 +15,9 @@
 
 ## R2: Platform floor
 
-- **Decision**: macOS 15.0 deployment target, arm64 only, matching 001's build and test platform.
-  MLX itself may run on macOS 14 [U]; the M0 binding spike decides whether to lower the floor.
+- **Decision**: macOS 15.0 deployment target (`MACOSX_DEPLOYMENT_TARGET=15.0`, formula
+  `depends_on macos: :sequoia`), arm64 only, matching 001's build and test platform. MLX itself may
+  run on macOS 14 [U]; lowering the floor is a separate change.
 - **Alternatives**: Universal binary (no Metal MLX on Intel; doubles size for nothing); macOS 13
   (older Metal and toolchain combinations, untested).
 
@@ -50,14 +51,17 @@
 
 - **Decision**: Label `io.github.hupe1980.mrun`; plist in `~/Library/LaunchAgents`, mode 0644
   (launchd requires it not be group/world writable). `ProgramArguments = [<real binary>, "serve",
-  "--service"]` where `<real binary>` is `$(brew --prefix)/opt/mrun/libexec/mrun` for Homebrew
+  "--service"]` (plus `"--preload"` when installed with it) where `<real binary>` is `$(brew --prefix)/opt/mrun/libexec/mrun` for Homebrew
   installs (stable across upgrades) or the canonicalized current executable otherwise.
   `RunAtLoad true`, `KeepAlive {SuccessfulExit false}` (restart on crash or non-zero exit, not after
   a graceful `mrun stop`), `ThrottleInterval 10`, `ProcessType Standard` (default; `Background`
   would apply resource throttling), `StandardOutPath`/`StandardErrorPath` = `~/.mrun/launchd.log`,
   `EnvironmentVariables` only `MRUN_HOME` when set at install time. Load with `launchctl bootstrap
   gui/$UID <plist>`; unload with `bootout gui/$UID/<label>`; re-install = bootout + write +
-  bootstrap. `--service` means: no detach, rotating log file, pid file, exit 0 on SIGTERM.
+  bootstrap. `--service` means: no detach, rotating log file, pid file, exit 0 on SIGTERM, lazy
+  model load (engine created on the first dequeued request; keepalive/progress while loading;
+  `/health` `loaded` flag) unless `--preload` (D022). Before load, capacity comes from the cached
+  probe or the 004 fit estimate marked `estimated`.
 - **Measure**: quickstart compares decode tok/s under the service with a foreground server; if
   launchd's default QoS lowers it by > 2%, set `ProcessType Interactive`.
 - **Alternatives**: `brew services` (Homebrew-only, plist owned by Homebrew, `doctor` cannot rely
@@ -81,8 +85,9 @@
 - **Decision**: Hand-written Prometheus text encoder over atomics and fixed-bucket histograms in
   `crates/mrun/src/metrics.rs` (~200 lines); served by the existing axum router. Names in the
   [contract](contracts/metrics.md), prefix `mrun_`, base units (seconds, bytes), `_total` for
-  counters. Throughput is exported as token and second counters (rate = tokens/seconds) plus
-  last-request gauges, not as averaged gauges.
+  counters. Throughput is exported as token and second counters (rate = tokens/seconds), not as
+  gauges (last-request rate gauges dropped after analyze). `mrun_model_loaded` is the only model
+  series present before load.
 - **Rationale**: Fixed, small metric set; no dependency or global registry; llama.cpp and oMLX
   expose comparable endpoints [V next-features §6].
 - **Alternatives**: `prometheus-client` or `metrics` + exporter crates (more API than needed;
@@ -93,7 +98,7 @@
 - **Decision**: SemVer with 0.x semantics (FR-012); one workspace version; tags `vX.Y.Z`; release
   candidates `vX.Y.Z-rc.N` publish to GitHub Releases as pre-releases and do not update the tap.
   `CHANGELOG.md` in Keep a Changelog format; every user-visible pull request adds an `Unreleased`
-  entry (checked by a CI job that skips with a `no-changelog` label). Release steps documented in
+  entry (review convention; no CI label job). Release steps documented in
   `RELEASING.md`: bump version, move `Unreleased` to the version, tag, watch the workflow, merge the
   tap pull request, verify SC-001 on a clean account.
 - **Alternatives**: Conventional-commit generated changelogs (noisy, less useful for users).
@@ -102,4 +107,5 @@
 
 - **Decision**: No update check (constitution IV, FR-011). Formula caveats and the site document
   `brew upgrade mrun` followed by `mrun service install` (restarts on the new binary). The prefix
-  tier (007) is version-bound, so an upgrade invalidates persisted entries by design.
+  tier (007) is bound to the MLX version (D023), so only an upgrade that changes the vendored MLX
+  version invalidates persisted entries.

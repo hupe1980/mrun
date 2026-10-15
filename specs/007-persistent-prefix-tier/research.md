@@ -6,15 +6,17 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
 
 - **Finding**: Restore vs recompute [I]: Qwen3-Coder 30K tokens = 2.75 GiB of attention state,
   ≈ 0.6 s at ≈ 5 GB/s (M4 Pro 2 TB internal SSD [U]) against ≈ 40–60 s prefill. Qwen3.6-35B-A3B:
-  30K × ≈ 20 KiB ≈ 0.6 GiB plus 1–3 checkpoints of ≈ 60–150 MiB [U] ≈ 0.2 s against ≈ 30–40 s.
+  30K × ≈ 20 KiB ≈ 0.6 GiB plus one checkpoint of ≈ 61 MiB [I] ≈ 0.2 s against ≈ 30–40 s.
   2603.04428 measured ≈ 500 ms reload vs 15.7 s re-prefill on an M4 Pro (Q4 storage) [V listing].
   Reuse is bimodal with a long tail after tens of minutes (2608.11668) [V listing].
-- **Decision**: Measure first (FR-001): `mrun bench --suite persist` reports sequential read/write
-  GB/s in the tier directory (4 MiB blocks, 8 GiB, `F_NOCACHE`) and a 30K restore; `--from
+- **Decision**: Measure first (FR-001), with the model loaded (realistic page-cache and memory
+  pressure): `mrun bench --suite persist` reports sequential read/write GB/s in the tier directory
+  (4 MiB blocks, 8 GiB, `F_NOCACHE`) and a 30K restore; `--from
   <record-dir>` replays the arrival order of a local recording through a simulated memory store
   (capacity from `/mrun/status`, LRU) with server-start markers, attributing re-prefilled tokens to
-  `restart`, `evicted` or other causes, and simulating a disk tier at the cap. Ship if restart plus
-  eviction re-prefill is ≥ 10% of prefill time in the maintainers' recordings, or SC-001 alone holds.
+  `restart`, `evicted` or other causes, and simulating a disk tier at the cap. Ship only if restart
+  plus eviction re-prefill is ≥ 10% of prefill time in the maintainers' recordings and SC-001
+  holds.
 - **Alternatives**: Trust literature numbers; rejected (constitution I).
 
 ## R2: File format
@@ -23,7 +25,10 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
   `magic "MRPS" | u32 format_version | u32 header_len | header JSON | token ids (u32 LE) |
   tensor blocks (16 KiB aligned) | footer {xxh3-64 per 4 MiB block, header xxh3}`. Header: cache
   key fields, MLX version, parent entry id and its `end`, `start`, `end`, `checkpoint: bool`, tensor
-  table (layer, kind `k|v|conv|delta`, dtype, shape, offset, length). Load allocates destination
+  table (layer, kind `k|v|conv|delta`, dtype, shape, offset, length; attention tensors
+  `[heads, tokens, dim]`). Publish: write temp, `fcntl(F_FULLFSYNC)` on the file, rename,
+  `fcntl(F_FULLFSYNC)` on the directory (plain `fsync` does not reach stable storage on macOS;
+  Linux uses `fsync`). Load allocates destination
   arrays through the engine (inside the budget), then `pread`s directly into their host pointers
   (unified memory, no staging copy) and verifies each block's checksum as it lands.
 - **Rationale**: Raw reads into budgeted buffers keep the 20× target and add no transient memory;
@@ -38,12 +43,16 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
 - **Decision**: Two sources, both immutable while read: (1) a branch segment as soon as it is moved
   out of the live path (003 moves create exactly these objects); (2) the live path's committed
   tokens not yet on disk, after 2 s of server idleness, as an entry whose parent is the previous
-  live-path entry. Checkpoints of hybrids are written with the entry that ends at their position.
-  Writes happen once per range; LRU touches update mtime only. Tiny tails (< 256 tokens, which 003
-  discards) are not persisted.
+  live-path entry; live-path entries are split at persisted checkpoints. Before a branch is
+  written, the writer persists the live path up to the branch point `at`, so the branch's parent
+  exists on disk. Hybrids persist per turn only the end-of-prompt checkpoint (plus the system+tools
+  checkpoint once); restore imports only the deepest checkpoint at or below the match. Writes
+  happen once per range; LRU touches update mtime only. Tiny tails (< 256 tokens, which 003
+  discards) are not persisted. Requests with `x-mrun-cache: off` are never persisted.
 - **Rationale**: Write-on-evict cannot work under pressure (writing 2 GiB takes ≈ 0.5 s while the
   memory is needed now); writing early from immutable sources makes eviction free and keeps the
-  write volume to new tokens only (≈ 40 MB per 2K-token turn on Qwen3.6, ≈ 190 MB on Qwen3-Coder [I]).
+  write volume to new tokens only: per 2K-token turn ≈ 40 MiB attention + ≈ 61 MiB checkpoint
+  ≈ 100 MiB on Qwen3.6, ≈ 190 MB on Qwen3-Coder [I].
 - **Alternatives**: Write every turn synchronously (adds latency, constitution I); write only at
   shutdown (crashes and `kill` lose everything).
 
@@ -52,28 +61,29 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
 - **Decision**: The writer thread never calls MLX. The engine thread hands it `(host pointer,
   length)` views of evaluated arrays plus a generation counter. Before any operation that could
   free or overwrite those bytes (trim below the written range, per-layer growth, move-out of a
-  layer, eviction of the source branch, shutdown), the engine thread calls `quiesce(range)`: the
-  writer finishes or abandons its current 4 MiB block (≤ ≈ 2 ms at ≥ 2 GB/s) and drops the views;
+  layer, eviction of the source branch, shutdown), the engine thread calls `quiesce(range)`; it
+  waits at most for one block, eviction included: the writer finishes or abandons its current
+  4 MiB block (≤ ≈ 2 ms at ≥ 2 GB/s) and drops the views;
   the job is discarded and its temp file deleted. Appends need no quiesce.
 - **Rationale**: Keeps ARCHITECTURE's single-MLX-thread rule (competitors that drove MLX from
   several threads hit stream errors and kernel panics); bounded critical-path cost (SC-003).
 
-## R5: Lookup, read-ahead and restore decision
+## R5: Lookup and restore decision
 
 - **Decision**: The index maps a 64-bit hash of tokens `[0, end)` at each entry end, plus every
   boundary recorded in the header, to entries. Lookup walks the request's boundary hashes deepest
-  first, then confirms with a full token comparison (FR-005). Read-ahead: at queue admission the
-  API layer (which has the tokens) asks the index for candidates and issues `fcntl(F_RDADVISE)`
-  over their files (Linux: `posix_fadvise(WILLNEED)`); no budget is used. Restore decision:
-  `bytes / read_GBps` (measured per directory, EWMA) vs `gap_tokens / prefill_tps(depth)` (from
-  001 stats); ties go to memory.
-- **Alternatives**: Prefetch into mrun buffers before admission (would spend budget for requests
-  that may be cancelled); rejected.
+  first, then confirms with a full token comparison (FR-005). Restore decision: use disk when the
+  disk match exceeds the memory match by ≥ 512 tokens (at ≥ 20× restore vs prefill, smaller gains
+  are not worth a disk read); ties go to memory.
+- **Alternatives**: Read-ahead at queue admission (`F_RDADVISE`) and an EWMA read-speed model with
+  a `disk-slower` cause (previous design): dropped after analyze as unmeasured complexity.
+  Prefetch into mrun buffers before admission (spends budget on requests that may be cancelled);
+  rejected.
 
 ## R6: Identity binding
 
-- **Decision**: Eligibility requires equality of: weights identity (001 R10, including any MTP
-  sidecar component from 006), tokenizer hash, template hash, state format (attention dtype, layer
+- **Decision**: Eligibility requires equality of: weights identity (001 R10; the 006 MTP sidecar is
+  never part of it, D024), tokenizer hash, template hash, state format (attention dtype, layer
   layout, checkpoint format version), on-disk format version, and the vendored MLX/mlx-c version.
   mrun patch releases that keep these keep their entries. Directory layout `prefix/<sha256(key)[0..16]>/` groups files
   per key; the key itself is in every header and compared in full.

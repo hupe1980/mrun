@@ -16,7 +16,7 @@
 | Field | Value |
 | --- | --- |
 | url, sha256, version | release tarball |
-| requirements | `depends_on arch: :arm64`, `depends_on macos: :sonoma` |
+| requirements | `depends_on arch: :arm64`, `depends_on macos: :sequoia` |
 | install | `libexec.install "bin/mrun", "bin/mlx.metallib"`; `bin.write_exec_script libexec/"mrun"`; completions |
 | caveats | service install/restart after upgrade; `brew upgrade mrun`; models live in the HF cache |
 | test | `mrun --version`; `mrun config` |
@@ -26,7 +26,7 @@
 | Key | Value |
 | --- | --- |
 | Label | `io.github.hupe1980.mrun` |
-| ProgramArguments | `[<binary>, "serve", "--service"]`; `<binary>` = `<brew prefix>/opt/mrun/libexec/mrun` (Homebrew) or canonical current executable |
+| ProgramArguments | `[<binary>, "serve", "--service"]`, plus `"--preload"` when installed with `--preload`; `<binary>` = `<brew prefix>/opt/mrun/libexec/mrun` (Homebrew) or canonical current executable |
 | RunAtLoad | true |
 | KeepAlive | `{SuccessfulExit: false}` |
 | ThrottleInterval | 10 |
@@ -48,6 +48,13 @@ States (from `launchctl print gui/<uid>/<label>` and the plist): `not-installed`
 
 Transitions: `idle --request queued/started--> held`; `held --queue empty--> releasing(60 s)`;
 `releasing --new request--> held`; `releasing --timeout--> idle`. Linux: always `idle`.
+
+## ModelLoadState (service mode)
+
+`unloaded → loading → loaded`; `loading → unloaded` on failure (waiting requests fail with the 004
+error). Engine created on the first dequeued request (or at start with `--preload`). Exposed as
+`/health` `loaded`, `/mrun/status` `loaded`, gauge `mrun_model_loaded`. While `unloaded`, capacity
+comes from the cached probe or the 004 fit estimate with `estimated: true`.
 
 ## Metric
 

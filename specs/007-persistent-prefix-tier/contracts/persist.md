@@ -31,11 +31,16 @@ Imported segments and checkpoints are indistinguishable from ones made by `split
 ## Prefix store integration (`crates/mrun/src/cache/mod.rs`)
 
 Worker order per request (extends 003): `lookup` (memory + disk candidates) → admission → if
-`choice == disk`: for each entry in the chain `import_alloc` (on `NeedsMemory`, evict first) →
-reader fills buffers (checksums per block) → `import_seal` → 003 `append(consume: true)` /
-`restore_checkpoint` → prefill the gap → decode → `finish` (memory) →
-after 2 s idle: writer job for the live path. Branch move-out (003) enqueues a writer job for the
-moved segment. Any reader error before sealing drops the buffers and falls back to recompute; the
+`choice == disk` (disk match ≥ memory match + 512 tokens): for each entry's attention segment in
+the chain, and only the deepest checkpoint at or below the match, `import_alloc` (on `NeedsMemory`,
+evict first) → reader fills buffers (checksums per block) → `import_seal` → 003
+`append(consume: true)` / `restore_checkpoint` → prefill the gap → decode → `finish` (memory) →
+after 2 s idle: writer job for the live path (split at persisted checkpoints). Branch move-out
+(003) first enqueues the live path up to the branch point `at` (if not yet persisted), then the
+moved segment, so the branch entry has a persisted parent. Hybrids write per turn only the
+end-of-prompt checkpoint, plus the system+tools checkpoint once. Nothing is written for requests
+with `x-mrun-cache: off`. Quiesce before any mutation (including eviction) waits at most one 4 MiB
+block. Any reader error before sealing drops the buffers and falls back to recompute; the
 miss report says why.
 
 ## HTTP (extends 002)
@@ -61,6 +66,6 @@ an unreachable process (message names the pid).
 
 ## Bench (extends 005, additive)
 
-`mrun bench --suite persist [--from RECORD_DIR]`: cells `persist/read-gbps`, `persist/write-gbps`,
+`mrun bench --suite persist [--from RECORD_DIR]` (all timings with the model loaded): cells `persist/read-gbps`, `persist/write-gbps`,
 `persist/restore-30k` (restore vs re-prefill seconds, ratio), and with `--from`:
 `persist/attribution` (`{restart_tokens, evicted_tokens, other_tokens, disk_served_tokens_at_cap}`).

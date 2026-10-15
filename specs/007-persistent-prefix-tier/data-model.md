@@ -12,7 +12,7 @@
 
 ## EntryKey (binding)
 
-`{weights_identity (001 R10, incl. MTP sidecar component), tokenizer_hash, template_hash,
+`{weights_identity (001 R10; no MTP sidecar component, D024), tokenizer_hash, template_hash,
 state_format {attention dtype, layer layout hash, checkpoint format version}, format_version: 1,
 mlx_version}`. Directory: `prefix/<hex(sha256(EntryKey))[0..16]>/`; the full key is in every
 header and compared field by field.
@@ -27,8 +27,8 @@ header and compared field by field.
 | start, end | u32 | state range `[start, end)`; `start == parent.end` or 0 |
 | tokens | u32 × end | full prefix token ids |
 | boundaries | list of {pos, kind} | message boundaries inside `(start, end]` (lookup hashes) |
-| checkpoint | bool | recurrent state at `end` included (hybrids) |
-| tensors | list of {layer, kind `k`\|`v`\|`conv`\|`delta`, dtype, shape, offset, len} | 16 KiB aligned |
+| checkpoint | bool | recurrent state at `end` included (hybrids; only end-of-prompt per turn, plus system+tools once) |
+| tensors | list of {layer, kind `k`\|`v`\|`conv`\|`delta`, dtype, shape, offset, len} | 16 KiB aligned; attention `k`/`v` shape `[heads, tokens, dim]` |
 | checksums | xxh3-64 per 4 MiB block + header hash | verified on load |
 | size | u64 | file length |
 | last_use | file mtime | touched on reuse |
@@ -37,6 +37,9 @@ Invariants:
 - A published file (no `.tmp` suffix) is complete and its checksums matched at write time.
 - Tokens are never trusted without comparison against the request (FR-005).
 - Deleting an entry deletes its descendants first (LRU removes leaves).
+- A branch entry's parent is a persisted live-path entry ending at the branch point `at`; live-path
+  entries are split at persisted checkpoints.
+- No entry contains state from a request with `x-mrun-cache: off`.
 
 States: `writing (.tmp) → published → (touched)* → deleted`; `corrupt` (checksum or parse failure) →
 deleted.
@@ -44,8 +47,7 @@ deleted.
 ## TierIndex (in memory)
 
 `{by_hash: HashMap<u64 (hash of tokens [0,pos)), Vec<(entry_id, pos)>>, entries: {id → {parent,
-start, end, checkpoint, size, mtime}}, children: id → set, lru: ordered by mtime, used_bytes,
-read_gbps (EWMA, initialized by a 64 MiB probe read at open)}`.
+start, end, checkpoint, size, mtime}}, children: id → set, lru: ordered by mtime, used_bytes}`.
 
 ## WriterJob
 
@@ -55,15 +57,15 @@ engine thread abandons any job whose views overlap `range` after its current blo
 
 ## Lookup result (extends 003 Lookup)
 
-`{memory: Lookup (003), disk: Option<{entry chain, matched, checkpoint_at, bytes,
-est_read_s, est_recompute_s}>, choice: memory | disk}`.
+`{memory: Lookup (003), disk: Option<{entry chain, matched, checkpoint_at (deepest ≤ matched),
+bytes}>, choice: memory | disk}`; `disk` when `disk.matched ≥ memory.matched + 512`.
 
 ## MissReport (extends 003)
 
-`source: memory | disk | none` for the reused tokens; causes add `disk-corrupt`, `disk-slower`.
+`source: memory | disk | none` for the reused tokens; causes add `disk-corrupt`.
 
 ## TierStats (`/mrun/status`, `mrun cache`, metrics in 008)
 
 `{enabled, dir, cap_bytes, used_bytes, entries, per_key: [{key16, model alias?, bytes, entries}],
 writes_total, write_bytes_total, abandoned_total, disk_hits_total, disk_hit_tokens_total,
-corrupt_total, read_gbps, last_error?}`.
+corrupt_total, last_error?}`.

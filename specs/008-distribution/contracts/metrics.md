@@ -9,6 +9,10 @@ Label sets: `api` ∈ {`chat`, `messages`, `responses`}; `outcome` ∈ {`ok`, `c
 `rejected`}; `cause` ∈ 003 miss causes; `reason` ∈ {`capacity`, `pressure`, `clear`};
 `component` as listed.
 
+Before the model is loaded (service mode without `--preload`, D022), only `mrun_build_info`,
+`mrun_start_time_seconds`, `mrun_model_loaded` (0), request/queue and power series are exported;
+`mrun_model_info`, memory (001) and cache series are absent until loaded.
+
 ## Build and model
 
 | Name | Type | Labels | Meaning |
@@ -16,6 +20,7 @@ Label sets: `api` ∈ {`chat`, `messages`, `responses`}; `outcome` ∈ {`ok`, `c
 | `mrun_build_info` | gauge (1) | `version`, `commit`, `mlx_version` | Build identity |
 | `mrun_model_info` | gauge (1) | `model`, `identity` (first 12 hex), `architecture`, `quantization` | Loaded model |
 | `mrun_start_time_seconds` | gauge | — | Server start (Unix time) |
+| `mrun_model_loaded` | gauge | — | 1 once the model is loaded, else 0 |
 
 ## Requests and latency
 
@@ -36,8 +41,6 @@ Label sets: `api` ∈ {`chat`, `messages`, `responses`}; `outcome` ∈ {`ok`, `c
 | `mrun_prefill_seconds_total` | counter | — | Time spent in prefill; `rate(tokens)/rate(seconds)` = prefill tok/s |
 | `mrun_generated_tokens_total` | counter | — | Output tokens committed |
 | `mrun_decode_seconds_total` | counter | — | Time spent decoding |
-| `mrun_last_prefill_tokens_per_second` | gauge | — | Last request's prefill rate |
-| `mrun_last_decode_tokens_per_second` | gauge | — | Last request's decode rate |
 
 ## Prefix cache (003)
 
@@ -70,6 +73,5 @@ Label sets: `api` ∈ {`chat`, `messages`, `responses`}; `outcome` ∈ {`ok`, `c
 ## Reserved for later features
 
 `mrun_spec_drafted_tokens_total{drafter}`, `mrun_spec_accepted_tokens_total{drafter}`,
-`mrun_spec_rounds_total{drafter}` (006); `mrun_cache_disk_writes_total`,
-`mrun_cache_disk_write_bytes_total`, `mrun_cache_disk_corrupt_total`,
-`mrun_cache_disk_read_bytes_per_second` (007).
+`mrun_spec_rounds_total{drafter}` with `drafter` ∈ {`ngram`} (006); `mrun_cache_disk_writes_total`,
+`mrun_cache_disk_write_bytes_total`, `mrun_cache_disk_corrupt_total` (007).

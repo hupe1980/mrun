@@ -6,11 +6,12 @@
 
 ## Summary
 
-Ship mrun 0.1 to Macs: a GitHub Actions release pipeline that builds the arm64 binary with the
+Ship mrun 0.1 to Macs (macOS 15+, arm64): a GitHub Actions release pipeline that builds the arm64 binary with the
 vendored MLX Metal library, signs and notarizes it, publishes a tarball with checksums, changelog
 and SBOM, and updates a Homebrew tap formula. Add `mrun service install|uninstall` (launchd user
-agent running `serve --service` with rotating logs), an idle-sleep power assertion while requests
-run, and a Prometheus `/metrics` endpoint with a fixed, documented metric set. No updater.
+agent running `serve --service` with rotating logs and lazy model loading, `--preload` opt-in), an
+idle-sleep power assertion while requests run, and a Prometheus `/metrics` endpoint with a fixed,
+documented metric set. No updater.
 
 ## Technical Context
 
@@ -26,8 +27,7 @@ on Linux); release workflow dry run on a fork with test credentials; manual SC-0
 target Mac
 **Target Platform**: macOS 15+ arm64 (release); Linux for portable tests and CI
 **Project Type**: Packaging, CI, and small runtime additions to the `mrun` binary
-**Performance Goals**: `/metrics` render < 1 ms; metric updates lock-free on the hot path; no
-measurable decode impact (bench delta < 0.5%)
+**Performance Goals**: `/metrics` render < 1 ms; metric updates lock-free on the hot path
 **Constraints**: No network except `pull`; no root; no privileged OS tuning (constitution)
 **Scale/Scope**: One formula, one plist, ~40 metric series
 
@@ -64,7 +64,8 @@ specs/008-distribution/
 
 ```text
 crates/mrun/src/
-├── cli/service.rs            # service install|uninstall; launchctl bootstrap/bootout
+├── cli/service.rs            # service install|uninstall [--preload]; launchctl bootstrap/bootout
+├── runtime/lazy.rs           # lazy engine creation on first dequeue, keepalive/progress while loading
 ├── cli/version.rs            # long --version (commit, MLX/mlx-c, build date) via build.rs env
 ├── platform/
 │   ├── mod.rs                # install source detection, real binary path
@@ -77,10 +78,12 @@ crates/mrun/src/
 crates/mrun/build.rs          # embed git commit, build date, vendored MLX/mlx-c versions
 crates/mrun/tests/
 ├── metrics_exposition.rs     # snapshot + promtool (if installed) + label-set checks
-├── service_plist.rs          # plist snapshots for Homebrew and tarball paths
+├── service_plist.rs          # plist snapshots for Homebrew and tarball paths, with/without --preload
+├── lazy_load.rs              # scripted lazy-load: keepalives, /health loaded flag, estimated capacity
+├── doctor_offline.rs         # install source detection; no network during doctor
 └── power_state.rs            # fake-clock state machine
 .github/workflows/
-├── ci.yml                    # PRs: Linux fmt/clippy/test; macOS arm64 release build; changelog check
+├── ci.yml                    # PRs: Linux fmt/clippy/test; macOS arm64 release build
 └── release.yml               # tags: version check, build, sign, notarize, publish, tap PR
 packaging/homebrew/mrun.rb.tmpl   # formula template rendered by release.yml
 scripts/release/{sign.sh, notarize.sh, package.sh, sbom.sh}
@@ -93,11 +96,15 @@ and workflows; the tap repository holds only the rendered formula.
 
 ## Cross-spec changes (to fold into the owning specs)
 
-- 002 API contract: `GET /metrics` row; `/mrun/status` adds `power: {assertion: bool, since?}`.
-- 004 CLI contract: `mrun service install|uninstall`, `serve --service`, long `--version`;
-  `doctor` checks install source, service state, stale plist; `stop` message with a service.
+- 002 API contract: `GET /metrics` row; `/mrun/status` adds `power: {assertion: bool, since?}` and
+  `loaded`; `/health` adds `loaded`; `/v1/models` capacity may be `estimated` before load.
+- 004 CLI contract: `mrun service install|uninstall [--preload]`, `serve --service [--preload]`,
+  long `--version`; `doctor` checks install source, service state, stale plist; `stop` message with
+  a service; `launch` shows estimated capacity before load.
+- 001: macOS 15.0 deployment target.
 - 006/007 own their metric families (`mrun_spec_*`, `mrun_cache_*{tier="disk"}`) using the names
   reserved in the metrics contract.
+- Folded by T024.
 
 ## Complexity Tracking
 

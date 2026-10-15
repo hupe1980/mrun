@@ -3,7 +3,10 @@
 Evidence marks as in [next-features](../../concepts/research/next-features-2026-10.md): **[V]**
 verified in source at the stated revision, **[U]** unverified, **[I]** own inference.
 
-## R1: Source of MTP weights
+## R1: Source of MTP weights (follow-up, gated)
+
+Kept for the MTP follow-up (spec "Follow-up (gated)"); not implemented by this feature.
+
 
 - **Finding [V]**: mlx-lm `ba8a08f` drops every key containing `mtp.` in `qwen3_5.py:354`
   (`sanitize`), which `qwen3_5_moe.py` calls after remapping; `convert` loads through `load` →
@@ -19,9 +22,9 @@ verified in source at the stated revision, **[U]** unverified, **[I]** own infer
   verified, quantized with the base scheme (affine, 4-bit, group 64; `mlp.gate` and
   `shared_expert_gate` 8-bit, matching mlx-lm's `quant_predicate`), and written to
   `~/.mrun/sidecars/<base-identity>/mtp.safetensors` (outside the shared HF cache) atomically. The
-  manifest records source repo, revision, tensor hashes and the sidecar SHA-256; the model identity
-  (001 R10) gains `mtp = <sidecar sha256>`, so 003 keys never mix states from with- and
-  without-head loads (the head does not change target state, but the identity stays honest).
+  manifest records source repo, revision, tensor hashes and the sidecar SHA-256, and `mrun show`
+  lists it. The sidecar is not part of the model identity or the 003 cache key: the head never
+  changes target state (analyze F8).
   When the mirror refuses range requests, pull falls back to downloading the shards that contain
   `mtp.*` (listed in the index), verifying them by their LFS hash, then extracting.
 - **Size [I from U config]**: hidden 2,048, 256 experts × 3 × 2,048 × 512 ≈ 805M expert params plus
@@ -53,15 +56,19 @@ verified in source at the stated revision, **[U]** unverified, **[I]** own infer
   (older versions: a tab); `Edit.old_string` must not include those prefixes. In Qwen3 (Hermes JSON)
   tool calls, argument strings are JSON-escaped; Qwen3-Coder and Qwen3.6 XML parameters are raw
   (002 research §3). AgSpec (2610.01108) indexes files "in the agent's own emission format" [V listing].
-- **Decision**: For every tool-result and message text block, add renderings: (1) line-number
-  prefixes stripped; (2) JSON-escaped (models with JSON tool syntax only); (3) both. Each rendering is
-  tokenized separately and appended to the index as an unrendered source with a separator token.
-  Cost is bounded by input caps (002 body ≤ 8 MiB).
+- **Decision**: For every tool-result and message text block, add one rendering with line-number
+  prefixes stripped, tokenized separately and appended to the index as an unrendered source with a
+  separator token. Cost is bounded by input caps (002 body ≤ 8 MiB). JSON-escaped renderings were
+  dropped (analyze): the default models' XML tool syntax passes arguments raw; revisit if FR-001
+  shows JSON-syntax models losing matches.
 - **Alternatives**: Character-level matching and re-tokenizing drafts: token boundaries differ by
   context, but the token-level index already absorbs that within a few tokens; rejected for
   complexity.
 
-## R4: MTP drafter and its attention state
+## R4: MTP drafter and its attention state (follow-up, gated)
+
+Kept for the MTP follow-up; not implemented by this feature.
+
 
 - **Finding [V]**: The head fuses `embed(token[s+1])` with the target hidden at `s` through
   `pre_fc_norm_embedding`, `pre_fc_norm_hidden` and `fc`, runs one full-attention decoder layer
@@ -84,15 +91,18 @@ verified in source at the stated revision, **[U]** unverified, **[I]** own infer
 - **Finding [V]**: Recurrent state is not trimmable. Ollama schedules recurrent snapshots at every
   draft offset by splitting the recurrent kernel there (`speculate.go:337`,
   `cache/recurrent.go:42-65`); vLLM keeps an SSM replay buffer.
-- **Decision**: During a verify forward of N+1 positions, capture recurrent snapshots (conv and
-  delta state of all linear-attention layers) at most at 8 offsets: every position when N ≤ 8,
-  otherwise every ⌈(N+1)/8⌉ positions (the kernel is segmented at those offsets). On acceptance of a
-  tokens, restore the deepest snapshot ≤ a+1 and re-forward the remaining < stride tokens (all
-  layers; attention KV for those positions is rewritten identically within tolerance). Snapshots
-  (≈ 60 MiB each on Qwen3.6-35B-A3B [U]; ≤ 480 MiB) are part of the scratch envelope; FR-013
-  lowers N_max when the probe cannot fit them. The controller's cost includes the replay.
-- **Alternatives**: Snapshot every position for long drafts (64 × 60 MiB); rejected for memory.
-  Replay from the round start always; rejected (doubles the cost of long accepted drafts).
+- **Decision** (revised after analyze F1): during a verify forward of N+1 positions, keep the
+  pre-round recurrent state (conv and delta state of all linear-attention layers) and the round's
+  per-position GDN inputs (conv input, q/k/v, g, β; ≈ 0.5 MiB per position on Qwen3.6-35B-A3B [I],
+  ≤ 32 MiB at N = 64). On acceptance of a tokens (or `commit(k)`), recompute only the
+  linear-attention recurrence over a+1 (or k) positions from the pre-round state, per layer, with
+  the existing kernel. Attention KV is trimmed. Nothing is re-forwarded: the recurrence inputs do
+  not depend on later positions. The input cache is part of the scratch envelope (FR-013); the
+  controller's cost includes the recompute.
+- **Alternatives**: In-round snapshots at ≤ 8 offsets with a segmented kernel and re-forward of the
+  gap (previous design): ≤ 480 MiB of snapshots and a full re-forward of up to a stride; rejected.
+  Replay from the round start through all layers: doubles the cost of long accepted drafts;
+  rejected.
 
 ## R6: Controller
 
@@ -102,15 +112,17 @@ verified in source at the stated revision, **[U]** unverified, **[I]** own infer
   show MoE verify cost grows with the union of experts and the optimal stop is a linear boundary in
   (marginal cost, marginal accepted progress) [V listings]. Adversarial prompts can collapse
   acceptance (2607.21804).
-- **Decision**: Per model, per drafter: acceptance as Beta counts per n-gram match-length bucket
-  ({4–7, 8–15, 16–31, 32+}) and per MTP position; cost(N, depth bucket) from the probe (widths 1, 2,
-  4, 8, 16, 32, 64 at a short and the deepest admissible position, cached with 001's probe in
-  `~/.mrun/probe.toml`) refined by an EWMA of measured rounds per context bucket ({<8K, 8–32K,
-  32–128K, ≥128K}). Expected committed(N) = 1 + Σᵢ₌₁ᴺ Πⱼ≤ᵢ αⱼ. Choose argmax committed(N)/cost(N)
+- **Decision**: Per model: acceptance as Beta counts per n-gram match-length bucket
+  ({4–7, 8–15, 16–31, 32+}); cost(N, context bucket) starts from an analytic prior (measured decode
+  cost of the bucket × expected union of routed experts for N+1 tokens, relative to one token;
+  dense models: weight-read bound, ≈ flat) and is refined by an EWMA of measured rounds per context
+  bucket ({<8K, 8–32K, 32–128K, ≥128K}). No verify-width probe calibration (analyze F33). Expected committed(N) = 1 + Σᵢ₌₁ᴺ Πⱼ≤ᵢ αⱼ. Choose argmax committed(N)/cost(N)
   over N ∈ {0} ∪ [N_min, N_max]; depth 0 has committed 1 at pipelined decode cost. N_min is the
   smallest N whose measured cost/committed beats depth 0 at the bucket's observed acceptance (this
-  is "long drafts only" on MoE, derived rather than hard-coded); N_max = 64 (n-gram), 4 (MTP).
-  Probe one step deeper every 4 rounds, doubling the interval up to 512 while probes change nothing.
+  is "long drafts only" on MoE, derived rather than hard-coded); N_max = 64. The next round's depth
+  is chosen before `sample`, which pipelines only when it is 0. Probe one step deeper every 4
+  rounds, doubling the interval up to 512 while probes change nothing; on text with no matches the
+  controller settles at depth 0 within 64 rounds.
 - **Alternatives**: Fixed draft lengths (llama.cpp defaults); rejected: cannot guarantee SC-001.
 
 ## R7: Verification and sampling on device
@@ -118,8 +130,9 @@ verified in source at the stated revision, **[U]** unverified, **[I]** own infer
 - **Decision**: The verify forward returns logits for N+1 positions; greedy acceptance compares
   `argmax` on device; sampling applies the request's transforms once per position and runs the
   acceptance test and residual sampling on device with the request's RNG stream. One host sync per
-  round (accepted length + bonus token). Plain decode keeps its one-token-ahead pipelining at
-  depth 0; switching depth 0 → N drains the pipeline first.
+  round (accepted length + bonus token). Acceptance ends at the first accepted EOS. Plain decode
+  keeps its one-token-ahead pipelining at depth 0; the next depth is chosen before `sample`
+  (`pipeline = next_depth == 0`), so no pipelined step is wasted when switching to N > 0.
 - **Rationale**: Self-Speculation (2608.20359) calls suffix drafts "approximate"; a deterministic
   draft is a point-mass proposal and the rule in FR-005 keeps the target distribution exactly [I].
 
@@ -128,7 +141,7 @@ verified in source at the stated revision, **[U]** unverified, **[I]** own infer
 - **Decision**: `mrun bench --suite spec` (mrun only). Offline cell: for each trace turn, tokenize
   the recorded reply (taken from the next request's history) and simulate the n-gram drafter against
   it: acceptance-length histogram, share of reply tokens in matches ≥ 16 (defines "edit-heavy",
-  SC-002). Online cells: decode tok/s per turn with `off|ngram|mtp|auto`, drafted/accepted, MTP
-  acceptance per position. Gate: ship `auto` as default only when SC-001 and SC-002 pass; publish
-  the cells with the bench report.
+  SC-002). Online cells: decode tok/s per turn with `off|ngram|auto`, drafted/accepted. Gate: ship `auto` as default only when SC-001 and SC-002 pass; publish
+  the cells with the bench report. MTP acceptance is measured separately by the follow-up's gate
+  with a reference implementation.
 - **Alternatives**: Synthetic copy prompts only; rejected (overstates acceptance, 2601.11580).

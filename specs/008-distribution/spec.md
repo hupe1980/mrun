@@ -13,11 +13,15 @@
 ### Session 2026-10-15
 
 - Q: Which install channels? → A: A Homebrew tap (`hupe1980/homebrew-tap`, `brew install hupe1980/tap/mrun`) installing the release tarball, and the same tarball on GitHub Releases. homebrew-core is later (it requires building MLX from source in Homebrew's CI).
-- Q: Which platforms are released? → A: macOS 15 or later on Apple Silicon (arm64) only (matching 001; the M0 spike may lower it). Linux builds stay test-only.
+- Q: Which platforms are released? → A: macOS 15 (Sequoia) or later on Apple Silicon (arm64) only (matching 001). Linux builds stay test-only.
 - Q: Does mrun update itself? → A: No. There is no update check and no network use beyond `mrun pull`; `brew upgrade mrun` is documented, and `mrun doctor` prints the installed version only.
 - Q: How do service and Homebrew relate? → A: `mrun service install` is the only service mechanism; the formula defines no `brew services` block, and its caveats point to `mrun service install`.
 - Q: Does the service load the model at login? → A: No. The service starts the server at login and loads the model on the first request, so logging in does not claim ≈20 GB; once loaded the model stays resident (D020). `mrun service install --preload` loads at login instead. (Maintainer decision 2026-10-15.)
 - Q: Is `/metrics` on by default? → A: Yes. It is local, pull-only, contains no prompt data, and follows the same bind and authentication rules as every other endpoint.
+- Q: What do clients see before the lazily loaded model is loaded? → A: `/v1/models`,
+  `/mrun/status` and `mrun launch` report capacity from the cached probe, or the 004 fit estimate
+  marked `estimated`; model and budget metrics are absent until loaded; `mrun_model_loaded` is 0;
+  `/health` reports `loaded: false`. (Analyze F3, D022.)
 - Q: SBOM? → A: Each release attaches a CycloneDX SBOM for the Rust dependency graph plus a hand-maintained component entry for vendored MLX and mlx-c (SHOULD; a missing SBOM does not block a release).
 
 ## User Scenarios & Testing *(mandatory)*
@@ -60,8 +64,8 @@ watch it come back; uninstall and confirm nothing remains.
 **Acceptance Scenarios**:
 
 1. **Given** no service, **When** the developer runs `mrun service install`, **Then** a launchd user
-   agent is written and loaded, the server starts, and the output names the label, plist path, log
-   path, model and resident memory.
+   agent is written and loaded, the server starts (model not loaded unless `--preload`), and the
+   output names the label, plist path, log path, model and expected resident memory.
 2. **Given** an installed service, **When** the Mac reboots and the user logs in, **Then** the server
    is healthy without any command.
 3. **Given** a running service, **When** the server process crashes, **Then** launchd restarts it
@@ -69,6 +73,9 @@ watch it come back; uninstall and confirm nothing remains.
    until the next login or `mrun service install`.
 4. **Given** an installed service, **When** the developer runs `mrun service uninstall`, **Then** the
    agent is unloaded and its plist removed; logs and models are kept.
+5. **Given** a service started without `--preload`, **When** the first request arrives, **Then**
+   the model loads, the request (and any queued ones) receives keepalives or progress while it
+   loads, and `/health` reports `loaded: true` afterwards.
 
 ---
 
@@ -132,7 +139,7 @@ artifacts, signatures, notarization status, checksums and the tap pull request.
 
 ### Edge Cases
 
-- Intel Mac or macOS older than 14: the formula refuses to install with the requirement stated; the
+- Intel Mac or macOS older than 15: the formula refuses to install with the requirement stated; the
   tarball's binary exits with the same message.
 - `brew upgrade` while the service runs: the running server keeps the old binary until restart;
   the formula caveats say `mrun service install` restarts it on the new version (the plist points to
@@ -147,31 +154,35 @@ artifacts, signatures, notarization status, checksums and the tap pull request.
 - `/metrics` on a non-loopback bind: requires the API key like every endpoint.
 - Metric cardinality: labels come from fixed sets (API, outcome, cause, component); no request,
   session or model-text labels.
+- Before the model is loaded (lazy service start): capacity is reported from the cached probe or
+  the 004 fit estimate marked `estimated`; model and budget metrics are absent; a load failure
+  fails the waiting requests with the 004 error and leaves the server up, unloaded.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 - **FR-001**: Releases MUST be built in CI on macOS arm64 runners from a tagged commit, for
-  `aarch64-apple-darwin` with a minimum macOS of 14.0, and ship as `mrun-X.Y.Z-macos-arm64.tar.gz`
+  `aarch64-apple-darwin` with a minimum macOS of 15.0 (`MACOSX_DEPLOYMENT_TARGET=15.0`), and ship as `mrun-X.Y.Z-macos-arm64.tar.gz`
   containing the binary, the MLX Metal library, licenses, notices and shell completions.
 - **FR-002**: The binary MUST be signed with a Developer ID Application certificate, hardened
   runtime and secure timestamp, and notarized by Apple before publication; a failed signature or
   notarization blocks the release.
 - **FR-003**: A Homebrew tap formula MUST install the release tarball (verified by SHA-256),
-  declare `depends_on arch: :arm64` and `depends_on macos: :sonoma`, install the binary so the Metal
+  declare `depends_on arch: :arm64` and `depends_on macos: :sequoia`, install the binary so the Metal
   library resolves from the real binary location, install completions, and print caveats for
   `mrun service install` and `brew upgrade mrun`.
 - **FR-004**: `mrun --version` MUST print version, git commit, vendored MLX and mlx-c versions and
   build date; `mrun doctor` MUST report the install source (Homebrew, tarball, source build) and
-  version, with no network access.
+  version, with no network access (tested).
 - **FR-005**: `mrun service install` MUST write and load (`launchctl bootstrap gui/<uid>`) a user
   agent `~/Library/LaunchAgents/io.github.hupe1980.mrun.plist` that runs `<binary> serve --service`
-  with `RunAtLoad`, `KeepAlive {SuccessfulExit: false}`, `ThrottleInterval 10`, stdout/stderr to
+  (plus `--preload` when installed with it) with `RunAtLoad`, `KeepAlive {SuccessfulExit: false}`, `ThrottleInterval 10`, stdout/stderr to
   `~/.mrun/launchd.log`; it MUST be idempotent (re-running replaces and reloads it) and print label,
   paths, model and expected resident memory. Server settings come from `~/.mrun/config.toml`, not
-  from the plist. `serve --service` starts without loading the model; the first request loads it
-  (queued requests receive keepalives meanwhile) and it then stays resident. `--preload` makes the
+  from the plist. `serve --service` starts without loading the model: the engine is created on the
+  first dequeued request, queued requests receive keepalives or progress while it loads, `/health`
+  carries a `loaded` flag, and the model then stays resident (D020, D022). `--preload` makes the
   agent load the model at login.
 - **FR-006**: `mrun service uninstall` MUST unload (`launchctl bootout`) and delete the agent and
   keep logs, config and models; both commands MUST refuse to run as root.
@@ -198,6 +209,10 @@ artifacts, signatures, notarization status, checksums and the tap pull request.
 - **FR-014**: Each release MUST publish `SHA256SUMS` and SHOULD publish a CycloneDX SBOM.
 - **FR-015**: CI on every pull request MUST run fmt, clippy and tests on Linux and build the
   release configuration on macOS arm64 (constitution workflow).
+- **FR-016**: Before the model is loaded, `/v1/models`, `/mrun/status` and `mrun launch` MUST
+  report capacity from the cached 001 probe or, without one, the 004 fit estimate marked
+  `estimated`; model and memory-budget metrics MUST be absent until loaded, and the gauge
+  `mrun_model_loaded` MUST be 0 before and 1 after loading.
 
 ### Key Entities
 
@@ -215,9 +230,10 @@ artifacts, signatures, notarization status, checksums and the tap pull request.
   installed, `brew install hupe1980/tap/mrun` followed by `mrun launch claude-code` (accepting the
   offered pull) completes the scripted read-edit-test task with no other command and no Gatekeeper
   prompt, in 3 of 3 runs.
-- **SC-002**: With the service installed, after 3 of 3 reboots and logins `/health` answers within
-  the model load time plus 10 s, and after 5 of 5 `kill -9` the server is healthy again within
-  load time plus 15 s.
+- **SC-002**: With the service installed without `--preload`, after 3 of 3 reboots and logins
+  `/health` answers within 10 s of login with `loaded: false`, and the first request then completes
+  with the model loaded; with `--preload`, `/health` reports `loaded: true` within the model load
+  time plus 10 s. After 5 of 5 `kill -9`, `/health` answers again within 15 s.
 - **SC-003**: `/metrics` passes `promtool check metrics` with zero errors, and 100% of the metrics
   listed in the contract are present with the documented type and labels after one request per API.
 - **SC-004**: With a 1-minute idle-sleep setting, a 3-minute request completes in 3 of 3 runs and

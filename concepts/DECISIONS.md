@@ -19,6 +19,9 @@ D003 Candle, D005 local-only planning, D016 evidence gating) are history: see gi
 | D019 | Contiguous per-layer attention arrays, no paging; state moves between live path and branches | Accepted 2026-10-15 |
 | D020 | Resident model, never unloaded on an idle timer | Accepted 2026-10-15 |
 | D021 | Fix client-side cache breakers on the server only when narrow and named (attribution nonce) | Accepted 2026-10-15 |
+| D022 | Login service loads the model lazily on the first request; `--preload` is opt-in | Accepted 2026-10-15 |
+| D023 | Persisted prefix entries bound to cache key + on-disk format + MLX version (not mrun version) | Accepted 2026-10-15 |
+| D024 | Speculation ships n-gram/suffix drafting first; MTP gated on measured acceptance; sidecar never in the cache key | Accepted 2026-10-15 |
 
 ## D010: Engine is MLX
 
@@ -84,3 +87,28 @@ Claude Code adds a per-request nonce (`cch=`) to an attribution line at the top 
 prompt; it defeats all reuse for users who start Claude Code without `mrun launch`. mrun replaces
 only that value with a fixed one of the same length (as llama.cpp does). Broader prompt rewriting
 is rejected: an unanchored version elsewhere truncated users' system prompts.
+
+## D022: Lazy model load in the login service
+
+A login service that loads the default model claims ≈20 GB at every login, whether or not an agent
+runs that day. `serve --service` (008) creates the engine on the first dequeued request, sends
+keepalives or progress to waiting requests while loading, and reports `loaded` in `/health`; the
+model then stays resident (D020). Before load, capacity comes from the cached probe or the 004 fit
+estimate marked `estimated`, and model and budget metrics are absent (`mrun_model_loaded` 0).
+`mrun service install --preload` loads at login instead.
+
+## D023: Persistent tier binding
+
+007 entries are eligible only when the 003 cache key (weights, tokenizer, template, state format),
+the on-disk format version and the vendored MLX version all match. Binding to the full mrun version
+would discard the tier on every patch release; the MLX version is what can change recompute bits
+and layouts. Entries are never converted.
+
+## D024: Speculation scope
+
+006 ships copy-aware n-gram/suffix speculation only: agent edits copy from context, and drafts
+cost no model memory. MTP drafting on Qwen3.6 proceeds only after its per-position acceptance is
+measured offline with an existing implementation (Ollama's MLX runner MTP module, vLLM as a
+cross-check) and shows α₁ ≥ 0.8 and a modeled speed-up ≥ 1.15×. If it ships, the MTP sidecar is
+recorded in the manifest and shown by `mrun show`, but never enters the model identity or cache
+key: the head does not change target state.

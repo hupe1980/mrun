@@ -36,3 +36,6 @@
   specs 002–004.
 - Measure-first gate (FR-001) must pass before `auto` becomes the default; SC-001/SC-002 are the
   acceptance gates.
+- Analyze pass (2026-10-15): scope cut to n-gram/suffix speculation; MTP (US3, FR-004, FR-015,
+  FR-016) moved to "Follow-up (gated)"; hybrid rollback redesigned (FR-006); FR-017 added; SC-001
+  uses the 005 regression threshold.
