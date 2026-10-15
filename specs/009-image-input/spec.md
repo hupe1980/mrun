@@ -115,11 +115,12 @@ number of maximum-size images under memory pressure; peak memory stays within th
 
 **Acceptance Scenarios**:
 
-1. **Given** startup, **When** the model loads, **Then** `--info`, `mrun ps` and `/mrun/status`
-   show vision weights, vision scratch and embedding-cache cap, and state capacity is reduced
-   accordingly.
+1. **Given** startup with vision enabled, **When** the model loads, **Then** `mrun run --info`,
+   `mrun ps` and `/mrun/status` show vision weights, vision scratch and the embedding-cache cap as
+   budget terms, and the state capacity they report is what remains after those terms.
 2. **Given** a request exceeding image count, size or byte limits, **When** it is validated,
-   **Then** it is rejected before queuing, naming the limit and the setting that raises it.
+   **Then** it is rejected before queuing, naming the limit and either the setting that raises it
+   or, for the fixed safety caps, that the cap is fixed.
 
 ### Edge Cases
 
@@ -144,11 +145,12 @@ number of maximum-size images under memory pressure; peak memory stays within th
 ### Functional Requirements
 
 - **FR-001** (gate): Before implementation beyond the measurement tasks, mrun MUST count requests
-  and sessions containing image blocks (by API and location: user message or tool result) in
-  `/mrun/status` and `/metrics`, and `mrun bench` MUST report the share of recorded sessions
-  (002 FR-021) containing images per client. The feature proceeds when ≥ 5% of recorded agent
-  sessions from at least two clients contain an image, or on ≥ 3 independent user requests;
-  the decision and data are recorded in research.
+  containing image blocks (by API and location: user message or tool result) live, in
+  `/mrun/status` under the key `images` and in `/metrics` (008); sessions are counted offline:
+  `mrun bench --trace-stats` MUST report the share of recorded sessions (002 FR-021) containing
+  images per client. The feature proceeds when, in each of at least two clients, ≥ 5% of recorded
+  sessions contain an image, or when ≥ 3 independent users request image input; the decision and
+  data are recorded in research.
 - **FR-002**: When the loaded model has a vision tower and vision is enabled, mrun MUST accept
   images in user messages and tool results on all three APIs: Anthropic `image` blocks with
   `source.type: "base64"` (also inside `tool_result.content`), Chat Completions `image_url` parts
@@ -159,11 +161,14 @@ number of maximum-size images under memory pressure; peak memory stays within th
   rejected in user messages naming the JSON path, and replaced with
   `[image omitted: remote images are not fetched]` plus an `image-omitted` warning in tool results
   (`--reject-tool-images` rejects them).
-- **FR-004**: Limits, validated before queuing, each named in errors with the setting that raises
-  it: encoded size ≤ 20 MiB per image; decoded size ≤ 50 megapixels; ≤ 64 images per request; image
-  bytes ≤ 64 MiB per request, counted separately from 002's text body cap; image tokens per image
-  ≤ `max_image_tokens` (default 2,560; images above are downscaled, not rejected); `detail: "low"`
-  caps an image at 256 tokens. Decoding runs one image at a time and keeps only resized pixels.
+- **FR-004**: Limits, validated before queuing and each named in errors: ≤ 64 images per request
+  (`max_images`); decoded image bytes ≤ 48 MiB per request (`max_image_bytes_mib`; the base64 form
+  must also fit 002's 64 MiB body cap); image tokens per image ≤ `max_image_tokens` (default
+  2,560; images above are downscaled, not rejected); `detail: "low"` caps an image at 256 tokens.
+  Two fixed safety caps have no setting, and their errors say the cap is fixed: encoded size
+  ≤ 20 MiB per image, measured after base64 decoding, and decoded size ≤ 50 megapixels. Decoding
+  runs one image at a time; resized pixels are dropped once the digest is computed, and the image
+  is decoded again from the request bytes when the encoder needs it.
 - **FR-005**: Preprocessing MUST follow the model's reference processor (smart resize to multiples
   of 32 px within `[min_pixels, max_pixels]`, RGB, rescale and normalize, temporal patch 2) and be
   versioned; images are rendered as the model's template expands them (start, `t·h·w/4` placeholder
@@ -178,7 +183,9 @@ number of maximum-size images under memory pressure; peak memory stays within th
   `mrun ps` and `/mrun/status` show vision weights, vision scratch and the embedding-cache cap.
 - **FR-008**: Prefix identity (003 FR-001) MUST include images: each placeholder position is keyed
   by (image digest, index within the image), so two prompts match through an image only if the full
-  digests are equal. The cache key (model identity) already covers vision weights (001 FR-003).
+  digests are equal. With vision enabled, model identity (001 FR-003) MUST additionally cover
+  `preprocessor_config.json` and, when used, the vision sidecar's hash: unlike 006's MTP sidecar
+  (D024), the tower changes prompt state, so it is part of the cache key.
 - **FR-009**: The engine MUST compute multimodal positions as the reference does (text: equal on all
   axes; image: offset by the merged grid; text after an image resumes at the maximum plus one). The
   position offset from images MUST travel with the live state, segments and checkpoints, so any
@@ -222,20 +229,22 @@ number of maximum-size images under memory pressure; peak memory stays within th
 - **SC-001**: With Claude Code (pinned version) via `mrun launch claude-code` on Qwen3.6 4-bit, a
   pasted screenshot round trip (known error string and colour) is answered correctly in 5 of 5
   runs; the same holds for a Codex `view_image` round trip.
-- **SC-002**: A 30K-token conversation with a ≈1,500-token screenshot in turn 1, continued for 10
-  turns of 200–1,000 appended tokens, shows on every turn: cached ≥ the previous turn's committed
+- **SC-002**: On the target Mac (M4 Pro, 48 GB) with Qwen3.6-35B-A3B 4-bit, a 30K-token
+  conversation with a ≈1,500-token screenshot in turn 1, continued for 10 turns of 200–1,000
+  appended tokens with replies that contain no tool calls, shows on every turn: cached ≥ the previous turn's committed
   length, zero encoder runs, no miss cause; median TTFT within 10% of the same conversation with
   the image replaced by an equal number of text tokens.
-- **SC-003**: On the target Mac, a turn appending one 2,560-token image to a cached 30K-token
+- **SC-003**: On the target Mac (M4 Pro, 48 GB) with Qwen3.6-35B-A3B 4-bit, a turn appending one 2,560-token image to a cached 30K-token
   conversation has TTFT ≤ TTFT of the same turn with 2,560 text tokens + 1.5 s; with the embedding
   cache warm, ≤ that text-only TTFT + 0.1 s.
 - **SC-004**: Cache-on output equals cache-off output bit for bit (token ids and logits, same chunk
   split) for ≥ 20 image cases (image in history, edit before and after an image, subagent with the
   same image, hybrid resume across an image, embedding-cache hit vs miss).
-- **SC-005**: Greedy outputs on ≥ 10 image prompts match the mlx-vlm reference on identical pixel
-  tensors for the first 32 tokens (001 conformance tolerance).
-- **SC-006**: With 64 images of maximum size under injected memory pressure, peak memory stays
-  ≤ budget + 1 GiB (001 SC) and no admitted request fails.
+- **SC-005**: Greedy outputs on ≥ 10 image prompts, on identical pixel tensors, match mlx-vlm
+  `4623cf9` (MLX v0.32.4) token for token for the first 32 tokens (001 conformance tolerance).
+- **SC-006**: With a request of 64 images of 2,560 tokens each whose total decoded bytes reach the
+  per-request cap, under injected memory pressure, peak memory stays ≤ budget + 1 GiB (001 SC-006)
+  and no admitted request fails.
 - **SC-007**: All 002 image tests pass unchanged on a text-only model and with `--no-vision`.
 
 ## Assumptions
@@ -243,8 +252,9 @@ number of maximum-size images under memory pressure; peak memory stays within th
 - Supported vision architecture: `qwen3_5_moe` (Qwen3.6-35B-A3B) with the Qwen3-VL tower; other
   vision models are later work. Qwen3-Coder and Qwen3-8B have no tower.
 - 001 provides the engine, budget and scratch probe; 002 the request parsing, renderer and metadata;
-  003 the prefix store; 004 `pull`, manifests and `launch`; 005 trace recording and replay; 006's
-  range-request sidecar mechanism is reused for FR-015 if needed.
+  003 the prefix store; 004 `pull`, manifests and `launch`; 005 trace recording and replay; 008
+  `/metrics`. 006's range-request sidecar mechanism is reused for FR-015 if needed; if 006 has not
+  shipped it when this feature is built, 009 implements it (T027).
 - Clients send images inline (verified for Codex and OpenCode; Claude Code per its API usage).
 
 ## Open Questions

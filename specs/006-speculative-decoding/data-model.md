@@ -11,7 +11,7 @@
 | Field | Type | Rule |
 | --- | --- | --- |
 | mode | SpecMode | effective mode |
-| reason_off | Option<`off` \| `grammar` \| `seed` \| `logprobs` \| `limit` \| `no-drafter`> | set when no drafting can happen |
+| reason_off | Option<`off` \| `grammar` \| `seed` \| `logprobs` \| `limit`> | set when no drafting can happen |
 
 ## DraftIndex (per request, helper thread builds, engine thread queries)
 

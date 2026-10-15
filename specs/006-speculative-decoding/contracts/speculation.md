@@ -76,7 +76,7 @@ the round's k-th token, `commit(k)` and finish. `controller.observe(round)`.
 
 ## HTTP surface (extends 002)
 
-- Request header `x-mrun-speculation: off` (all three APIs). Other values → 400 naming the header.
+- Request header `x-mrun-speculation: off` (all three APIs). Other values are ignored, as for `x-mrun-cache`.
 - mrun metadata adds `spec`:
   - non-streaming headers: `x-mrun-spec-drafter`, `x-mrun-spec-drafted`, `x-mrun-spec-accepted`,
     `x-mrun-spec-rounds`, `x-mrun-spec-reason` (only when nothing was drafted);

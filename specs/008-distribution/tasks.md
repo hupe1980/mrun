@@ -17,7 +17,7 @@ description: "Tasks for 008 Distribution"
 
 ## Phase 2: Foundational
 
-- [ ] T004 `crates/mrun/src/platform/mod.rs`: install-source detection (Homebrew Cellar/opt path, tarball, source build), canonical binary path, Metal library presence check with a clear startup error
+- [ ] T004 `crates/mrun/src/platform/mod.rs`: install-source detection (Homebrew Cellar/opt path, tarball, source build), canonical binary path, Metal library presence check with a clear startup error; startup check that the machine is arm64 with macOS ≥ 15, exiting with the formula's requirement message otherwise (edge case)
 - [ ] T005 [P] `crates/mrun/src/logging.rs`: service-mode rotating log (16 MiB × 3, 0600), no content (002 FR-014); tests
 
 ## Phase 3: US1 — install and start an agent (P1) 🎯 MVP
@@ -32,7 +32,7 @@ description: "Tasks for 008 Distribution"
 
 - [ ] T011 [US2] `crates/mrun/src/platform/launchd.rs`: plist model and rendering (`plist` crate), Homebrew `opt` path vs canonical executable, `--preload` in `ProgramArguments` when requested; `crates/mrun/tests/service_plist.rs` snapshots
 - [ ] T012 [US2] `crates/mrun/src/cli/service.rs`: `install` (write 0644, bootout if loaded, bootstrap, wait for `/health`, summary output), `uninstall` (bootout, delete), refuse root, Linux message (FR-005, FR-006)
-- [ ] T013 [US2] `serve --service` (no detach, rotating log, pid file, exit 0 on SIGTERM) in `cli/serve.rs`; `mrun stop` message with a service; `doctor` service state and stale plist checks (FR-007, FR-008)
+- [ ] T013 [US2] `serve --service` (no detach, rotating log, pid file, exit 0 on SIGTERM) in `cli/serve.rs`; `mrun stop` message with a service; `doctor` service state, stale plist and port-conflict checks (port in use when the service starts; FR-007, FR-008, edge case)
 - [ ] T014 [US2] SC-002 on the target Mac: 3 reboots without and with `--preload`, 5 `kill -9`; R5 foreground vs service decode comparison (set `ProcessType Interactive` only if > 2% slower)
 
 ## Phase 5: US3 — no idle sleep while working (P2)
@@ -45,7 +45,7 @@ description: "Tasks for 008 Distribution"
 
 - [ ] T018 [P] [US4] `crates/mrun/src/metrics.rs`: counters, gauges, fixed-bucket histograms over atomics; text encoder (format 0.0.4); unit tests
 - [ ] T019 [US4] Instrument runtime (requests, TTFT, queue wait/depth, prefill/decode tokens and seconds, `mrun_model_loaded`; model and budget series absent until loaded), cache (lookups, hit tokens, misses by cause, evictions, bytes, branches, live tokens), memory (budget breakdown, state bytes, MLX counters, pressure events), power; `crates/mrun/src/api/metrics.rs` route with existing bind/auth rules (FR-010)
-- [ ] T020 [US4] `crates/mrun/tests/metrics_exposition.rs`: every contract metric present with type and labels after one request per API on `ScriptedEngine`; label values from fixed sets; `promtool check metrics` when installed (SC-003); before-load case (only `mrun_model_loaded` 0, no model/budget series)
+- [ ] T020 [US4] `crates/mrun/tests/metrics_exposition.rs`: every contract metric present with type and labels after one request per API on `ScriptedEngine`; label values from fixed sets; `promtool check metrics` when installed (SC-003); before-load case (exactly the contract's before-load set: `mrun_build_info`, `mrun_start_time_seconds`, `mrun_model_loaded` 0, request/queue and power series; no model, memory or cache series)
 
 ## Phase 7: US5 and polish
 

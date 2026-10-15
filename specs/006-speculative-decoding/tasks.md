@@ -11,7 +11,7 @@ description: "Tasks for 006 Speculative Decoding"
 
 ## Phase 1: Setup and measure first
 
-- [ ] T001 `crates/mrun/src/spec/index.rs`: suffix automaton over token ids with sentinel-separated sources, incremental extension, longest-suffix lookup with most-recent tie-break; unit tests in `crates/mrun/tests/spec_index.rs`
+- [ ] T001 `crates/mrun/src/spec/index.rs`: suffix automaton over token ids with sentinel-separated sources, incremental extension, longest-suffix lookup with most-recent tie-break; unit tests in `crates/mrun/tests/spec_index.rs`, plus a perf check (index build ≤ 10 ms per 100K tokens, plan Performance Goals)
 - [ ] T002 [P] `crates/mrun/src/spec/render.rs`: copy-aware rendering (line-number prefixes `␣*N→`/`␣*N<TAB>` stripped); tests with Claude Code `Read` output
 - [ ] T003 `crates/mrun/src/bench/suites/spec.rs` offline cell: reply tokens from the next request's history, simulated drafting, acceptance histogram, `copy_share_16`, `edit-heavy` label; result fields per contract (depends on T001, T002)
 - [ ] T004 Run `mrun bench --suite spec --offline` on the bundled traces; record the go/no-go note in `research.md` R8 (FR-001 offline part)
@@ -30,7 +30,7 @@ description: "Tasks for 006 Speculative Decoding"
 
 ## Phase 3: US1 + US2 — copy-aware drafting with a controller (P1) 🎯 MVP
 
-- [ ] T010 [US2] `crates/mrun/src/spec/controller.rs`: Beta acceptance per match bucket, cost curves per context bucket (analytic expert-union prior + EWMA, FR-008), argmax committed/cost over {0} ∪ [N_min, N_max], next depth chosen before `sample`, probing with back-off, server-lifetime state; `crates/mrun/tests/spec_controller.rs` (settles at depth 0 within 64 rounds on non-repetitive text, collapse → 0, deep-context bucket used)
+- [ ] T010 [US2] `crates/mrun/src/spec/controller.rs`: Beta acceptance per match bucket, cost curves per context bucket (analytic expert-union prior + EWMA, FR-008), argmax committed/cost over {0} ∪ [N_min, N_max], next depth chosen before `sample`, probing with back-off, server-lifetime state; `crates/mrun/tests/spec_controller.rs` (settles at depth 0 within 64 rounds on non-repetitive text, collapse → 0, deep-context bucket used; perf check: decision < 20 µs)
 - [ ] T011 [US1] `crates/mrun/src/spec/mod.rs`: SpecPolicy (mode sources; `grammar`, `seed`, `logprobs`, `limit` → off); index built on a helper thread during prefill
 - [ ] T012 [US1] `crates/mrun/src/runtime/generate.rs`: round loop per contract (cap by remaining/reservation, `NeedsMemory` → evict and retry, `pipeline = next_depth == 0`, one-at-a-time emission through stop, UTF-8 hold-back and tool parsers, `commit(k)` on a stop inside the round, cancel per round) (depends on T005, T010, T011)
 - [ ] T013 [US1] `crates/mrun/tests/spec_mutations.rs`: ≥ 100 cases (partial/full/zero acceptance, EOS and stop strings inside drafts, hybrid EOS and hybrid stop-string `commit(k)`, limit, cancel mid-round, `NeedsMemory` retry, hybrid rollback) asserting zero rejected tokens in state, store and stream (SC-004)
@@ -40,7 +40,7 @@ description: "Tasks for 006 Speculative Decoding"
 
 ## Phase 4: US4 — visibility and control (P2)
 
-- [ ] T015 [P] [US4] `crates/mrun/src/spec/stats.rs` + `crates/mrun/src/api/*`: `spec` metadata (headers, final `: mrun` comment), `x-mrun-speculation: off`, 400 on other values; `/mrun/status` `spec` key; conformance tests on all three APIs
+- [ ] T015 [P] [US4] `crates/mrun/src/spec/stats.rs` + `crates/mrun/src/api/*`: `spec` metadata (headers, final `: mrun` comment), `x-mrun-speculation: off`, other values ignored (as `x-mrun-cache`); `/mrun/status` `spec` key; conformance tests on all three APIs
 - [ ] T016 [P] [US4] `crates/mrun/src/config.rs` + `cli/serve.rs` + `cli/run.rs`: `--speculation auto|off|ngram`, `[speculation] mode`, `MRUN_SPECULATION_MODE`; summary line `accepted/drafted`; `run --check` forces `off` (FR-017); snapshot tests
 
 ## Phase 5: US3 — MTP drafting (P2) — Removed

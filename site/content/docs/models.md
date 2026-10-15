@@ -1,29 +1,49 @@
 +++
 title = "Models"
-description = "Supported models (Qwen3.6-35B-A3B by default, Qwen3-Coder-30B-A3B, Qwen3-8B), curated aliases, the shared Hugging Face cache and model verification."
+description = "Supported model families (Qwen3.6, Qwen3-Coder, gpt-oss, Devstral, Qwen3-8B), how model support works, curated aliases, the shared Hugging Face cache and model verification."
 weight = 60
 +++
 
 ## Supported models
 
-| Alias | Model | Architecture | Size | Context on a 48 GB Mac |
-| --- | --- | --- | --- | --- |
-| `qwen3.6` | Qwen3.6-35B-A3B, 4-bit | Hybrid: 30 linear-attention + 10 attention layers, mixture of experts (3B active) | ≈20 GB | Full 262K |
-| `qwen3-coder` | Qwen3-Coder-30B-A3B-Instruct, 4-bit | Attention, mixture of experts (3B active) | 17.2 GB | ≈105K |
-| `qwen3-8b` | Qwen3-8B, 4-bit | Attention, dense | 4.6 GB | Full 40K |
+mrun supports an open set of model families. The first release covers these:
 
-**Why Qwen3.6 is the default.** It scores highest of the models listed here on coding benchmarks
-(Alibaba reports 73.4% on SWE-bench Verified, against about 52% for Qwen3-Coder-30B-A3B). Three of
-every four layers use linear attention, which keeps a fixed-size state instead of one entry per
-token, so a token of context costs about 20 KiB instead of 96 KiB. The default is re-checked
-against newer releases with `mrun bench` before each release.
+| Alias | Model | Architecture | Tool format | Size | Context on a 48 GB Mac |
+| --- | --- | --- | --- | --- | --- |
+| `qwen3.6` | Qwen3.6-35B-A3B, 4-bit | Hybrid: 30 linear-attention + 10 attention layers, mixture of experts (3B active) | Qwen XML | ≈20 GB | Full 262K |
+| `qwen3-coder` | Qwen3-Coder-30B-A3B-Instruct, 4-bit | Attention, mixture of experts (3B active) | Qwen XML | 17.2 GB | ≈105K |
+| `gpt-oss` | gpt-oss-20b, MXFP4 | Alternating sliding-window and full attention, mixture of experts | Harmony | ≈13 GB | Full 131K |
+| `devstral` | Devstral Small 2 24B, 4-bit | Attention, dense | Mistral | ≈14 GB | ≈85K |
+| `qwen3-8b` | Qwen3-8B, 4-bit | Attention, dense | Hermes JSON | 4.6 GB | Full 40K |
 
-**Why hybrid models need special caching.** Attention state can be cut at any token, so a cached
-prefix of any length is reusable. Linear-attention state only exists for the position it was
-computed at. mrun therefore saves checkpoints at message boundaries while it processes a prompt
-and resumes from the nearest one; see [Prefix cache](@/docs/prefix-cache.md).
+Context figures are estimates from the [memory budget](@/docs/memory.md); `mrun pull` shows the
+exact value for your Mac. After the first release, GLM-4.7-Flash, Gemma 4 and Nemotron-H follow,
+then other families as coding agents adopt them (see the [roadmap](@/docs/roadmap.md)).
 
-Other Qwen3, Qwen3-MoE and Qwen3.6 checkpoints in MLX format also work by repository name:
+**The default model.** `qwen3.6` is the expected default: Alibaba reports 73.4% on SWE-bench
+Verified for it, and three of every four layers use linear attention, so a token of context costs
+about 20 KiB instead of 96 KiB and the full 262K window fits a 48 GB Mac. The default is chosen
+among the models above by running the `mrun bench` agent suite before each release.
+
+## How model support works
+
+- **Families from shared blocks.** A model family is a small module that combines shared building
+  blocks: full, sliding-window and (later) compressed attention; linear attention; dense and
+  mixture-of-experts layers. Each family is ported from the reference
+  [mlx-lm](https://github.com/ml-explore/mlx-lm) implementation and checked token for token
+  against it.
+- **Tool-format registry.** Models write tool calls in different formats (Qwen XML, Hermes JSON,
+  Harmony, Mistral). A family names its format; mrun parses it into each API's native tool-call
+  structure, so your agent sees the same shape whichever model runs.
+- **Unknown architectures are refused.** A model whose architecture mrun does not know fails at
+  load with the list of supported families, instead of running with wrong output.
+- **Every position stays reusable.** Sliding-window layers keep their full attention state and
+  apply the window as a mask, so a cached prefix can be cut at any token, as with plain attention.
+  Linear-attention state exists only for the position it was computed at, so mrun saves
+  checkpoints at message boundaries while it processes a prompt and resumes from the nearest one;
+  see [Prefix cache](@/docs/prefix-cache.md).
+
+Other checkpoints of a supported family in MLX format also work by repository name:
 
 ```sh
 mrun pull mlx-community/Qwen3-14B-4bit
@@ -61,9 +81,9 @@ mrun rm qwen3-coder     # warns if other tools use the same revision
 Models with a thinking mode follow the client: thinking is on when the request asks for it
 (Anthropic `thinking`, OpenAI `reasoning_effort` or Responses `reasoning.effort` other than
 `none`/`minimal`) and off otherwise. Override with
-`mrun serve --thinking on|off`. Qwen3-Coder has no thinking mode.
+`mrun serve --thinking on|off`. Qwen3-Coder and Devstral have no thinking mode.
 
 ## Licenses
 
 Model weights keep their own licenses; `mrun pull` shows the license before downloading. The
-models listed above are Apache-2.0.
+models listed above are Apache-2.0; gpt-oss additionally comes with OpenAI's usage policy.

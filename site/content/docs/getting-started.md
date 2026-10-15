@@ -7,10 +7,9 @@ weight = 10
 ## Requirements
 
 - A Mac with Apple Silicon (M1 or later) and macOS 15 or newer.
-- Memory: 48 GB or more for the default model, Qwen3.6-35B-A3B, with its full context. A 36 GB Mac
-  gets far less context; smaller Macs use Qwen3-8B. `mrun pull` shows how much context a model gets
-  on your Mac before downloading. `mrun pull` tells you how
-  much context a model gets on your Mac before downloading (see [Memory](@/docs/memory.md)).
+- Memory: 48 GB or more for the expected default model, Qwen3.6-35B-A3B, with its full context. A 36 GB Mac
+  gets far less context; smaller Macs use Qwen3-8B. `mrun pull` tells you how much context a model
+  gets on your Mac before downloading (see [Memory](@/docs/memory.md)).
 - About 20 GB of free disk space for the default model.
 
 ## Install

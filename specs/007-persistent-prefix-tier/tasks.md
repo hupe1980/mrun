@@ -7,13 +7,15 @@ description: "Tasks for 007 Persistent Prefix Tier"
 **Input**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/persist.md](contracts/persist.md)
 
 **Prerequisites**: 003 (live path, branches, checkpoints, miss reports) and 004 (identity, config,
-CLI) implemented; 002 `--record` with server-start markers.
+CLI) implemented; 002 `--record` (FR-021) implemented. 002 FR-021 does not yet write server-start
+markers; T003a adds them and must land before T003 can attribute restart misses.
 
 ## Phase 1: Setup and measure first
 
 - [ ] T001 Add `xxhash-rust`, `libc` to `crates/mrun/Cargo.toml`; config keys and env per data model in `crates/mrun/src/config.rs`; `--persist/--no-persist` in `cli/serve.rs` (off by default, FR-002)
 - [ ] T002 [P] `crates/mrun/src/bench/suites/persist.rs`: read/write GB/s (4 MiB blocks, `F_NOCACHE`), restore-30k cell, all measured with the model loaded (needs T014 for the restore half; read speed first)
 - [ ] T003 [P] `--from RECORD_DIR` attribution: replay arrival order through a simulated LRU memory store with server-start markers; restart/evicted/other tokens; simulated disk tier at the cap
+- [ ] T003a `crates/mrun/src/api/record.rs`: write a server-start marker (mrun version, model identity, start time) at the head of each `--record` session so replays see restarts; cross-spec: amend 002 FR-021 to list the marker when this lands
 - [ ] T004 Run FR-001 on the target Mac (model loaded) and maintainers' recordings; record the go/no-go note in `research.md` R1 (ship only if restart plus eviction re-prefill ≥ 10% of prefill time and SC-001 holds)
 
 **Checkpoint**: tier value measured.
@@ -22,7 +24,7 @@ CLI) implemented; 002 `--record` with server-start markers.
 
 - [ ] T005 `crates/mrun/src/cache/persist/format.rs`: MRPS encode/decode, 16 KiB-aligned tensor blocks (attention `[heads, tokens, dim]`), xxh3 per 4 MiB block, header hash; round-trip and fuzzed-header tests in `crates/mrun/tests/persist_format.rs`
 - [ ] T006 `crates/mrun-engine/src/engine.rs` + `state_io.rs`: `export_views`, `import_alloc`, `import_seal`, generation counter; `ScriptedEngine` versions with structural bytes per token
-- [ ] T007 `crates/mrun/src/cache/persist/mod.rs`: open (directory create 0700, ownership/permission refusal, backup/Spotlight exclusion, `flock`, temp-file sweep), EntryKey from the loaded model (FR-004, FR-010, FR-014)
+- [ ] T007 `crates/mrun/src/cache/persist/mod.rs`: open (directory create 0700, ownership/permission refusal, backup/Spotlight exclusion, `flock`, temp-file sweep), EntryKey from the loaded model (FR-004, FR-010, FR-014); directory removed at runtime → recreate it, drop its index entries and continue (edge case); test in `crates/mrun/tests/persist_open.rs`
 - [ ] T008 [P] `crates/mrun/src/cache/persist/index.rs`: rebuild from headers, boundary-hash map, parent chains, LRU by mtime; rebuild-time test for 10,000 entries
 
 **Checkpoint**: entries can be written and indexed in isolation.
@@ -43,7 +45,7 @@ CLI) implemented; 002 `--record` with server-start markers.
 
 ## Phase 5: US3 — see and control (P2)
 
-- [ ] T017 [P] [US3] `crates/mrun/src/cache/persist/gc.rs`: cap, free-space floor, max age, descendant-first deletion, hourly sweep; `crates/mrun/tests/persist_cap.rs` property test at 3× cap (SC-004)
+- [ ] T017 [P] [US3] `crates/mrun/src/cache/persist/gc.rs`: cap, free-space floor (below it: writes stop, warning in `/mrun/status` and the server log, no request fails; edge case), max age, descendant-first deletion, hourly sweep; `crates/mrun/tests/persist_cap.rs` property test at 3× cap (SC-004)
 - [ ] T018 [P] [US3] `crates/mrun/src/cli/cache.rs`: `mrun cache [--json]`, `clear --disk [--model M]`, `clear --all`, server or direct mode with lock; `POST /mrun/cache/clear?tier=`; snapshot tests
 - [ ] T019 [US3] `/mrun/status` `cache.disk` TierStats; `doctor` checks (FileVault off with persistence on, permissions, lock holder); `x-mrun-cache-source` header and SSE field
 
@@ -57,6 +59,6 @@ CLI) implemented; 002 `--record` with server-start markers.
 
 ## Dependencies
 
-T001 → T002/T003 → T004 (gate). T005/T006 → T007 → T008 → T009 → T010/T011. T012 → T013 → T014 →
+T001 → T002/T003a → T003 → T004 (gate). T005/T006 → T007 → T008 → T009 → T010/T011. T012 → T013 → T014 →
 T016. US3 after T008 (T017) and T014 (T018/T019). T002's restore half needs T014. T022 after T012;
 T023 after T012/T014; T024 any time after T006.

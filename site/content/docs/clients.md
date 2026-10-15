@@ -28,6 +28,7 @@ model is downloaded, it offers the default. `--dry-run` prints what it would set
 | `ANTHROPIC_API_KEY` | empty | A key in your shell would otherwise take precedence |
 | `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` | The served model | Every model slot, including subagents and background tasks, uses the local model |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | This Mac's context capacity | Claude Code compacts before the server would refuse |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | This Mac's context capacity, set only when it is at least 100,000 (Claude Code's minimum) | Claude Code compacts at the real window |
 | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | The server's output limit | Otherwise Claude Code reserves 32,000 tokens of the window for output |
 | `CLAUDE_CODE_GATEWAY_HINT_HEADERS` | `1` | Sends session headers, which `mrun serve --record` uses to group a recording's requests |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | Keeps the session local |

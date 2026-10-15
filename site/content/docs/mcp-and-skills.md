@@ -17,7 +17,8 @@ keep it fast.
 | Codex | A *namespace* per server, plus its built-in sub-agent tools; mrun flattens them to `<namespace>__<tool>` for the model and restores the namespace on the calls it returns |
 | OpenCode | Tools named `<server>_<tool>`, by default behind a single code-mode tool |
 
-Tool schemas are expensive: five typical MCP servers add about 55,000 tokens to every prompt. The
+Tool schemas are expensive: a few MCP servers can add tens of thousands of tokens to every
+prompt. The
 chat templates of the supported models put all tool definitions at the top of the prompt, so the
 first request after a server connects or changes its tools is processed from the start (the miss
 report says `system`). After that, turns are cached as usual.

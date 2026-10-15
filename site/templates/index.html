@@ -26,7 +26,7 @@
     <div>
       <p class="eyebrow">Local inference for coding agents · Apple Silicon</p>
       <h1>Your agent's context,<br><span class="accent">computed once.</span></h1>
-      <p class="lead">mrun runs open coding models on your Mac and serves Claude Code, Codex and OpenCode. It reuses attention state exactly across turns, branches and tool calls, explains every cache miss, and is designed to keep your Mac out of swap.</p>
+      <p class="lead">mrun runs open coding models — Qwen3.6, Qwen3-Coder, gpt-oss, Devstral and more — on your Mac and serves Claude Code, Codex and OpenCode. It reuses attention state exactly across turns, branches and tool calls, explains every cache miss, and is designed to keep your Mac out of swap.</p>
       <div class="cta">
         <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
         <a class="button ghost" href="{{ config.extra.repo }}" rel="noopener">Star on GitHub</a>
@@ -58,7 +58,7 @@
       </article>
       <article class="card">
         <h3>Every miss explained</h3>
-        <p>Each response reports cached and processed tokens. When reuse breaks, mrun shows where the prompt diverged and why — an edit, a template change, volatile client content — so you can fix it.</p>
+        <p>Each response reports cached and processed tokens. When reuse breaks, mrun shows where the prompt diverged and why — an edit, a changed system prompt or tool list, a template change — so you can fix it.</p>
       </article>
       <article class="card">
         <h3>Predictable memory</h3>
@@ -120,7 +120,7 @@
 <section class="section alt">
   <div class="wrap">
     <h2 class="section-title">Honest numbers only</h2>
-    <p class="section-lead">mrun ships with <code>mrun bench</code>, which replays real agent sessions against mrun and other local servers — llama.cpp, Ollama, oMLX, mlx-lm — with their prompt caches enabled. Results will be published with dates, settings and every losing cell. Until then we claim no speedups.</p>
+    <p class="section-lead">mrun ships with <code>mrun bench</code>, which replays real agent sessions against mrun and other local servers — llama.cpp, Ollama, oMLX, mlx-lm, SGLang — with their prompt caches enabled. Results will be published with dates, settings and every losing cell. Until then we claim no speedups.</p>
     <a class="link-arrow" href="{{ get_url(path='@/docs/benchmarks.md') }}">How we benchmark</a>
   </div>
 </section>

@@ -14,7 +14,8 @@
 | Remote URL / file reference | 400, path named, "mrun does not fetch remote content; send base64" | placeholder `[image omitted: remote images are not fetched]` + `image-omitted` (`--reject-tool-images`: 400) |
 | Undecodable, unsupported format | 400, path named | placeholder + `image-omitted` (`--reject-tool-images`: 400) |
 | No active vision tower | 002 FR-020: 400 | 002 FR-020: placeholder `[image omitted: model has no vision input]` |
-| Limit exceeded (count, bytes, megapixels) | 400 before queuing, limit and setting named | same |
+| Limit exceeded (count, bytes, tokens) | 400 before queuing, limit and setting named | same |
+| Fixed safety cap exceeded (20 MiB encoded after base64 decoding, 50 MP decoded) | 400 before queuing, cap named and stated to be fixed | same |
 
 Status codes and error shapes follow [002 contracts/api.md](../../002-agent-apis/contracts/api.md).
 Warnings: `image-omitted`, `image-first-frame`, `image-downscaled` (via 002 FR-022 metadata).
@@ -29,7 +30,7 @@ Metadata fields: `images`, `image_tokens`, `encoder_runs`, `embedding_hits`; mis
 | `mrun serve --no-vision` / `vision = false` | vision on when the tower is present | frees tower memory |
 | `--max-image-tokens N` / `max_image_tokens` | 2,560 | changes digests (images miss once) |
 | `--max-images N` / `max_images` | 64 per request | |
-| `--max-image-bytes MiB` / `max_image_bytes_mib` | 64 per request | separate from 002 body cap |
+| `--max-image-bytes MiB` / `max_image_bytes_mib` | 48 per request | decoded bytes; the base64 form must also fit 002's 64 MiB body cap |
 | `--embedding-cache-mib N` / `embedding_cache_mib` | 256 | 0 disables |
 | `mrun show`, `mrun ls` | — | `vision: yes (≈X GB) \| no \| sidecar missing` |
 | `mrun launch codex\|opencode`, `mrun connect` | — | Codex catalog `input_modalities`; OpenCode `modalities.input` |
@@ -40,22 +41,26 @@ single source once this feature lands.
 ## Engine additions (001 `Engine` trait)
 
 ```rust
-pub struct MediaSpan { pub start: u32, pub len: u32, pub grid: (u32, u32, u32), pub embedding: EmbeddingId }
+pub struct MediaSpan { pub start: u32, pub len: u32, pub patch_grid: (u32, u32, u32), pub embedding: EmbeddingId }
 
 pub trait Engine {
     // … existing methods …
     fn vision(&self) -> Option<&VisionInfo>;
-    /// Encode one image (resized RGB8, patch grid). Memory checked first (NeedsMemory);
-    /// cancel checked after every encoder layer. The result is owned by the caller's cache.
-    fn encode_image(&mut self, pixels: &[u8], grid: (u32, u32, u32), cancel: &CancelToken)
+    /// Encode one image (resized RGB8, patch grid). Memory checked first (NeedsMemory); the check
+    /// excludes embeddings already owned by the caller. Cancel checked after every encoder layer.
+    /// The result is owned by the caller's cache.
+    fn encode_image(&mut self, pixels: &[u8], patch_grid: (u32, u32, u32), cancel: &CancelToken)
         -> Result<Embedding, EngineError>;
     fn drop_embedding(&mut self, id: EmbeddingId);
     /// Position of the next token (= active_len() + offset).
-    fn next_position(&self) -> i64;
+    fn next_position(&self) -> u32;
+    // allocated() (001) includes the bytes of every live embedding, so 003's invariant
+    // (store accounting = engine allocated()) holds with the embedding cache counted.
 }
 
 // PrefillPlan gains `media: &[MediaSpan]` (absolute, ascending). Positions inside a span take the
-// embedding rows in order; chunk ends may fall inside a span. Segments and checkpoints record
+// embedding rows in order; chunk ends may fall inside a span. Every embedding is resolved by the
+// caller before the call; the engine never encodes during prefill. Segments and checkpoints record
 // the position offset at their boundaries; split_off/append/restore_checkpoint restore it.
 pub struct Embedding { pub id: EmbeddingId, pub tokens: u32, pub bytes: u64 }
 ```
@@ -65,8 +70,9 @@ pub struct Embedding { pub id: EmbeddingId, pub tokens: u32, pub bytes: u64 }
 ## Prefix store additions (003 contract)
 
 - `Prompt.images: Vec<ImageSpan>`; lookup compares key symbols (data model).
-- `Plan.media_needed`: spans at or after the resume position; the worker resolves each through the
-  embedding cache or `encode_image` just before prefill reaches it, and releases uncached
-  embeddings once the span is committed.
+- `Plan.media_needed`: spans at or after the resume position. The worker splits prefill at the
+  start of each uncached span, resolves that span's embedding (embedding cache or `encode_image`,
+  pixels re-decoded) before the prefill call that reaches it, and releases uncached embeddings
+  once the span is committed.
 - `initial_need` adds the largest single uncached image's embedding bytes; embedding-cache entries
   are evicted before branch units.

@@ -1,6 +1,6 @@
 +++
 title = "API reference"
-description = "mrun's HTTP endpoints: OpenAI Chat Completions, Anthropic Messages, OpenAI Responses, model listing, status and error codes."
+description = "mrun's HTTP endpoints: OpenAI Chat Completions, Anthropic Messages, OpenAI Responses, model listing, health, status, metrics and error codes."
 weight = 70
 +++
 
@@ -16,7 +16,8 @@ definitions; this page lists what mrun serves and where it deliberately differs.
 | `POST /v1/messages/count_tokens` | Anthropic token count; exact, never queued |
 | `POST /v1/responses` | OpenAI Responses, stateless |
 | `GET /v1/models` | The served model with this machine's `context_window` and default `max_output_tokens` |
-| `GET /health` | `{"status":"ok","model":...}`; 503 while loading |
+| `GET /health` | `{"status":"ok","model":...,"loaded":bool}`; 503 while loading. Under the background service the model loads on the first request, so `loaded` is `false` until then |
+| `GET /metrics` | Prometheus metrics: requests, tokens, cache, memory and queue (no prompt content) |
 | `GET /mrun/status` | Everything `mrun ps` shows, as JSON |
 | `POST /mrun/cache/clear` | Clear the prefix cache |
 
@@ -41,8 +42,10 @@ definitions; this page lists what mrun serves and where it deliberately differs.
 - **No server-side context editing.** Anthropic `context_management` is accepted and ignored; mrun
   never rewrites or summarizes your conversation. Clients compact on their own at the reported
   context window.
-- **Images.** The supported models are text-only. Images inside tool results are replaced with a
-  short placeholder and an `image-omitted` warning; `--reject-tool-images` makes them an error.
+- **Images.** mrun 0.1 does not pass images to the model. Images in user messages are rejected
+  naming the field; images inside tool results are replaced with a short placeholder and an
+  `image-omitted` warning (`--reject-tool-images` makes them an error). Image input is on the
+  [roadmap](@/docs/roadmap.md).
 
 ## mrun metadata
 
@@ -50,7 +53,7 @@ Response bodies stay standard. Additional information travels beside them:
 
 | | Non-streaming | Streaming |
 | --- | --- | --- |
-| Cache report | `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`, `x-mrun-cache-divergence` | `: mrun {...}` SSE comment before the first event |
+| Cache report | `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`, `x-mrun-cache-divergence`, `x-mrun-cache-gap` (hybrid models) | `: mrun {...}` SSE comment before the first event |
 | Output limit | `x-mrun-max-tokens` | same comment |
 | Warnings | `x-mrun-warning` (comma-separated) | `: mrun {...}` comment before the final event |
 

@@ -119,9 +119,10 @@ Revisions: mlx-lm `ba8a08f` (2026-10-10), mlx-vlm `4623cf9` (2026-10-14), Codex 
   images hit; including the parameters makes a changed `--max-image-tokens` miss instead of reusing
   a different grid.
 - **Constitution note**: Principle II requires hash lookups to be confirmed by token comparison.
-  Images have no tokens; the digest is their content identity, as file hashes are for models
-  (Principle IV). Comparing the full SHA-256 at every placeholder position is the confirmation. The
-  plan records this interpretation in its Constitution Check.
+  Images have no tokens; constitution 3.2.0 states that media reuse is confirmed by the full digest
+  of the preprocessed input, which is what comparing the full SHA-256 at every placeholder position
+  does. Model identity additionally covers `preprocessor_config.json` and the vision sidecar
+  (FR-008).
 - **Alternatives**: raw-byte hash (misses on re-encoding, and does not cover preprocessing);
   keeping pixels for byte comparison (≈8 MB per image held for the cache's lifetime).
 
@@ -153,8 +154,8 @@ Revisions: mlx-lm `ba8a08f` (2026-10-10), mlx-vlm `4623cf9` (2026-10-14), Codex 
 
 ## R9: Limits and memory
 
-- **Token cost [I]**: Claude-style screenshots (long edge ≈1,568 px, e.g. 1,568 × 980) → 49 × 30
-  ≈ 1,470 image tokens; Codex high detail ≤ 2,500. Default `max_image_tokens` = 2,560 (max_pixels
+- **Token cost [I]**: Claude-style screenshots (long edge ≈1,568 px, e.g. 1,568 × 980; smart
+  resize rounds to 1,568 × 992) → 49 × 31 = 1,519 image tokens; Codex high detail ≤ 2,500. Default `max_image_tokens` = 2,560 (max_pixels
   = 2,560 × 32²) keeps both at native resolution; larger images are downscaled by the reference
   smart resize. `detail: "low"` caps at 256 tokens.
 - **Memory [I]**: weights of the tower (measured), encoder scratch for the largest admissible image
@@ -162,17 +163,20 @@ Revisions: mlx-lm `ba8a08f` (2026-10-10), mlx-vlm `4623cf9` (2026-10-14), Codex 
   image's embeddings in flight (≈10 MiB), the embedding cache (≤ 256 MiB), and the image tokens'
   attention state (≈20 KiB per token on Qwen3.6: ≈50 MiB per 2,560-token image) inside the normal
   admission.
-- **Host side**: decode bounded by per-image caps (encoded ≤ 20 MiB, decoded ≤ 50 MP); one image
-  decoded at a time; only resized pixels kept.
-- **002 interaction**: 002's 8 MiB body cap (FR-009) already rejects sessions carrying a few
-  screenshots in history, even on the placeholder path. This feature counts image bytes separately
-  (default 64 MiB per request); see OQ-5.
+- **Host side**: decode bounded by fixed per-image safety caps (encoded ≤ 20 MiB after base64
+  decoding, decoded ≤ 50 MP; errors say they are fixed); one image decoded at a time; resized
+  pixels dropped after the digest and re-decoded when the encoder needs them, so a request never
+  holds more than one image's pixels.
+- **002 interaction**: 002's body cap (FR-009) is 64 MiB (OQ-5). Image bytes count inside it: the
+  per-request cap is 48 MiB of decoded image bytes (`max_image_bytes_mib`), whose base64 form
+  (×4/3 = 64 MiB) is the most the body can carry.
 
 ## R10: Measure-first
 
-- **Signal**: 002 already emits `image-omitted` warnings; this feature adds a counter of requests
-  and sessions with image blocks (by API location) to `/mrun/status` and `/metrics`, and `mrun bench`
-  reports the share of recorded sessions (002 `--record`) containing images.
-- **Gate**: proceed past the gate when ≥ 5% of recorded agent sessions from at least two clients
-  contain an image block, or when ≥ 3 independent user reports ask for screenshots. Otherwise the
+- **Signal**: 002 already emits `image-omitted` warnings; this feature adds live counters of
+  requests with image blocks (by API location) to `/mrun/status` (key `images`) and `/metrics`
+  (008). Sessions are counted offline: `mrun bench --trace-stats` reports the share of recorded
+  sessions (002 `--record`) containing images per client.
+- **Gate**: proceed past the gate when, in each of at least two clients, ≥ 5% of recorded sessions
+  contain an image, or when ≥ 3 independent users request image input. Otherwise the
   feature stays specified and parked.

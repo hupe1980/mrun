@@ -1,6 +1,6 @@
 +++
 title = "Prefix cache"
-description = "How mrun reuses attention state exactly across turns, subagents and tool calls, for attention and hybrid models, and how it explains every cache miss."
+description = "How mrun reuses attention state exactly across turns, subagents and tool calls, for attention, sliding-window and hybrid models, and how it explains every cache miss."
 weight = 40
 +++
 
@@ -42,7 +42,7 @@ also attaches its own report:
 
 | Cause | Meaning | What to do |
 | --- | --- | --- |
-| `new` | No earlier request shares a prefix | Nothing; the first turn is always computed |
+| `new` | The request shares at most the system prompt and tools with stored state (a new conversation), or nothing is stored | Nothing; the first turn is always computed |
 | `system` | The system prompt or tool list changed | Expected when an MCP server connects or settings change; otherwise check what changes per session |
 | `edit` | An earlier message was changed, removed or replaced | Expected after compaction, edits or retries |
 | `template` | The same messages produced different tokens (for example earlier reasoning dropped by the template) | Usually expected once per turn on thinking models |

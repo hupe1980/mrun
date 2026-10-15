@@ -17,17 +17,20 @@ inside a memory budget fixed at startup.
 ## Planned experience
 
 ```sh
-mrun launch claude-code    # offers to pull Qwen3.6-35B-A3B and start the server, then starts Claude Code
+mrun launch claude-code    # offers to pull the default model and start the server, then starts Claude Code
 mrun launch codex          # or opencode
-mrun pull qwen3-coder      # other models: verified download into the shared Hugging Face cache
+mrun pull gpt-oss          # other models: verified download into the shared Hugging Face cache
 mrun ps                    # model, memory budget, cache hit rate, last cache miss
 mrun doctor                # diagnose the machine and client setup
 ```
 
 - **Three agent APIs.** Anthropic Messages, OpenAI Chat Completions and OpenAI Responses, with
   streaming, tool calls, structured output, MCP tools and deferred tool loading.
+- **Open set of model families.** Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, gpt-oss-20b, Devstral
+  Small 2 and Qwen3-8B in the first release, built from shared blocks with a registry of tool-call
+  formats; GLM-4.7-Flash, Gemma 4 and Nemotron-H follow.
 - **Exact prefix cache.** Reuses the longest identical token prefix across turns and subagents,
-  for attention and hybrid models, and reports cached tokens and the reason for each miss.
+  for attention, sliding-window and hybrid models, and reports cached tokens and the reason for each miss.
 - **Predictable memory.** Weights, attention state and scratch are budgeted at startup; requests
   that cannot fit are refused up front.
 - **Interruption that keeps progress.** Cancellation is checked after every model layer; finished
@@ -35,8 +38,9 @@ mrun doctor                # diagnose the machine and client setup
 - **Apple MLX from Rust.** One native binary; no Python at runtime.
 - **Private by default.** Loopback only, no telemetry, no prompt logging, offline after `pull`.
 
-Target hardware is an Apple Silicon Mac; the default model, Qwen3.6-35B-A3B, gets its full 262K
-context with 48 GB of memory. Linux builds compile and pass the portable tests in CI.
+Target hardware is an Apple Silicon Mac. The default model is chosen by benchmark among the
+first-release families; the expected default, Qwen3.6-35B-A3B, gets its full 262K context with
+48 GB of memory. Linux builds compile and pass the portable tests in CI.
 
 ## Development
 

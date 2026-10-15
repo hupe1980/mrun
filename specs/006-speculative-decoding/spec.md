@@ -175,7 +175,7 @@ speculation when diagnosing output differences.
   passes.
 - **FR-011**: Every response MUST report in mrun metadata (002 headers or `: mrun` SSE comment
   before the final event): `spec.drafter` (`ngram` | `none`), `spec.drafted`, `spec.accepted`,
-  `spec.rounds`, and `spec.reason` when nothing was drafted. Usage token counts are unchanged:
+  `spec.rounds`, and `spec.reason` when nothing was drafted (`off` or one of FR-009's reasons). Usage token counts are unchanged:
   output tokens count committed tokens only. `/mrun/status` shows per-model controller state under
   the key `spec` (current depth, acceptance by bucket, cost curve).
 - **FR-012**: Stop sequences, EOS, UTF-8 hold-back and tool-call parsing MUST see accepted tokens

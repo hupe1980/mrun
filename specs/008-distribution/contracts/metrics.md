@@ -6,7 +6,7 @@ below; no prompt, session, header or path data appears. Names are stable within 
 renames are breaking changes listed in the changelog.
 
 Label sets: `api` ∈ {`chat`, `messages`, `responses`}; `outcome` ∈ {`ok`, `cancelled`, `error`,
-`rejected`}; `cause` ∈ 003 miss causes; `reason` ∈ {`capacity`, `pressure`, `clear`};
+`rejected`}; `cause` ∈ 003 miss causes; `reason` ∈ {`lru`, `pressure`, `clear`};
 `component` as listed.
 
 Before the model is loaded (service mode without `--preload`, D022), only `mrun_build_info`,

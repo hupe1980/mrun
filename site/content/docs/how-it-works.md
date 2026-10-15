@@ -1,6 +1,6 @@
 +++
 title = "How it works"
-description = "The design of mrun: one engine thread on Apple MLX, hybrid and attention models, an exact prefix cache that survives subagents, a startup memory budget and interruptible prefill."
+description = "The design of mrun: one engine thread on Apple MLX, an open set of model families, an exact prefix cache that survives subagents, a startup memory budget and interruptible prefill."
 weight = 30
 +++
 
@@ -50,18 +50,26 @@ predictable and keeps reuse exact. Batching concurrent sessions is on the
 mrun calls Apple's [MLX](https://github.com/ml-explore/mlx) through its official C API. MLX provides
 the Metal kernels — quantized matrix multiplication, fused attention — that make Apple Silicon
 fast. mrun owns everything around them: model graphs, attention-state layout, memory accounting,
-scheduling and the server. Model graphs are ported from the reference
+scheduling and the server. Model families are composed from shared blocks ported from the reference
 [mlx-lm](https://github.com/ml-explore/mlx-lm) implementations, and output is checked
 token-for-token against them.
 
 ## Attention and hybrid models
 
-Classic transformers keep attention state for every token; a cached prefix can be cut at any
-position. Hybrid models such as Qwen3.6 replace three of every four attention layers with linear
-attention, which keeps one fixed-size state per layer. That makes long context cheap — about
-20 KiB per token instead of 96 KiB — but the state exists only for the position it was computed
-at. mrun saves checkpoints of it at message boundaries while processing a prompt, so an edited or
-branching conversation resumes from the nearest checkpoint instead of from the start.
+mrun supports an open set of model families built from shared blocks, and each kind of layer is
+cached in the way that keeps reuse exact:
+
+- **Full attention** (Qwen3-Coder, Devstral, Qwen3-8B) keeps state for every token, so a cached
+  prefix can be cut at any position.
+- **Sliding-window attention** (gpt-oss) only looks at recent tokens, but mrun keeps the full
+  state and applies the window as a mask, so any position stays reusable here too.
+- **Linear attention** (the hybrid layers of Qwen3.6) keeps one fixed-size state per layer. That
+  makes long context cheap — about 20 KiB per token instead of 96 KiB — but the state exists only
+  for the position it was computed at. mrun saves checkpoints of it at message boundaries while
+  processing a prompt, so an edited or branching conversation resumes from the nearest checkpoint
+  instead of from the start.
+
+See [Models](@/docs/models.md) for the supported families.
 
 ## Design rules
 

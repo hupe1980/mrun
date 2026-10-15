@@ -67,7 +67,7 @@ crates/mrun-engine/src/
 └── budget.rs              # + rollback input cache in the scratch envelope, max_draft
 crates/mrun/src/
 ├── spec/
-│   ├── mod.rs             # SpecMode, per-request policy (grammar/seed/limit → off)
+│   ├── mod.rs             # SpecMode, per-request policy (grammar/seed/logprobs/limit → off)
 │   ├── index.rs           # suffix automaton over token ids, incremental extension
 │   ├── render.rs          # copy-aware rendering (line numbers stripped)
 │   ├── controller.rs      # acceptance stats, cost prior + EWMA, depth choice, probing

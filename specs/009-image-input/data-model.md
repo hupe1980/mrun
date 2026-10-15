@@ -19,7 +19,7 @@
 | resized | (w, h) | multiples of 32 px |
 | grid | (t = 1, h/16, w/16) | patch grid; merged grid = (1, h/32, w/32) |
 | tokens | u32 | `(h/32)·(w/32)`, ≤ `max_image_tokens` |
-| pixels | Vec<u8> | resized RGB8; dropped after encoding or on cache hit |
+| pixels | Vec<u8> (transient) | resized RGB8; held only while the digest is computed, then dropped; re-decoded from the request bytes when the encoder needs the image; never stored |
 | digest | [u8; 32] | SHA-256(preproc_version, min_pixels, max_pixels, grid, pixels) |
 
 `RawMemo`: `SHA-256(raw bytes)` → `(digest, grid, resized dims)`, bounded (default 1,024 entries),
@@ -62,11 +62,15 @@ vision_end_id}`; part of `ModelInfo` and the budget breakdown.
 
 ## MissReport additions
 
-Cause `image`; precedence: after `model`, before `edit` when the divergence position is an image
-span start (or inside a span) and the text before it matches. Request metadata adds `images`,
+Cause `image` when the divergence position is an image span start (or inside a span) and the text
+before it matches. Full precedence: `disabled > model > evicted/capacity > image > template >
+system > edit > new > checkpoint`. 003's `MessageMark` content hash includes the digests of the
+message's images, so a changed image is not mistaken for an unchanged message (002 T004 and 003
+data model updated when this feature lands, T022). Request metadata adds `images`,
 `image_tokens`, `encoder_runs`, `embedding_hits`.
 
 ## Counters (FR-001)
 
-`/mrun/status` and `/metrics`: `requests_with_images{api, location}`, `images_total`,
+Live request counts only; session shares come offline from `mrun bench --trace-stats`.
+`/mrun/status` key `images` and `/metrics` (008): `requests_with_images{api, location}`, `images_total`,
 `images_omitted_total{reason}`, `encoder_runs_total`, `embedding_cache_hits_total`.

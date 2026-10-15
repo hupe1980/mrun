@@ -58,7 +58,7 @@ Kept for the MTP follow-up (spec "Follow-up (gated)"); not implemented by this f
   (002 research §3). AgSpec (2610.01108) indexes files "in the agent's own emission format" [V listing].
 - **Decision**: For every tool-result and message text block, add one rendering with line-number
   prefixes stripped, tokenized separately and appended to the index as an unrendered source with a
-  separator token. Cost is bounded by input caps (002 body ≤ 8 MiB). JSON-escaped renderings were
+  separator token. Cost is bounded by input caps (002 body ≤ 64 MiB). JSON-escaped renderings were
   dropped (analyze): the default models' XML tool syntax passes arguments raw; revisit if FR-001
   shows JSON-syntax models losing matches.
 - **Alternatives**: Character-level matching and re-tokenizing drafts: token boundaries differ by

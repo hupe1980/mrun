@@ -8,7 +8,8 @@ weight = 120
 
 They are general-purpose local model runners. mrun is built for one workload: coding agents that
 resend a growing conversation every turn. That shapes everything — an exact prefix cache with miss
-explanations, a memory budget sized for long contexts, cancellation that takes effect within a few hundred milliseconds,
+explanations, a memory budget sized for long contexts, cancellation designed to free the server within 300 ms (a release gate measured on an M4 Pro,
+48 GB),
 and first-class support for the Anthropic Messages and OpenAI Responses APIs that Claude Code and
 Codex use. If you chat with a model occasionally, any of those tools works well. If you run an
 agent for hours, mrun is designed for you.
@@ -26,9 +27,11 @@ attention state as recomputing it, up to floating-point rounding in the GPU kern
 
 ## Which models are supported?
 
-Qwen3.6-35B-A3B (the default, a hybrid mixture-of-experts model), Qwen3-Coder-30B-A3B and Qwen3
-dense models in MLX format. More model families follow based on what coding agents actually use; see
-[Models](@/docs/models.md) and the [roadmap](@/docs/roadmap.md).
+mrun supports an open set of model families. The first release covers Qwen3.6-35B-A3B (the
+expected default, a hybrid mixture-of-experts model), Qwen3-Coder-30B-A3B, gpt-oss-20b, Devstral
+Small 2 24B and Qwen3-8B, in MLX format. GLM-4.7-Flash, Gemma 4 and Nemotron-H follow, then other
+families based on what coding agents actually use; see [Models](@/docs/models.md) and the
+[roadmap](@/docs/roadmap.md).
 
 ## Can I use GGUF files?
 

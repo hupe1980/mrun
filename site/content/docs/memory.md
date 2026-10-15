@@ -54,10 +54,11 @@ what the request reserved.
 | --- | --- | --- |
 | `--memory-fraction` / `memory.fraction` | 0.75 | Share of physical memory mrun may plan for |
 | `--reserve-gib` / `memory.reserve_gib` | ⅙ of RAM, 2–8 GiB | Memory left for other applications |
-| `--allow-over` | off | Start even when the model does not fit the budget (at your own risk) |
+| `--allow-over` | off | Required to raise the budget above the default formula; the budget still never exceeds macOS's recommended GPU working set |
 
-Raising the fraction above 0.75 helps only up to macOS's recommended GPU working set and leaves
-less memory for other apps.
+You can always lower the budget. Raising the fraction above 0.75 or the reserve below its default
+needs `--allow-over`, helps only up to macOS's recommended GPU working set and leaves less memory
+for other apps.
 
 ## Under pressure
 

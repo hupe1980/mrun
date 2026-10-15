@@ -24,25 +24,26 @@ the reference smart resize and PIL bicubic filter (R3, OQ-4); MLX ops through `m
 **Storage**: Memory only (embedding cache, raw-bytes memo); vision sidecar (if needed) under
 `~/.mrun/sidecars/` as in 006
 **Testing**: `ScriptedEngine` gains media spans, position offsets and an encoder cost model; golden
-preprocessing fixtures (pixels and grids) generated from mlx-vlm; macOS equality and conformance
-tests on Qwen3.6
+preprocessing fixtures (pixels and grids) generated from mlx-vlm `4623cf9` (MLX v0.32.4); macOS
+equality and conformance tests on Qwen3.6
 **Target Platform**: macOS (Metal); parsing, preprocessing, digests and store logic run on Linux
 **Project Type**: Changes across `mrun-engine` and `mrun`
 **Performance Goals**: encoder ≤ 1.5 s for a 2,560-token image on M4 Pro (SC-003, OQ-6); digest
 and memo lookup ≤ 5 ms per repeated image; zero encoder runs on appended turns (SC-002)
 **Constraints**: no network fetches; full-digest identity; one image encoded at a time; encoder
 cancel per layer; everything inside the 001 budget
-**Scale/Scope**: ≤ 64 images and ≤ 64 MiB of image bytes per request; ≤ 2,560 tokens per image
+**Scale/Scope**: ≤ 64 images and ≤ 48 MiB of decoded image bytes per request (base64 within 002's
+64 MiB body cap); ≤ 2,560 tokens per image
 
 ## Constitution Check
 
 | Principle | Gate | Status |
 | --- | --- | --- |
 | I Agent latency | Gate on measured image share (FR-001); SC-002 zero re-encodes on appended turns; SC-003 TTFT bound | Pass |
-| II Exactness | Placeholder positions keyed by full SHA-256 digest; images have no tokens, so the digest is their content identity, compared in full at every position (interpretation recorded here, R6); positions carried with state (R8); SC-004 bit equality | Pass (interpretation noted) |
+| II Exactness | Placeholder positions keyed by the full SHA-256 digest of the preprocessed input, compared at every position (R6); model identity covers `preprocessor_config.json` and the vision sidecar (FR-008); positions carried with state (R8); SC-004 bit equality | Pass (3.2.0: media reuse confirmed by full digest of preprocessed input) |
 | III Memory budget | Tower weights measured, encoder scratch probed at the largest admissible image, embedding cache inside the budget and shed first; input caps before queuing | Pass |
 | IV Local, private | No remote fetching (FR-003); nothing on disk; no image logging | Pass |
-| V Own runtime | Encoder ported from mlx-vlm and tested against it; no new kernels planned | Pass |
+| V Own runtime | Encoder ported from mlx-vlm and tested against it (SC-005); no new kernels planned | Pass (3.2.0 names mlx-vlm as reference; pinned 4623cf9 on MLX v0.32.4) |
 | VI Simple | Vision on when present, one off switch, one token cap; no video, audio, PDF | Pass |
 
 Post-design re-check: Pass.

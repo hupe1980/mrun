@@ -40,7 +40,7 @@ and complete a scripted read-edit-test task in Claude Code.
 **Acceptance Scenarios**:
 
 1. **Given** a Mac with Homebrew, **When** the developer runs `brew install hupe1980/tap/mrun`,
-   **Then** `mrun --version` prints version, commit, MLX version and build date, and the binary
+   **Then** `mrun --version` prints version, commit, MLX and mlx-c versions and build date, and the binary
    passes Gatekeeper assessment.
 2. **Given** a fresh install, **When** the developer runs `mrun launch claude-code`, **Then** it
    offers the default model with size and fit, pulls it, starts the server and opens Claude Code
