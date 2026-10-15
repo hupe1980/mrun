@@ -14,11 +14,11 @@ No results are published yet. The first dated comparison is a release goal.
 
 | Suite | Measures |
 | --- | --- |
-| `agent` | Replays recorded Claude Code, Codex and OpenCode sessions turn by turn: time to first token per turn and per session |
+| `agent` | Replays bundled OpenCode and Codex sessions turn by turn (your own Claude Code sessions can be recorded and replayed locally): time to first token per turn and per session |
 | `synthetic` | Prefill and decode speed across context lengths |
 | `cancel` | Time from disconnect until the next request starts |
 | `memory` | Peak memory and swap during long sessions |
-| `quality` | Output agreement with the reference implementation |
+| `quality` | Pass rate on bundled coding tasks with tests, reported next to speed |
 
 ## Method
 
@@ -28,6 +28,9 @@ No results are published yet. The first dated comparison is a release goal.
   documentation recommends. Comparing against a cold server would be meaningless.
 - **Same weights where possible**, and the exact model file, format and quantization recorded
   where not.
+- **Tool gaps.** `--gaps recorded` reproduces the pauses between turns (capped at 60 s), which
+  matters for servers whose caches expire over time; the default replays back to back.
+- **Fidelity.** Malformed tool calls and early end-of-sequence are counted per system.
 - **Repetitions** with medians and spread, plus warnings for thermal throttling, low power mode and
   early end-of-sequence.
 - **Losing cells are always reported.** A report without them is not a valid result.

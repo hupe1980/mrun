@@ -195,11 +195,13 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
 - **FR-023**: Anthropic Messages requests carrying `diagnostics.previous_message_id` MUST receive
   the standard `diagnostics.cache_miss_reason` in the response (`model_changed`, `system_changed`,
   `tools_changed`, `messages_changed` with `cache_missed_input_tokens`,
-  `previous_message_not_found`, `unavailable`), derived from feature 003's miss report against that
-  message's prompt; `diagnostics` is `null` when the prefix was fully reused. mrun keeps the prompt
-  fingerprints of the last 256 message ids for this.
-- **FR-024**: Server-side context management (Anthropic `context_management` edits and compaction)
-  MUST be rejected with 400 naming the field: mrun does not rewrite or summarize client context.
+  `previous_message_not_found`, `unavailable`), derived by comparing this prompt's fingerprint with
+  that message's (data model: Prompt Fingerprint, DiagnosticsIndex); `diagnostics` is `null` when the
+  prefix was fully reused. The index holds the last 256 message ids in memory only.
+- **FR-024**: Anthropic `context_management` (server-side context edits and compaction) MUST be
+  accepted and ignored: mrun never rewrites or summarizes client context, and Claude Code sends the
+  field by default. Clients that depend on the edits keep working because their own compaction
+  takes over at the reported context window.
 
 ### Key Entities
 

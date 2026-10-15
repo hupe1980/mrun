@@ -5,7 +5,7 @@
 ```text
 mrun bench [--suite agent|synthetic|cancel|memory|quality|all] [--trace NAME]...
            [--system NAME=URL[,apis=chat+messages+responses][,model=M][,pid=N][,profile=P]]...
-           [--compare] [--gaps recorded|none] [--reps N] [--out DIR] [--baseline FILE]
+           [--compare] [--gaps none|recorded] [--reps N] [--out DIR] [--baseline FILE]
 ```
 
 - Without `--system`, benchmarks the local mrun server (`http://127.0.0.1:8484`).
@@ -22,7 +22,7 @@ Additive changes keep `schema_version: 1`; removals or meaning changes bump it. 
 
 ## Report (markdown)
 
-Sections: Method (teacher-forced replay, repetitions) · Machine · Systems (versions, flags, model
+Sections: Method (teacher-forced replay, gaps mode, repetitions) · Machine · Systems (versions, flags, model
 name, format, quantization) · Agent suite (per-turn TTFT table and session totals) · Synthetic
-cells · Cancellation · Memory · Quality · Warnings (power, throttling, early EOS) · Losing cells
+cells · Cancellation · Memory · Quality · Warnings (power, throttling, early EOS, malformed tool calls per system) · Losing cells
 (always present, possibly "none").

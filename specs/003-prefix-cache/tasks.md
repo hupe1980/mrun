@@ -40,7 +40,7 @@ description: "Tasks for 003 Prefix Cache"
 - [ ] T015 [US4] `runtime/pressure.rs`: macOS dispatch memory-pressure source → worker queue, handled between steps (warning → 50%, critical → all unpinned); Linux no-op; injected-event test asserting < 1 s and running request unaffected
 - [ ] T016 [US4] `mrun cache clear` + `POST /mrun/cache/clear`; running request unaffected — test
 - [ ] T016a [US4] Compaction hint (FR-013): on `x-claude-code-context-compacted`, mark the previous live path's segments as first eviction candidates; test with a scripted two-request sequence
-- [ ] T016b [US4] Cache hints (FR-014): `cache_control` breakpoints become segment boundaries (via 002's renderer offsets); `prompt_cache_key` session tag lowers eviction priority of other sessions' leaves; test that hints never change matched lengths
+- [ ] T016b [US4] Cache hints (FR-014): `cache_control` breakpoints become segment boundaries (via 002's renderer offsets); `prompt_cache_key` session tag: leaves tagged with a different session than the incoming request are evicted before the same session's leaves (FR-007 order); `x-mrun-cache: off` header (FR-009); tests that hints never change matched lengths and that the full eviction order holds
 
 ## Phase 7: Polish
 

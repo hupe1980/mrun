@@ -32,7 +32,8 @@ These come after the first release, each once measurements on real agent traces 
   multi-token-prediction heads follow where available. Mixture-of-experts models need careful
   tuning here, so it stays adaptive and falls back to normal decoding.
 - **8-bit attention state** to roughly double context capacity on the same Mac.
-- **Native cache-miss reasons** in the Anthropic API format, `/metrics`, and Homebrew packaging.
+- **Small items**: `/metrics`, keeping completed prefill work when a request is cancelled, and a
+  Homebrew formula with a launchd service.
 
 ## Later
 

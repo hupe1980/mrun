@@ -36,23 +36,23 @@ also attaches its own report:
 | Cause | Meaning | What to do |
 | --- | --- | --- |
 | `new` | No earlier request shares a prefix | Nothing; the first turn is always computed |
-| `edit` | The conversation changed before the divergence point | Expected after compaction or editing history |
-| `template` | Same messages rendered differently, e.g. a changed system prompt or tools | Check client settings that change per session |
+| `edit` | The conversation, system prompt or tools changed before the divergence point | Expected after compaction or editing history; otherwise check client settings that change per session |
+| `template` | The same messages rendered to different tokens, e.g. earlier reasoning re-rendered differently | Usually a client or template quirk; report it if it repeats |
 | `volatile` | Content that changes on every request appears early in the prompt (timestamps, token counters) | Use `mrun launch`, which turns these off for supported clients |
 | `evicted` | The prefix was removed to free memory | More memory, or fewer parallel conversations |
 | `capacity` | The prompt was too large to keep | Shorter context or more memory |
 | `model` | A different model or revision was loaded | Expected |
 | `disabled` | Caching was off for this request | `--no-cache` or `"mrun": {"cache": false}` |
 
-The divergence report gives the token position and the message where the prompt differed from the
-best cached candidate. `mrun serve --debug-cache` additionally prints short text excerpts around
+The divergence report gives the token position where the prompt differed from the best cached
+candidate. `mrun serve --debug-cache` additionally prints short text excerpts around
 the divergence to the server terminal — never to logs or responses.
 
 ## Memory and eviction
 
 Cached segments share the memory budget with the active request. When a new request needs room,
-mrun evicts the least recently used segments, preferring finished side branches over the main
-conversation. A request is never refused while evictable cache remains. If macOS reports memory
+mrun evicts the least recently used segments: first conversations superseded by a compaction,
+then other sessions, then assistant turns before user and tool turns before system prompts. A request is never refused while evictable cache remains. If macOS reports memory
 pressure, mrun sheds cache first.
 
 ## Shared between clients
@@ -75,6 +75,7 @@ answers with the standard `diagnostics.cache_miss_reason` in the response.
 | Control | Effect |
 | --- | --- |
 | `mrun serve --no-cache` | Disable reuse for the whole server |
-| `"mrun": {"cache": false}` in a Chat Completions or Responses body | Disable reuse for one request |
+| `x-mrun-cache: off` request header | Disable reuse for one request (all APIs) |
+| `"mrun": {"cache": false}` in a Chat Completions or Responses body | Same, in the body |
 | `mrun cache clear` | Drop all cached segments of the running server |
 | `mrun serve --debug-cache` | Print divergence excerpts on the server terminal (loopback only) |

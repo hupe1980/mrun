@@ -33,9 +33,10 @@ Cross-cutting:
   - bodies stay strictly standard; the last request's metadata is in `/mrun/status`.
 - **Anthropic diagnostics** (FR-023): `diagnostics.previous_message_id` → response
   `diagnostics.cache_miss_reason` from the miss report against that message's prompt; `null` on
-  full reuse. `context_management` → 400 (FR-024).
+  full reuse. `context_management` is accepted and ignored (FR-024).
 - **Cache hints**: `cache_control` and `prompt_cache_key` are passed to 003 as boundary and session
   hints (003 FR-014); they never change responses.
+- **Per-request cache off**: request header `x-mrun-cache: off` on all APIs (003 FR-009).
 - **Disconnect**: dropping the connection cancels queued or running work.
 - **Queued streams**: keepalives every 10 s (Anthropic `ping`, SSE comment for OpenAI APIs).
 

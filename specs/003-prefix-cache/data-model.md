@@ -12,7 +12,9 @@
 | depth | u32 | tokens from root to end of edge |
 | segment | KvSegmentId | owned KV for exactly this edge's tokens (always present) |
 | bytes | u64 | segment size (from `Engine::snapshot`) |
-| kind | System \| User \| Tool \| Assistant \| Periodic | eviction order |
+| kind | System \| User \| Tool \| Assistant \| Periodic \| Breakpoint | eviction order; `Breakpoint` = client `cache_control` position (FR-014), evicted like the turn it ends in |
+| session | Option<u64> | hash of the `prompt_cache_key` that last used this node (FR-014) |
+| superseded | bool | set by a compaction hint (FR-013) |
 | text_hash | Option<u64> | hash of the message text ending at this node (miss classification) |
 | last_used | Instant | LRU |
 | in_use | u32 | pinned while > 0 (only between lookup and the end of `prepare`) |

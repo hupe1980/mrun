@@ -38,12 +38,12 @@ description: "Tasks for 002 Agent APIs"
 - [ ] T017 [US2] Usage semantics per API (Anthropic input excludes cache read; others inclusive; `cache_creation_input_tokens` = 0) and the cache values in mrun metadata (delivered by T015) + `cross_*` conformance cases
 - [ ] T018 [US2] Error mapping per API per the contract status table (queue full, queue deadline, context too long with numbers, unsupported modalities with JSON path, unknown tool result id, limits, auth, Host/Origin) + cases
 - [ ] T019 [US2] Request validation limits (body 8 MiB via tower-http, messages, tools, schema size/depth) + cases
-- [ ] T019a [US2] Anthropic `diagnostics` (FR-023): bounded map of the last 256 `msg_` ids → prompt fingerprint, `cache_miss_reason` mapped from 003's MissReport (`previous_message_not_found` for unknown ids, `unavailable` when caching is off), `null` on full reuse; reject `context_management` with 400 (FR-024); conformance cases for each variant
+- [ ] T019a [US2] Anthropic `diagnostics` (FR-023): bounded map of the last 256 `msg_` ids → prompt fingerprint, `cache_miss_reason` mapped from 003's MissReport (`previous_message_not_found` for unknown ids, `unavailable` when caching is off), `null` on full reuse; `context_management` accepted and ignored (FR-024); conformance cases for each variant. Needs 003 T012 (MissReport) for live testing; until then tested with fingerprints alone
 
 ## Phase 5: US3 — Reliable under agent behavior (P2)
 
 - [ ] T020 [US3] Disconnect mid-queue and mid-stream tests; stalled reader → cancel after 10 s; next request latency (SC-005 measured on macOS)
-- [ ] T021 [US3] Non-loopback bind requires an API key from `MRUN_API_KEY`/`--api-key-file` (constant-time compare); auth tests; `serve --record <dir>` (FR-021: CLI-only, loopback-only, 0600 files, startup warning, shown in status); audit test that no prompt text reaches logs or disk without `--record` and that config/env cannot enable it (SC-006)
+- [ ] T021 [US3] Non-loopback bind requires an API key from `MRUN_API_KEY`/`--api-key-file` (constant-time compare); auth tests; `serve --record <dir>` (FR-021: CLI-only, loopback-only, 0600 files, startup warning, shown in status; each record carries RFC 3339 millisecond arrival and response-end times, tested); audit test that no prompt text reaches logs or disk without `--record` and that config/env cannot enable it (SC-006)
 
 ## Phase 6: Polish
 
@@ -53,4 +53,5 @@ description: "Tasks for 002 Agent APIs"
 ## Dependencies
 
 T001 → T003 → T004/T005 → T009–T011 (parallel) → T012–T016. T006–T008 parallel after T003.
+T019a runs after 003 Phase 5 for end-to-end tests (fingerprint logic first).
 Requires 001's `Engine` trait (001 T008), chat layer (001 T010) and generation loop (001 T011); real-model runs need 001 MVP.

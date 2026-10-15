@@ -32,7 +32,7 @@ Sources: [next-features-2026-10](research/next-features-2026-10.md) and
 | — | Small items | — | `/metrics`, keep completed prefill chunks on cancel, tool-call early stop, sleep assertion while busy, launchd service and Homebrew |
 
 Already folded into the M2/M3 specs: Anthropic `diagnostics.cache_miss_reason` (002 FR-023),
-rejecting server-side context management (002 FR-024), cache hints (003 FR-014), recorded tool gaps
+accepting and ignoring server-side context management (002 FR-024), cache hints (003 FR-014), recorded tool gaps
 in replay (005 FR-003a). Eviction stays plain LRU with turn-type order: two 2026 studies found LRU
 near-optimal for single long sessions, so cost-aware scoring waits for hybrid models.
 

@@ -105,10 +105,12 @@ Each run checks output quality so a configuration that is faster but wrong is ca
   states this method. Requests are sent in the trace's API style (Chat Completions, Messages or
   Responses); systems lacking that API are marked "n/a" for the trace.
 - **FR-003a**: Traces MUST record the gap between each response's end and the next request (tool
-  execution and user think time). Replay MUST reproduce gaps capped at 60 s by default
-  (`--gaps recorded|none`), because time-based cache expiry and background work in other systems
-  depend on them; the report states the mode. Each system's timed outputs MUST be checked for
-  malformed tool calls and early end-of-sequence, reported per system next to its speed.
+  execution and user think time). `--gaps recorded` reproduces them, capped at 60 s, between the
+  untimed priming request and the timed turn, because time-based cache expiry and background work
+  in other systems depend on them; the default `--gaps none` keeps runs short. The report states
+  the mode, and session times exclude gaps. Each system's timed outputs MUST be checked for
+  malformed tool calls (arguments that are not valid JSON, an undeclared tool name, or arguments
+  failing the trace's tool schema) and early end-of-sequence, reported per system next to its speed.
 - **FR-004**: Repetitions: synthetic and cancel cells use one warm-up and at least 5 repetitions;
   agent traces use 3 repetitions; quality tasks use 3 seeds. Reports give median, p95 and IQR.
 - **FR-005**: Results MUST be written as JSON (versioned, hand-written schema file) and a markdown
@@ -145,7 +147,7 @@ Each run checks output quality so a configuration that is faster but wrong is ca
 - **SC-001**: Two consecutive runs of the synthetic suite on an idle target Mac agree within 5% on
   median speeds.
 - **SC-002**: A full comparison of mrun and three competitors on the bundled agent suite (3 repetitions)
-  completes unattended in under 4 hours on the target Mac.
+  completes unattended in under 4 hours on the target Mac (default `--gaps none`).
 - **SC-003**: Every published report contains all cells for all systems, with failures and "n/a"
   marked and a "losing cells" section (review checklist, 100%).
 - **SC-004**: The regression mode catches a deliberately introduced 10% speed regression in 100% of

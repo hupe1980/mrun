@@ -150,12 +150,14 @@ request and simulate memory pressure; verify eviction order and that requests su
 - **FR-007**: Cache memory MUST come only from attention-state capacity not needed by the active
   request; admission happens before any restore. Cached state may occupy capacity reserved for a
   request's output until that output needs it, and is then evicted. Eviction removes the least
-  recently used unpinned leaves, assistant turns before user/tool turns before system prompts, and
-  MUST never evict state in use.
+  recently used unpinned leaves and MUST never evict state in use. Candidate order: leaves superseded
+  by a compaction (FR-013), then leaves of other sessions (FR-014), then by turn kind (assistant,
+  then user/tool, then system), least recently used first within each group.
 - **FR-008**: Memory pressure signals MUST shrink the cache (and release freed memory to the OS)
   before affecting running requests.
-- **FR-009**: Users MUST be able to disable the cache per request and globally, and clear it
-  (`mrun cache clear` and an HTTP endpoint).
+- **FR-009**: Users MUST be able to disable the cache per request (header `x-mrun-cache: off` on all
+  three APIs; `"mrun": {"cache": false}` in Chat Completions and Responses bodies) and globally,
+  and clear it (`mrun cache clear` and an HTTP endpoint).
 - **FR-010**: The cache MUST be in memory only in this feature; nothing is persisted to disk.
 - **FR-011**: Cache entries are shared by all clients of one server. Because cached-token counts
   reveal whether a prefix was seen before, mrun MUST document this, MUST refuse `--debug-cache`

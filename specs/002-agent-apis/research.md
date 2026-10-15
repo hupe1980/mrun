@@ -14,7 +14,7 @@
 
 ### 1a. OpenAI Chat Completions (`POST /v1/chat/completions`)
 
-**Request fields to honor** [V `OS chat/completion_create_params.py`]: `model`, `messages` (roles `system`, `developer`, `user`, `assistant`, `tool`), `tools[{type:"function",function:{name,description,parameters,strict}}]`, `tool_choice` (`"none"|"auto"|"required"|{type:"function",function:{name}}`), `parallel_tool_calls`, `response_format` (`text` | `json_object` | `{type:"json_schema",json_schema:{name,schema,strict}}`), `max_completion_tokens` (preferred) and deprecated `max_tokens`, `stop` (string or array), `temperature`, `top_p`, `seed`, `stream`, `stream_options.include_usage`, `reasoning_effort` (`none|minimal|low|medium|high|xhigh|max` [V `OS shared/reasoning_effort.py`]). Ignore the rest: `store`, `metadata`, `user`, `prompt_cache_key`, `frequency_penalty`/`presence_penalty` (or map them), `cache_control` on tools and content parts.
+**Request fields to honor** [V `OS chat/completion_create_params.py`]: `model`, `messages` (roles `system`, `developer`, `user`, `assistant`, `tool`), `tools[{type:"function",function:{name,description,parameters,strict}}]`, `tool_choice` (`"none"|"auto"|"required"|{type:"function",function:{name}}`), `parallel_tool_calls`, `response_format` (`text` | `json_object` | `{type:"json_schema",json_schema:{name,schema,strict}}`), `max_completion_tokens` (preferred) and deprecated `max_tokens`, `stop` (string or array), `temperature`, `top_p`, `seed`, `stream`, `stream_options.include_usage`, `reasoning_effort` (`none|minimal|low|medium|high|xhigh|max` [V `OS shared/reasoning_effort.py`]). Ignore the rest (`prompt_cache_key` is passed to 003 as a session hint): `store`, `metadata`, `user`, `frequency_penalty`/`presence_penalty` (or map them), `cache_control` on tools and content parts.
 
 **Streaming** [V `OS chat/chat_completion_chunk.py`]:
 - `delta.tool_calls[]` has `index:int` (required), and `id`, `type:"function"` and `function.name`, which are sent only on the **first** fragment of a call. Later fragments carry only `index` plus `function.arguments` (a raw JSON *substring*).
@@ -301,7 +301,7 @@ wire_api = "responses"
    - OpenAI accepts `system`/`developer` at any position.
    - Responses has `instructions` plus `developer`/`system` input items; Codex uses only developer items.
    - → Keep ordered `SystemPart`s. Join the leading parts deterministically, without reordering (`"\n\n"` between blocks). Render later system parts as system turns, which both Qwen templates support.
-   - Ignore `cache_control` everywhere.
+   - Accept `cache_control` everywhere and pass breakpoints to 003 as boundary hints; it never changes response bodies.
 2. **Usage semantics differ.**
    - OpenAI `prompt_tokens` and Responses `input_tokens` **include** cached tokens. Anthropic `input_tokens` **excludes** them.
    - Report `cache_creation_input_tokens: 0` until feature 003 defines writes.
@@ -339,7 +339,7 @@ wire_api = "responses"
     - OpenAI `image_url`/`input_audio`/`file` parts in user content.
     - Responses `input_image`/`input_file` in user content (in Codex `function_call_output` arrays: placeholder per FR-020).
     - `n>1`, `logprobs`, and `previous_response_id`.
-    - Accept and ignore `metadata`, `service_tier`, `context_management`, `output_config.effort` (it maps to thinking), `prompt_cache_key`, and betas.
+    - Accept and ignore `metadata`, `service_tier`, `context_management` (002 FR-024), `output_config.effort` (it maps to thinking), and betas. `prompt_cache_key` is passed to 003 as a session hint.
 11. **Stop sequences.**
     - Apply to answer text only, never inside reasoning or a tool call. Hold back partial matches in the stream.
     - Anthropic reports `stop_reason:"stop_sequence"` plus the string. Chat reports `"stop"`. Responses has no stop parameter.
@@ -415,7 +415,7 @@ enum Finish { Stop, StopSequence, Length, ContextFull, ToolCalls, Cancelled }
   - `chat_utf8_split_multibyte_stream`
 - **messages:**
   - `msg_basic_nonstream`, `msg_stream_full_event_order`, `msg_ping_during_silence`, `msg_query_beta_true_path`
-  - `msg_x_api_key_and_bearer_auth`, `msg_system_string_and_blocks`, `msg_midconversation_system_message`, `msg_cache_control_ignored`
+  - `msg_x_api_key_and_bearer_auth`, `msg_system_string_and_blocks`, `msg_midconversation_system_message`, `msg_cache_control_hint_no_body_change`
   - `msg_usage_input_excludes_cache_read`, `msg_message_delta_usage_cumulative`, `msg_tool_use_input_json_delta`, `msg_parallel_tool_use_blocks`
   - `msg_tool_result_blocks_with_text`, `msg_tool_result_is_error`, `msg_tool_result_image_placeholder`, `msg_reject_tool_images_flag`, `msg_nonstrict_invalid_args_as_text`, `msg_tool_choice_any_and_tool`
   - `msg_disable_parallel_tool_use`, `msg_thinking_enabled_blocks_with_signature`, `msg_thinking_adaptive_maps_on`, `msg_thinking_disabled_no_think`

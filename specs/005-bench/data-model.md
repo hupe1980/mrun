@@ -24,6 +24,8 @@
 
 JSONL, one record per request: `{api, body, assistant_reply, gap_ms}`, where `gap_ms` is the time
 from the previous response's end to this request's arrival (tool execution and think time).
+Converted from `mrun serve --record` output: `assistant_reply` of turn n is taken from turn n+1's
+history (the final recorded turn has none and is used only as a timed turn).
 
 ## RunResult (JSON, `schema_version: 1`)
 
@@ -34,10 +36,10 @@ from the previous response's end to this request's arrival (tool execution and t
 | mrun_version | string |
 | machine | {chip, memory_bytes, macos, power_source, low_power, thermal_start, thermal_end, per_system: [{system, free_memory, swap}]} |
 | systems | SystemUnderTest[] |
-| cells | [{system, cell, api, samples: number[], median, p95, iqr, unit, early_eos: bool, malformed_tool_calls: n, gaps: recorded\|none, failures: [{rep, error}], turns?: [{n, ttft_ms, tfut_ms, input, cached, output}]}] |
+| cells | [{system, cell, api, samples: number[], median, p95, iqr, unit, early_eos: bool, malformed_tool_calls: n, gaps: recorded\|none, failures: [{rep, error}], turns?: [{n, ttft_ms, tfut_ms, input, cached, output}], session_compute_s?}] |
 | quality | [{system, task, seed, passed, duration_s}] |
 | comparability | [{cell, kind: `same-weights` \| `quality-matched` \| `n/a`}] |
-| method | {replay: `teacher-forced`, reps: {synthetic, cancel, agent, quality_seeds}} |
+| method | {replay: `teacher-forced`, gaps: `recorded` \| `none`, reps: {synthetic, cancel, agent, quality_seeds}} |
 | warnings | string[] (battery, throttling, load) |
 
 ## Baseline (regression mode)

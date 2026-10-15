@@ -21,8 +21,8 @@ description: "Tasks for 005 Benchmark Harness"
 ## Phase 3: US1 — Measure my workload (P1) 🎯 MVP
 
 - [ ] T007 [US1] `bench/suites/synthetic.rs`: prefill/decode cells at 1K/8K/16K/30K/64K/max with warm-up, ≥ 5 reps, temperature 0, fixed output, ignore-EOS where supported, early-EOS labels
-- [ ] T008 [US1] Trace format + `bench/suites/agent.rs` teacher-forced replay (untimed previous turn with recorded reply, then timed turn), recorded gaps capped at 60 s (`--gaps`, FR-003a), malformed-tool-call and early-EOS checks per system, 3 reps, per-turn records
-- [ ] T009 [US1] Record OpenCode and Codex traces on public repos with `mrun serve --record` (002); `scripts/redact_traces.py` (paths, usernames, emails, hosts) + secret scan as a pre-commit check; commit to `bench/traces/` with NOTICE for Codex; at least `agent/opencode-refactor` (20 turns, 30K) used by 003 SC-001
+- [ ] T008 [US1] Trace format + `bench/suites/agent.rs` teacher-forced replay (untimed previous turn with recorded reply, then timed turn), `--gaps none|recorded` (default none; recorded capped at 60 s between priming and timed turn, FR-003a), `session_compute_s` excluding gaps, malformed-tool-call and early-EOS checks per system, 3 reps, per-turn records
+- [ ] T009 [US1] Record OpenCode and Codex traces on public repos with `mrun serve --record` (002); `bench/convert.rs` turning recordings into trace JSONL (FR-003a: `gap_ms`, replies from the next turn's history); `scripts/redact_traces.py` (paths, usernames, emails, hosts) + secret scan as a pre-commit check; commit to `bench/traces/` with NOTICE for Codex; at least `agent/opencode-refactor` (20 turns, 30K) used by 003 SC-001
 - [ ] T010 [P] [US1] `bench/suites/cancel.rs` (disconnect → next first byte, 50 random points) and `bench/suites/memory.rs` (RSS/footprint/swap by PID)
 
 ## Phase 4: US2 — Fair comparison (P1)

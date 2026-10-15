@@ -20,7 +20,7 @@ and OpenCode (`13afea6`) are handled explicitly ([research](research.md)).
 **Primary Dependencies**: axum 0.8, tokio 1.53, tower-http 0.7 (limits, trace), serde/serde_json
 (`preserve_order`), llguidance 1.9.1 + toktrie 1.9.1, minijinja 3 (via 001's chat layer),
 ulid (ids), base64, subtle (constant-time key compare)
-**Storage**: None (stateless; reasoning round-trips inside client-held `encrypted_content`/signature)
+**Storage**: None on disk (stateless; reasoning round-trips inside client-held `encrypted_content`/signature); in memory only the DiagnosticsIndex (256 fingerprints, FR-023)
 **Testing**: cargo test with `ScriptedEngine` (deterministic token scripts incl. tool-call text) for
 ~95 named conformance cases (`crates/mrun/tests/api_conformance/`), insta snapshots of SSE streams,
 real-client smoke tests on macOS (Claude Code, Codex, OpenCode pinned) as part of quickstart
@@ -66,6 +66,7 @@ crates/mrun/src/
 │   ├── model.rs          # ChatRequest, Message, ToolDef, GenEvent, Finish, Usage, ApiError
 │   ├── chat_completions.rs   # decode + encode (SSE/JSON)
 │   ├── messages.rs           # decode + encode + count_tokens
+│   ├── diagnostics.rs        # Prompt Fingerprint, DiagnosticsIndex, cache_miss_reason (FR-023)
 │   ├── responses.rs          # decode + encode (stateless)
 │   └── sse.rs                # SSE writer, ping/keepalive, disconnect detection
 ├── chat/

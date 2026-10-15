@@ -45,8 +45,10 @@ Sources: [literature-study](../../concepts/research/literature-study.md) (A-1..A
 
 ## R4: Eviction
 
-- **Decision**: LRU over unpinned leaves with turn-type order (assistant before user/tool before
-  system), as in mlx-lm's server. Evicting calls `clear_cache()` so memory returns to the OS.
+- **Decision**: LRU over unpinned leaves in the FR-007 order: compaction-superseded, other
+  session (`prompt_cache_key`), then turn kind (assistant before user/tool before system), as in
+  mlx-lm's server; LRU within each group. Two 2026 eviction studies found plain LRU near-optimal
+  for single long sessions, so no cost-aware scoring for attention-only models. Evicting calls `clear_cache()` so memory returns to the OS.
   Pressure events from the dispatch source are queued to the worker and handled between steps:
   warning → evict to 50% of cached bytes, critical → evict all unpinned.
 - **Rationale**: Simplest policy that matches agent structure; cost-aware scoring (Marconi) is a

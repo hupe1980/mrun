@@ -28,14 +28,16 @@ definitions; this page lists what mrun serves and where it deliberately differs.
   is stored. Clients resend the conversation, and the prefix cache makes that cheap.
 - **Queueing.** One request runs at a time; others wait up to 600 seconds in a queue of 8. Queued
   streams receive keepalives every 10 seconds.
+- **Cache off per request.** Send `x-mrun-cache: off`.
 - **Disconnect cancels.** Closing the connection stops queued or running work at once.
 - **Invalid tool arguments.** When the model emits tool-call arguments that aren't valid JSON, mrun
   reports them in the way each API allows and adds a `tool-args-invalid` warning.
 - **Cache diagnostics.** Anthropic requests with `diagnostics.previous_message_id` receive the
   standard `diagnostics.cache_miss_reason` (`system_changed`, `tools_changed`, `messages_changed`,
   and others).
-- **No server-side context editing.** Anthropic `context_management` is rejected with 400; mrun
-  never rewrites or summarizes your conversation.
+- **No server-side context editing.** Anthropic `context_management` is accepted and ignored; mrun
+  never rewrites or summarizes your conversation. Clients compact on their own at the reported
+  context window.
 - **Images.** The supported models are text-only. Images inside tool results are replaced with a
   short placeholder and an `image-omitted` warning; `--reject-tool-images` makes them an error.
 
