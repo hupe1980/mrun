@@ -474,3 +474,65 @@ fn hybrid_tool_loop_then_a_new_user_turn_resumes_near_the_end() {
     assert_eq!(miss.cause, Some(Cause::Changed));
     assert_eq!((miss.cached, miss.gap), (tool_start, 5));
 }
+
+#[test]
+fn sliding_window_state_restores_exactly_at_any_position() {
+    // gpt-oss: sliding-window layers keep their full state and apply the window as a mask, so a
+    // match anywhere (before, at or beyond the 128-token window) resumes with no gap and no
+    // checkpoints (SC-007, structural part).
+    use mrun::runtime::scripted::FamilyProfile;
+    let profile = FamilyProfile::get("gpt_oss").unwrap();
+    let budget = profile.budget(48 << 30, 1 << 30).unwrap();
+    let replies: Vec<Vec<u32>> = (0..30).map(|_| reply(5)).collect();
+    let mut rig = Rig::new(
+        ScriptedEngine::for_family(script(&replies), profile, budget),
+        CacheMode::Cached,
+    );
+    let base = conv(&[(Role::System, 300, 1), (Role::User, 700, 2)]);
+    rig.run(&base, 20);
+    for at in [64u32, 127, 128, 129, 300, 420, 900] {
+        let mut edited = base.clone();
+        edited.tokens[at as usize] = 800_000 + at;
+        let (miss, _, _) = rig.run(&edited, 20);
+        assert_eq!(
+            (miss.cached, miss.gap),
+            (at, 0),
+            "divergence at {at}: {miss:?}"
+        );
+        assert_eq!(
+            rig.engine.checkpoint_count(),
+            0,
+            "no checkpoints without position-bound state"
+        );
+        // And back to the original: the moved-out tail returns (or was short and recomputed).
+        let (miss, _, _) = rig.run(&base, 20);
+        assert_eq!(miss.gap, 0);
+    }
+}
+
+#[test]
+fn lookup_stays_fast_at_100k_tokens() {
+    // T004c: the lookup that `initial_need` and `prepare` run, over a 100K-token trunk and a
+    // few branches, stays well under the per-request budget.
+    let mut rig = Rig::new(
+        ScriptedEngine::new(script(&[reply(2), reply(2), reply(2), reply(2)]), 200_000),
+        CacheMode::Cached,
+    );
+    let main = conv(&[(Role::System, 1_000, 1), (Role::User, 99_000, 2)]);
+    let other = conv(&[(Role::System, 1_000, 1), (Role::User, 30_000, 3)]);
+    rig.run(&main, 5);
+    rig.run(&other, 5);
+    rig.run(&main, 5);
+    let started = std::time::Instant::now();
+    let rounds = 20;
+    for _ in 0..rounds {
+        std::hint::black_box(rig.store.initial_need(&rig.engine, &main, main.len() + 10));
+    }
+    let per_lookup = started.elapsed() / rounds;
+    let bound = if cfg!(debug_assertions) {
+        std::time::Duration::from_millis(20)
+    } else {
+        std::time::Duration::from_millis(1)
+    };
+    assert!(per_lookup < bound, "{per_lookup:?}");
+}
