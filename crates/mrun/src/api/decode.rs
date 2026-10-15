@@ -5,6 +5,28 @@ use crate::api::model::{ApiError, ChatRequest, ToolDef};
 use crate::chat::stop::StopMatcher;
 use serde_json::Value;
 
+/// Text standing in for an image inside a tool result (FR-020).
+pub const IMAGE_PLACEHOLDER: &str = "[image omitted: model has no vision input]";
+
+/// Server settings the decoders apply.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DecodeOptions {
+    /// `--reject-tool-images`: refuse images in tool results instead of replacing them.
+    pub reject_tool_images: bool,
+}
+
+/// An image inside a tool result: replaced by the placeholder, or refused.
+pub fn tool_image(options: DecodeOptions, path: &str) -> Result<&'static str, ApiError> {
+    if options.reject_tool_images {
+        Err(ApiError::invalid(
+            "images in tool results are not supported (--reject-tool-images)",
+            path,
+        ))
+    } else {
+        Ok(IMAGE_PLACEHOLDER)
+    }
+}
+
 /// Most messages per request.
 pub const MAX_MESSAGES: usize = 4_096;
 /// Most tools per request.

@@ -3,8 +3,8 @@
 
 use crate::api::collect::Collected;
 use crate::api::decode::{
-    arr, check_limits, check_schema, check_tool, obj, opt_bool, opt_f32, opt_str, opt_u32, stops,
-    str_field,
+    DecodeOptions, arr, check_limits, check_schema, check_tool, obj, opt_bool, opt_f32, opt_str,
+    opt_u32, stops, str_field, tool_image,
 };
 use crate::api::model::{
     ApiError, ApiKind, AssistantPart, ChatRequest, Effort, ErrorKind, Finish, GenEvent, Message,
@@ -14,7 +14,7 @@ use crate::api::sse::{self, new_id};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-pub fn decode(body: &Value) -> Result<ChatRequest, ApiError> {
+pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiError> {
     obj(body, "body")?;
     let mut request = ChatRequest::new(ApiKind::Chat);
     request.model = opt_str(body, "model", "body")?
@@ -44,12 +44,12 @@ pub fn decode(body: &Value) -> Result<ChatRequest, ApiError> {
             "assistant" => request.messages.push(assistant(message, &path)?),
             "tool" => {
                 let call_id = str_field(message, "tool_call_id", &path)?.to_string();
-                let content = text_content(&message["content"], &path)?;
+                let (content, images_omitted) = tool_content(&message["content"], &path, options)?;
                 request.messages.push(Message::Tool(ToolResult {
                     call_id,
                     content,
                     is_error: false,
-                    images_omitted: 0,
+                    images_omitted,
                 }));
             }
             other => {
@@ -192,6 +192,35 @@ fn text_content(content: &Value, path: &str) -> Result<String, ApiError> {
             format!("{path}.content"),
         )),
     }
+}
+
+/// Tool message content: text parts joined, images replaced per FR-020.
+fn tool_content(
+    content: &Value,
+    path: &str,
+    options: DecodeOptions,
+) -> Result<(String, u32), ApiError> {
+    let Value::Array(parts) = content else {
+        return Ok((text_content(content, path)?, 0));
+    };
+    let mut text = String::new();
+    let mut images = 0;
+    for (j, part) in parts.iter().enumerate() {
+        match part["type"].as_str() {
+            Some("text") => text.push_str(part["text"].as_str().unwrap_or_default()),
+            Some("image_url") => {
+                text.push_str(tool_image(options, &format!("{path}.content[{j}]"))?);
+                images += 1;
+            }
+            _ => {
+                return Err(ApiError::invalid(
+                    "only text content is supported",
+                    format!("{path}.content[{j}]"),
+                ));
+            }
+        }
+    }
+    Ok((text, images))
 }
 
 fn assistant(message: &Value, path: &str) -> Result<Message, ApiError> {
@@ -426,7 +455,7 @@ mod tests {
             "stream_options": {"include_usage": true}, "temperature": 0.5,
             "unknown_field": 1
         });
-        let request = decode(&body).unwrap();
+        let request = decode(&body, DecodeOptions::default()).unwrap();
         assert_eq!(request.system, vec!["Be brief."]);
         assert_eq!(request.messages.len(), 4);
         assert_eq!(request.messages[3], Message::System("mid".into()));
@@ -452,7 +481,7 @@ mod tests {
         let body = json!({"messages": [{"role": "user", "content": [
             {"type": "text", "text": "see"},
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]}]});
-        let error = decode(&body).unwrap_err();
+        let error = decode(&body, DecodeOptions::default()).unwrap_err();
         assert_eq!(error.param.as_deref(), Some("messages[0].content[1]"));
     }
 
