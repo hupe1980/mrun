@@ -30,12 +30,12 @@ engineering principles.
 | 004 | [Models and CLI](004-models-cli/spec.md): pull, launch, connect, doctor, ps | 0.1 (M4) | 001; 002 for launch/connect/ps | PR-6 | Planned |
 | 005 | [Benchmark harness](005-bench/spec.md): in-order trace replay, fair comparisons | 0.1 (M5) | 002; 003 for cache cells | PR-7 | Planned |
 | 008 | [Distribution](008-distribution/spec.md): Homebrew, signed binary, launchd service, `/metrics` | 0.1 (M6) | 002, 004 | PR-6 | Planned |
-| 006 | [Speculative decoding](006-speculative-decoding/spec.md): MTP and copy-aware n-gram drafts | After 0.1 | 001, 003, 005 | PR-1 | Planned (measure first) |
-| 009 | [Image input](009-image-input/spec.md): screenshots and image tool results for vision-capable models | After 0.1 | 001, 002, 003 | PR-1 | Planned (measure first) |
+| 006 | [Speculative decoding](006-speculative-decoding/spec.md): copy-aware n-gram drafts (MTP heads gated on measurement) | After 0.1 | 001, 003, 005 | PR-1 | Planned (measure first) |
 | 007 | [Persistent prefix tier](007-persistent-prefix-tier/spec.md): opt-in SSD branches and checkpoints | After 0.1 | 003, 005 | PR-2, PR-5 | Planned (measure first) |
+| 009 | [Image input](009-image-input/spec.md): screenshots and image tool results for vision-capable models | After 0.1 | 001, 002, 003 | PR-1 | Planned (measure first) |
 
-Order: 001 → 002 → 003; 004, 005 and 008 start once 001 lands and run in parallel with 003. 006 and
-007 start after 0.1, each only after its measure-first check with `mrun bench` on recorded traces.
+Order: 001 → 002 → 003; 004, 005 and 008 start once 001 lands and run in parallel with 003. 006, 007
+and 009 start after 0.1, each only after its measure-first check with `mrun bench` on recorded traces.
 Each feature has a spec, plan, research, data model, contracts, quickstart and tasks, and is
 analyzed with `/speckit-analyze` before implementation.
 

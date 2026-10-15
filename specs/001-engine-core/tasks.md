@@ -100,7 +100,7 @@ split: the landed part is ticked, the remainder is a separate open task.
 - No MLX, can start now: T008a → T011a → T011b → T011e → T011f; T008c, T010b, T010c in parallel.
 - T004 → T004a, T005 → T006 → T006a, T007 (gate) → T009, T012, T013, T029.
 - T012 + T013 + T014 → T015 → T016/T017 (MVP on Qwen3-8B).
-- US2/US3 after T015 (T024a after T011b). T026 after T009 + T015 (T020 fixes the schedule); T027 after T026; T027a after T027; T027b after T025; T027c after T031.
+- US2/US3 after T015 (T024a after T011b). T026 after T009 + T015; T027 after T026; T027a after T027; T027b after T025; T027c after T031.
 - Hybrid: T029 + T030 → T031 → T032 → T033 (hybrid part) → T034. T033 attention part after T015; hybrid part after T032.
 - Polish after the stories it measures.
 
