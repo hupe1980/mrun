@@ -9,13 +9,14 @@
 | revision | string | 40-hex commit sha (pinned) |
 | files | list of {path, size, sha256} | every file needed to load; sha256 64-hex |
 | license | string | SPDX id or "other" with URL |
-| architecture | string | from `config.json` `model_type` (e.g. `qwen3`, `qwen3_moe`) |
+| architecture | string | from `config.json` `model_type` (e.g. `qwen3`, `qwen3_moe`, `qwen3_5_moe`) |
 | quantization | {bits, group_size, mode} | from `config.json` |
 | identity | string | 001 identity function: sha256 over sorted (path, sha256); used by 001/003 |
-| fast_check | list of {path, size, mtime, inode} | compared on every use |
+| fast_check | list of {path, size, mtime} | compared on every use |
 
 States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (hash mismatch) → (pull) →
-`ready`.
+`ready`. A compatible MLX repo found in the HF cache without a manifest is listed as `unpinned`;
+`mrun pull <repo>` hashes it and writes the manifest without downloading.
 
 ## ClientProfile (compiled in)
 
@@ -44,7 +45,7 @@ States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (has
 [server]
 host = "127.0.0.1"
 port = 8484
-queue = 8
+queue = 16
 queue_wait_s = 600
 thinking = "client"
 max_output = 16384
@@ -52,7 +53,7 @@ reject_tool_images = false
 
 [memory]
 fraction = 0.75
-reserve_gib = 8
+# reserve_gib = clamp(physical ÷ 6, 2, 8)  (computed; 8 on a 48 GB Mac)
 
 [engine]
 default_model = "qwen3.6"

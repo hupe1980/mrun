@@ -136,7 +136,9 @@ early end-of-sequence; verify both counts appear next to that system's speed.
   RSS/footprint (PID from its profile) and system swap.
 - **FR-007**: `--compare` MUST drive other systems over HTTP with a per-system model name; decode
   cells use temperature 0, a fixed output length and the system's ignore-EOS option where
-  available, labeling cells that ended early; each competitor's recommended cache and performance
+  available (mrun: the loopback-only `x-mrun-ignore-eos: on` request header, 002), labeling cells
+  that ended early; bundled profiles cover llama.cpp, Ollama, oMLX, mlx-lm and SGLang's MLX
+  backend; each competitor's recommended cache and performance
   flags live in bundled profiles and are recorded per run. Cells whose systems use different
   quantizations are labeled "different quantization" with bits per weight.
 - **FR-008**: Only one system may be loaded at a time. Profiles define `start`, `stop` and `health`

@@ -1,6 +1,6 @@
 base_url = "https://hupe1980.github.io/mrun"
 title = "mrun — local inference server for coding agents on Apple Silicon"
-description = "mrun runs coding models locally on your Mac and serves Claude Code, Codex and OpenCode with exact prefix caching, predictable memory and instant interruption."
+description = "mrun runs coding models locally on your Mac and serves Claude Code, Codex and OpenCode with exact prefix caching, predictable memory and fast interruption."
 default_language = "en"
 compile_sass = true
 minify_html = true

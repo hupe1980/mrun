@@ -13,10 +13,12 @@ everything slows down. mrun fixes a budget at startup and never exceeds it.
 ```text
 budget  = min(75% of physical memory, GPU recommended working set) − reserve
 reserve = one sixth of physical memory, between 2 and 8 GiB
-context = (budget − weights − scratch) ÷ attention bytes per token
+context = (budget − weights − scratch − recurrent state) ÷ attention bytes per token
 ```
 
-- **Weights** are measured after loading, not estimated from file sizes.
+- **Weights** are estimated from file sizes before loading (for `pull` and `ls`) and measured after.
+- **Recurrent state** (hybrid models only) is the fixed-size state of the linear-attention layers,
+  plus room for checkpoints.
 - **Scratch** is the temporary memory one prompt chunk needs at the deepest position mrun will
   admit. mrun measures it once per model, machine and settings, and caches the result.
 - **Context** is what remains, converted to tokens of attention state and capped by the model's
@@ -54,7 +56,8 @@ what the request reserved.
 | `--reserve-gib` / `memory.reserve_gib` | ⅙ of RAM, 2–8 GiB | Memory left for other applications |
 | `--allow-over` | off | Start even when the model does not fit the budget (at your own risk) |
 
-Raising the fraction above 0.75 lets the GPU use more memory than macOS recommends and risks swap.
+Raising the fraction above 0.75 helps only up to macOS's recommended GPU working set and leaves
+less memory for other apps.
 
 ## Under pressure
 

@@ -20,6 +20,6 @@ and the same context length as mrun.
    commands it prints "Stop X, start Y, press Enter" and waits. → one report with every system and
    losing cells listed (SC-003). A competitor that cannot be reached gets "not run" cells; exit 0.
 4. **Regression**: `mrun bench --suite synthetic --baseline bench/baselines/m4pro.json`; inject a
-   15% slowdown (debug flag) → exit 7; five unchanged runs → exit 0 (SC-004).
+   15% slowdown via the fake SSE server's delay (T014) → exit 7; five unchanged runs → exit 0 (SC-004).
 
 Automated: `cargo test -p mrun --test bench_driver` runs the driver against a fake SSE server.

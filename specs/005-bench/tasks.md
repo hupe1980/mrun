@@ -15,7 +15,7 @@ description: "Tasks for 005 Benchmark Harness"
 
 - [ ] T003 `bench/stats.rs`: min/median/max; nearest-rank p95 and IQR only for n ≥ 20; throttling slope (> 5%, FR-012); tests on fixed samples
 - [ ] T004 `bench/driver.rs`: replay in all three API styles, per-system model name, client-side TTFT per FR-013 (ignoring pings, comments, keepalives, role-only chunks), first-useful-token and per-token timings, cached and prompt token extraction (usage fields, `: mrun` SSE comments when streaming, `x-mrun-*` headers otherwise); "truncated input" check (> 2% from expected, FR-015); tests against the fake server; test that only configured hosts are contacted (FR-011)
-- [ ] T005 [P] `bench/machine.rs` (macOS only): chip, memory, macOS, power source, low power, thermal via `NSProcessInfo.thermalState` (powermetrics only when root), free memory and swap per system, RSS/footprint sampling by PID; Linux tests use a stub
+- [ ] T005 [P] `bench/machine.rs` (macOS only): chip, memory, macOS, load average before each system, power source, low power, thermal via `NSProcessInfo.thermalState` (powermetrics only when root), free memory and swap per system, RSS/footprint sampling by PID; Linux tests use a stub
 - [ ] T006 `bench/report.rs`: RunResult v1 (validated against the schema) + markdown report with Method and "Losing cells" sections
 
 ## Phase 3: US1 — Measure my workload (P1) 🎯 MVP
@@ -27,12 +27,13 @@ description: "Tasks for 005 Benchmark Harness"
 
 ## Phase 4: US2 — Fair comparison (P1)
 
-- [ ] T011 [US2] `bench/systems.rs` + `bench/profiles/{mrun,llama.cpp,ollama,omlx,mlx-lm}.toml`: start/stop/health/reset/pid commands (FR-008, FR-014), equal context N = mrun capacity (FR-015), recommended cache flags, model names, formats, bits per weight; one system at a time with free-memory check or "Stop X, start Y, press Enter" pause; reset before each repetition, recorded; unreachable competitor → "not run", exit 5 only when all are unreachable (FR-016); "different quantization" labels
+- [ ] T011 [US2] `bench/systems.rs` + `bench/profiles/{mrun,llama.cpp,ollama,omlx,mlx-lm,sglang-mlx}.toml`: start/stop/health/reset/pid commands (FR-008, FR-014), equal context N = mrun capacity (FR-015), recommended cache flags, model names, formats, bits per weight; one system at a time with free-memory check or "Stop X, start Y, press Enter" pause; reset before each repetition, recorded; unreachable competitor → "not run", exit 5 only when all are unreachable (FR-016); "different quantization" labels
 - [ ] T012 [US2] First comparison on the M4 Pro: two back-to-back synthetic runs (SC-001), full agent comparison with start/stop profiles and wall-time capture (SC-002), SC-005 cells; publish dated report in `bench/results/` (manual step)
 
 ## Phase 5: US3 — Speed never hides wrong output (P2)
 
 - [ ] T013 *Removed (quality suite moved to Later).*
+- [ ] T012a [US2] Default-model decision: Qwen3.6-35B-A3B vs Qwen3-Coder-30B-A3B agent-suite cells on the M4 Pro (both mrun); record the outcome in concepts D015 and the 004 alias default before release
 - [ ] T014 [US3] Regression mode `--baseline` (exit 7) on median speed and malformed-tool-call/early-EOS counts; tests: injected 15% slowdown detected against a 10% threshold, 0 false alarms on 5 unchanged runs (SC-004); fake-server test that a malformed tool call and early EOS are counted
 
 ## Phase 6: Polish

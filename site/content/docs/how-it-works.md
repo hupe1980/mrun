@@ -8,9 +8,8 @@ weight = 30
 
 A coding agent sends the whole conversation on every turn: system instructions, tool schemas,
 files it has read, tool results and the history. After a few turns that is 20,000–60,000 tokens,
-of which only the last few hundred are new. On a laptop GPU, reading the prompt (prefill) runs at
-a few hundred to about a thousand tokens per second at depth, so re-reading 30,000 tokens takes
-about a minute before the first token appears, and 100,000 close to ten. Agents also branch:
+of which only the last few hundred are new. On a laptop GPU, reading the prompt (prefill) is the
+slow part, and re-reading tens of thousands of tokens every turn dominates the wait. Agents also branch:
 subagents, title requests and retries arrive between the turns of the main conversation.
 
 Cloud APIs solve this with prompt caching. mrun brings the same idea to your Mac, exactly and with

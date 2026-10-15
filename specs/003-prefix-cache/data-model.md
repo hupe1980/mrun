@@ -66,11 +66,12 @@ freed when its last view drops.
 | `evicted` | the request continues into a child removed by LRU, `cache clear` or the tiny-tail rule |
 | `capacity` | the request continues into a child removed under memory pressure |
 | `template` | all messages up to the divergence have equal API content but render to different tokens |
-| `edit` | the request diverges from a stored conversation after its system+tools region: a message was changed, removed or replaced (includes an edited or retried last turn) |
-| `new` | nothing stored shares more than the system+tools region with this request (a new conversation, or nothing stored) |
+| `system` | the divergence lies inside the stored conversation's system+tools region: the system prompt or tool list changed (for example an MCP server connected) |
+| `edit` | at least one conversation message matched before the divergence: a message was changed, removed or replaced (includes an edited or retried last turn) |
+| `new` | the request shares at most the system+tools region (a new conversation), or nothing is stored |
 | `checkpoint` | hybrid; no divergence cause, but resume < match (gap re-prefilled) |
 
-Precedence: `disabled` > `model` > `evicted`/`capacity` > `template` > `edit` > `new` >
+Precedence: `disabled` > `model` > `evicted`/`capacity` > `template` > `system` > `edit` > `new` >
 `checkpoint`; `gap` is reported whatever the cause.
 
 ## CacheStats (`/mrun/status`, `mrun ps`)

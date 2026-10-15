@@ -9,9 +9,10 @@ is computed once, reused exactly, and stays inside a memory budget fixed at star
 
 Coding agents (Claude Code, Codex, OpenCode, Aider, Cline, Zed) resend 15–60K tokens of system
 prompt, tool schemas and history on every turn and append a little. On a laptop, reading that
-prompt dominates: an M4 Pro processes a few hundred to about a thousand tokens per second at depth,
-so a 30K-token re-prefill takes about a minute and a 100K one close to ten. Agents also branch
-(subagents, title and background requests, retries, edited history) and cancel constantly. General
+prompt dominates. As an estimate to be replaced by `mrun bench` numbers: Qwen3-30B-A3B 4-bit
+prefills ≈1,750 tok/s at 2K tokens on an M4 Max (mlx-lm BENCHMARKS.md), so an M4 Pro with half the
+GPU cores should manage several hundred tok/s at depth: about a minute for a 30K-token
+re-prefill. Agents also branch (subagents, title and background requests, retries, edited history) and cancel constantly. General
 local servers optimize single-prompt chat; agent loops expose their weak spots: cache misses
 nobody can explain, conversations lost when a subagent runs, memory blowups at long context,
 clients that time out during long prefills, and slow interruption.
@@ -41,8 +42,8 @@ to win on what agents feel, and prove it with a published, fair benchmark:
    milliseconds at any context length, and work already done is kept for the retry.
 5. **All three agent APIs, faithfully.** Anthropic Messages, OpenAI Chat Completions and stateless
    Responses, including MCP tools, Codex namespaces and deferred tool loading, from one binary.
-6. **Delightful DX.** `mrun launch claude-code` takes a fresh install to a working agent: it pulls
-   the model, starts the server and configures the client for that process.
+6. **Delightful DX.** `mrun launch claude-code` takes a fresh install to a working agent: it offers
+   to pull the model and start the server, then configures the client for that process.
 7. **The best model that fits.** Default: Qwen3.6-35B-A3B (hybrid MoE, about 20 KiB of attention
    state per token, so its full 262K context fits a 48 GB Mac); Qwen3-Coder-30B-A3B as the
    attention-only alternative.

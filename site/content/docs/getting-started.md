@@ -8,8 +8,8 @@ weight = 10
 
 - A Mac with Apple Silicon (M1 or later) and macOS 15 or newer.
 - Memory: 48 GB or more for the default model, Qwen3.6-35B-A3B, with its full context. A 36 GB Mac
-  runs it with only about 25K tokens of context, too little for most agents; smaller Macs use
-  Qwen3-8B. `mrun pull` tells you how
+  gets far less context; smaller Macs use Qwen3-8B. `mrun pull` shows how much context a model gets
+  on your Mac before downloading. `mrun pull` tells you how
   much context a model gets on your Mac before downloading (see [Memory](@/docs/memory.md)).
 - About 20 GB of free disk space for the default model.
 
@@ -40,8 +40,8 @@ reused instead of downloaded again. See [Models](@/docs/models.md).
 mrun run qwen3.6
 ```
 
-`run` opens an interactive chat. Add `--info` to see the memory budget, or `--check` to verify the
-model loads and generates without starting a chat.
+`run` opens an interactive chat. Add `--info` to see the memory budget, or `--check` to compare
+greedy output with stored reference outputs.
 
 ## Start the server
 
@@ -60,7 +60,7 @@ mrun launch claude-code    # or: codex, opencode
 ```
 
 `launch` starts the client already pointed at mrun, for that process only; your global client
-settings stay untouched. It also starts the server and offers to download the model if needed, so
+settings stay untouched. It also offers to start the server and download the model if needed, so
 on a fresh install this one command is enough. To configure a client permanently, use `mrun connect` (see
 [Clients](@/docs/clients.md)).
 

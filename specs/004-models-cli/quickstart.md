@@ -20,8 +20,8 @@ Apple Silicon Mac, `mrun` on `PATH`, network for `pull`.
    of completed bytes (`--json` reports bytes fetched).
 3. **Corruption**: truncate a weight blob → `mrun ls` shows `corrupt`; flip a byte keeping size and
    mtime → `mrun verify qwen3.6` reports it; `mrun pull` repairs.
-4. **Doctor scenarios** (SC-002): enable Low Power Mode, use a Codex config without
-   `model_context_window`, stop the server; `mrun doctor` reports each with a fix (exit 8).
+4. **Doctor scenarios** (SC-002): enable Low Power Mode, use a Codex profile without
+   the mrun model catalog, stop the server; `mrun doctor` reports each with a fix (exit 8).
 5. **Offline**: disable network; `ls`, `show`, `config`, `doctor`, `connect`, `launch`, `serve` all
    succeed.
 

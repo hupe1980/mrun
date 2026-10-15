@@ -11,7 +11,7 @@ the target Mac (M4 Pro, 48 GB) before it counts as done.
 
 | Milestone | Outcome |
 | --- | --- |
-| **Foundation** | MLX bindings proven on a Mac: quantized and mixture-of-experts kernels, attention, custom Metal kernels, memory controls |
+| **Foundation** | MLX bindings proven on a Mac: quantized and mixture-of-experts kernels, attention, mlx-lm's Metal kernel for the hybrid layers, memory controls |
 | **Engine** | `mrun run` streams Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B and Qwen3-8B with the memory budget, hybrid-model checkpoints and per-layer cancellation; output matches mlx-lm |
 | **Agent APIs** | Claude Code, Codex and OpenCode complete real tool loops, including MCP tools and deferred tool loading; a nightly check runs the latest client releases |
 | **Prefix cache** | Exact reuse across turns, subagents and edits for attention and hybrid models, with miss reports |

@@ -3,8 +3,7 @@
 The local inference server built for coding agents on Apple Silicon.
 
 Coding agents resend tens of thousands of tokens of instructions, tool schemas and history on
-every turn. On a laptop GPU, re-reading that context costs a minute or more. mrun computes it
-once, reuses it exactly across turns, subagents and tool loops, explains every cache miss, and stays
+every turn. On a laptop GPU, re-reading that context dominates the wait. mrun computes it once, reuses it exactly across turns, subagents and tool loops, explains every cache miss, and stays
 inside a memory budget fixed at startup.
 
 **[Documentation](https://hupe1980.github.io/mrun/)** ·
@@ -18,7 +17,7 @@ inside a memory budget fixed at startup.
 ## Planned experience
 
 ```sh
-mrun launch claude-code    # pulls Qwen3.6-35B-A3B if needed, starts the server, starts Claude Code
+mrun launch claude-code    # offers to pull Qwen3.6-35B-A3B and start the server, then starts Claude Code
 mrun launch codex          # or opencode
 mrun pull qwen3-coder      # other models: verified download into the shared Hugging Face cache
 mrun ps                    # model, memory budget, cache hit rate, last cache miss

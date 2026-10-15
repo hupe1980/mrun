@@ -44,7 +44,7 @@ defaults to one sixth of physical memory, between 2 and 8 GiB (8 GiB on a 48 GB 
 - **Default: Qwen3.6-35B-A3B** (released 2026-04-14, Apache-2.0): 40 layers, 30 Gated DeltaNet and
   10 gated attention, MoE with 256 experts; vendor-reported 73.4% SWE-bench Verified against about
   51.6% for Qwen3-Coder-30B-A3B. Only 10 attention layers, so ≈20 KiB of attention state per token:
-  its full 262K window fits a 48 GB Mac, five times Qwen3-Coder's usable context. The default is
+  its full 262K window fits a 48 GB Mac, about 2.5 times Qwen3-Coder's usable context. The default is
   confirmed by `mrun bench` before release, and newer releases are re-checked then.
 - **Qwen3-Coder-30B-A3B**: attention-only MoE; simpler cache behaviour; kept as an alternative.
 - **Qwen3-8B**: dense reference for correctness tests and 16–24 GB Macs.

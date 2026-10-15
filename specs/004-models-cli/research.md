@@ -54,18 +54,19 @@
     output limit (Claude Code reserves 32,000 for unknown models); `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
     only when capacity ≥ 100,000 (its accepted range is 100,000–1,000,000);
     `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` (session, agent, request-class, prompt-id and
-    context-compacted headers used by 003); `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (offline
-    promise); `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` (undocumented, used by Ollama; removes a
+    context-compacted headers; used only by `--record` grouping, 002 FR-021/FR-030); `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (offline
+    promise); `ENABLE_TOOL_SEARCH=auto:10` (tool search is off behind a custom base URL;
+    002 FR-028); `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` (undocumented, used by Ollama; removes a
     volatile per-turn count); `API_TIMEOUT_MS=3000000` (oMLX `integrations/claude.py:103`). The
     attribution header needs no setting (002 FR-025 fixes its nonce server-side). Not adopted:
     oMLX's `--disallowedTools LSP` (an LSP connecting mid-session inserts its tool schema and
-    forces a full re-prefill); mrun reports it as a `edit` miss in the tools region instead of
+    forces a full re-prefill); mrun reports it as a `system` miss instead of
     silently removing a feature.
   - Codex (source `codex-rs` 2026-10-15): root `profile =` keys are rejected; profiles live in
     `~/.codex/<name>.config.toml` (`config/src/loader/mod.rs:131`). Unknown model slugs get a
     272,000-token fallback window (`models-manager/src/model_info.rs:98-135`), so mrun writes a
-    `model_catalog_json` file (in `~/.mrun/codex/models.json`) with the real window and output
-    limit. `launch` passes `-c model_provider=mrun`, `-c model_providers.mrun.{name,base_url,
+    `model_catalog_json` file (in `~/.mrun/codex/models.json`) with the real window, output limit
+    and `supports_search_tool: true` (deferred MCP tools, 002 FR-028). `launch` passes `-c model_provider=mrun`, `-c model_providers.mrun.{name,base_url,
     wire_api="responses",env_key}` and `-c model_catalog_json=…`, refusing conflicting user `-c`
     provider arguments (as Ollama `cmd/launch/codex.go:150-205`). `--oss` only accepts lmstudio or
     ollama, so it is not used.

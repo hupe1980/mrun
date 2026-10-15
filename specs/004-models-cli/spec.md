@@ -129,16 +129,19 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
     in every model slot (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`,
     `CLAUDE_CODE_SUBAGENT_MODEL`); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = capacity and
     `CLAUDE_CODE_MAX_OUTPUT_TOKENS` = output limit (`CLAUDE_CODE_AUTO_COMPACT_WINDOW` only when
-    capacity ≥ 100,000, its minimum); gateway hint headers on; nonessential traffic off; the
-    per-turn token reminder off.
+    capacity ≥ 100,000, its minimum); gateway hint headers on (session headers used by
+    `--record`); nonessential traffic off; the per-turn token reminder off;
+    `ENABLE_TOOL_SEARCH=auto:10` so large MCP tool sets load on demand (002 FR-028).
   - Codex: `-c` overrides selecting a `mrun` provider (`wire_api = "responses"`) and a model catalog
-    file with the real context window, because Codex otherwise assumes 272,000 tokens for unknown
-    models and never compacts in time; conflicting user `-c` provider arguments are refused.
+    file with the real context window and `supports_search_tool: true`, because Codex otherwise
+    assumes 272,000 tokens for unknown models, never compacts in time and loads every MCP tool
+    upfront; conflicting user `-c` provider arguments are refused.
   - OpenCode: the whole provider config through `OPENCODE_CONFIG_CONTENT` (highest precedence), with
     `limit.context`, `limit.input` and `limit.output`.
 
   If no server is running, `launch` starts one (detached) after confirmation; if no model is pulled,
-  it offers the default alias with its fit. `--dry-run` prints the environment and arguments instead
+  it offers the default alias with its size, license and fit. `launch --model M` against a server
+  serving another model asks to restart it, or exits 2 with the hint. `--dry-run` prints the environment and arguments instead
   of starting anything. A missing client binary is reported with its install command. Claude Code
   also gets `API_TIMEOUT_MS` raised to 50 minutes, since long local prefills exceed its default.
   `launch` warns when the context capacity is below 48K tokens (agents' system prompts and tool
@@ -152,8 +155,7 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
   `~/.codex/mrun.config.toml` used with `codex --profile mrun` (root `config.toml` untouched;
   `env_key` only when the server has a key), OpenCode `~/.config/opencode/opencode.json`. Written
   limits reflect the server at write time; `doctor` flags them when they differ from the running
-  server's `/v1/models`, and re-running `connect --write` refreshes them. `launch --model M` against
-  a server serving another model asks to restart it, or exits 2 with the hint.
+  server's `/v1/models`, and re-running `connect --write` refreshes them.
 - **FR-007**: `mrun doctor` MUST check: macOS and chip, memory budget and current pressure,
   low-power mode, model integrity, server reachability, port conflicts, free space in the model
   cache, client configuration pitfalls (wrong base URL or wire API, missing context limits, Claude
@@ -163,8 +165,9 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
 - **FR-008**: `mrun ps` MUST show loaded model, budget breakdown, active and queued requests (with
   prompt-processing progress), cache size and hit rate, recording state and the most recent miss
   explanation.
-- **FR-009**: `mrun serve --detach` MUST run the server in the background with logs in `~/.mrun/`,
-  and `mrun stop` MUST stop it gracefully.
+- **FR-009**: `mrun serve --detach` MUST run the server in the background with logs in
+  `~/.mrun/server.log`, return once `/health` reports the model loaded, and exit 3 or 4 with the
+  load error otherwise; `mrun stop` MUST stop it gracefully.
 - **FR-010**: Configuration MUST work with zero files; an optional `~/.mrun/config.toml` and
   `MRUN_*` environment variables override defaults (except settings that are command-line only,
   such as `--record`); `mrun config` prints the effective configuration and each value's source.

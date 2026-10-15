@@ -99,8 +99,9 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix store; Engine th
   divergence at d against the closest stored path: `evicted` / `capacity` if the request continues
   into a removed child (evicted counter: LRU, clear or tiny-tail discard → `evicted`; memory
   pressure → `capacity`); `template` if every message up to the one containing d has an equal
-  content hash; `edit` if the divergence lies after the stored path's system+tools region (a
-  message changed, removed or replaced, including an edited last turn); otherwise `new`. `checkpoint` when there is no divergence cause but resume < match.
+  content hash; `system` if the divergence lies inside the stored path's system+tools region;
+  `edit` if at least one conversation message matched before it (a message changed, removed or
+  replaced, including an edited last turn); otherwise `new`. `checkpoint` when there is no divergence cause but resume < match.
 - **Rationale**: "Don't Break the Cache" (2601.06007) and oMLX's divergence stats show positions
   alone do not tell users what to fix. Content hashes catch the common template case (Qwen3-Coder
   and Qwen3.6 re-serialize tool arguments, 002 FR-004). The Claude Code attribution nonce is fixed

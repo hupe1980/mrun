@@ -22,7 +22,7 @@ Every command accepts `--help` (with examples) and `-q/--quiet`. Commands that p
 | `mrun verify <model>` | Re-hash every file against the manifest |
 | `mrun launch <client> [--model M] [--dry-run] [--yes] [-- args]` | Start Claude Code, Codex or OpenCode configured for mrun; starts the server and offers a download when needed. `--dry-run` prints the settings |
 | `mrun connect <client>` | Print persistent client configuration; `--write` applies it, `--undo` restores the backup |
-| `mrun doctor` | Check machine, models, server and clients; print a fix for each failure. `--agent <client>` runs a tool call and a compaction against the server |
+| `mrun doctor` | Check machine, models, server and clients; print a fix for each failure. `--agent <client>` runs a tool-call round trip and a request at 95% of capacity |
 | `mrun cache clear` | Clear the running server's prefix cache |
 | `mrun config` | Show the effective configuration and where each value came from |
 | `mrun bench` | Benchmark mrun and other local servers; see [Benchmarks](@/docs/benchmarks.md) |

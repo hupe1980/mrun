@@ -27,10 +27,10 @@ All commands accept `--help` (with examples) and `-q/--quiet`; tabular commands 
 | `mrun pull <alias\|org/name[@rev]> [--yes]` | 004 | Size, license, fit; confirm if it won't fit; resumable download; verify; manifest |
 | `mrun ls` | 004 | ALIAS, REPO, SIZE, FITS, MAX CTX, STATUS |
 | `mrun show <model>` | 004 | Manifest, architecture, quantization, license, identity, fit breakdown |
-| `mrun rm <alias> [--yes]` | 004 | Remove mrun-created snapshot refs and unshared blobs; warn about shared blobs |
+| `mrun rm <alias> [--yes]` | 004 | Delete the pinned revision's snapshot and blobs no other revision links to; remove refs pointing to it; warn that other tools lose that revision |
 | `mrun verify <model>` | 004 | Re-hash every file against the recorded identity |
 | `mrun launch <claude-code\|codex\|opencode> [--model M] [--dry-run] [--yes] [-- client args]` | 004 | Start the client configured for this process only; starts a server and offers a pull when needed (FR-005) |
-| `mrun connect <claude-code\|codex\|opencode> [--write] [--undo]` | 004 | Print persistent config; write with diff + 0600 backup; restore backup |
+| `mrun connect <claude-code\|codex\|opencode> [--write] [--undo] [--project]` | 004 | Print persistent config; write with diff + 0600 backup; restore backup; `--project` targets `.claude/settings.local.json` |
 | `mrun doctor [--agent <client>]` | 004 | All checks with fixes (exit 8 on failures); `--agent` runs a tool-call round trip and a request at 95% of capacity |
 | `mrun cache clear` | 003 | Clear the prefix cache of the running server |
 | `mrun config` | 004 | Effective configuration with sources |

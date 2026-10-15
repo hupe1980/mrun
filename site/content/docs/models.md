@@ -12,7 +12,7 @@ weight = 60
 | `qwen3-coder` | Qwen3-Coder-30B-A3B-Instruct, 4-bit | Attention, mixture of experts (3B active) | 17.2 GB | ≈105K |
 | `qwen3-8b` | Qwen3-8B, 4-bit | Attention, dense | 4.6 GB | Full 40K |
 
-**Why Qwen3.6 is the default.** It is the strongest coding model that fits a 48 GB Mac
+**Why Qwen3.6 is the default.** It scores highest of the models listed here on coding benchmarks
 (Alibaba reports 73.4% on SWE-bench Verified, against about 52% for Qwen3-Coder-30B-A3B). Three of
 every four layers use linear attention, which keeps a fixed-size state instead of one entry per
 token, so a token of context costs about 20 KiB instead of 96 KiB. The default is re-checked
@@ -59,7 +59,8 @@ mrun rm qwen3-coder     # warns if other tools use the same revision
 ## Thinking
 
 Models with a thinking mode follow the client: thinking is on when the request asks for it
-(Anthropic `thinking`, OpenAI `reasoning_effort` or `reasoning`) and off otherwise. Override with
+(Anthropic `thinking`, OpenAI `reasoning_effort` or Responses `reasoning.effort` other than
+`none`/`minimal`) and off otherwise. Override with
 `mrun serve --thinking on|off`. Qwen3-Coder has no thinking mode.
 
 ## Licenses

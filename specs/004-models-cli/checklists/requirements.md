@@ -6,7 +6,8 @@
 
 ## Content Quality
 
-- [x] No implementation details (languages, frameworks, APIs)
+- [x] No implementation details (languages, frameworks, APIs) — client env vars, file paths and
+  flags appear because they are the user-facing contract of this feature
 - [x] Focused on user value and business needs
 - [x] Written for non-technical stakeholders
 - [x] All mandatory sections completed

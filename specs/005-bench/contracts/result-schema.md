@@ -8,6 +8,7 @@ mrun bench [--suite agent|synthetic|cancel|all] [--trace NAME]...
            [--compare] [--reps N] [--out DIR] [--baseline FILE]
 ```
 
+- `--reps` raises, never lowers, the FR-004 minimums.
 - Without `--system`, benchmarks the local mrun server (`http://127.0.0.1:8484`).
 - `--compare` with several `--system` entries runs them one at a time (profile start → health →
   reset per repetition → stop; or a "Stop X, start Y, press Enter" pause without commands) and

@@ -206,7 +206,7 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   MUST evict branches first, then reset an idle live path, and return freed memory to the OS within
   1 s; a running request is never affected.
 - **FR-010**: Every request MUST produce a miss report: cached, processed, divergence position,
-  checkpoint gap, and a cause ∈ {`new`, `edit`, `template`, `evicted`, `capacity`, `checkpoint`,
+  checkpoint gap, and a cause ∈ {`new`, `system`, `edit`, `template`, `evicted`, `capacity`, `checkpoint`,
   `model`, `disabled`} or none on a full hit (definitions in [data-model](data-model.md#missreport)).
   It is delivered through 002's mrun metadata (headers or `: mrun` SSE comments) and in
   `/mrun/status` and `mrun ps`.

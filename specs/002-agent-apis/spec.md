@@ -239,6 +239,9 @@ timeouts and that the next request runs normally.
   standard. The last request's metadata is also in `/mrun/status`.
 - **FR-023**: *Removed 2026-10-15* (Anthropic diagnostics: no supported client sends
   `diagnostics.previous_message_id`). A `diagnostics` request field is accepted and ignored.
+- **FR-031**: A request header `x-mrun-ignore-eos: on`, honored only on loopback binds, MUST make
+  generation continue to the output limit (benchmark fairness, 005 FR-007); it is ignored
+  elsewhere and never changes response formats.
 - **FR-024**: Anthropic `context_management` (server-side context edits and compaction) MUST be
   accepted and ignored: mrun never rewrites or summarizes client context, and Claude Code sends the
   field by default. Claude Code compacts on its own based on `CLAUDE_CODE_MAX_CONTEXT_TOKENS`,
@@ -314,8 +317,8 @@ timeouts and that the next request runs normally.
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS` and `ENABLE_TOOL_SEARCH=auto:10`
   for Claude Code; for testing here, client configs are written by hand.
 - Claude Code's attribution block is stable per conversation for custom base URLs since v2.1.181;
-  older versions change the `cch=` nonce every turn, which FR-025 neutralizes. Feature 004 sets
-  `CLAUDE_CODE_ATTRIBUTION_HEADER=0` as hygiene.
+  older versions change the `cch=` nonce every turn, which FR-025 neutralizes server-side, so no
+  client setting is needed.
 - Vision input is out of scope (see FR-020 for how images are handled).
 - Real-client smoke tests (SC-001) use hand-written client configs; serving overhead (SC-004) is
   measured by an engine-vs-API timing test in this feature, so 002's gates do not depend on 004/005.

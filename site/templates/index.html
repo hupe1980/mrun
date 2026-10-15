@@ -26,7 +26,7 @@
     <div>
       <p class="eyebrow">Local inference for coding agents · Apple Silicon</p>
       <h1>Your agent's context,<br><span class="accent">computed once.</span></h1>
-      <p class="lead">mrun runs open coding models on your Mac and serves Claude Code, Codex and OpenCode. It reuses attention state exactly across turns, branches and tool calls, explains every cache miss, and never pushes your Mac into swap.</p>
+      <p class="lead">mrun runs open coding models on your Mac and serves Claude Code, Codex and OpenCode. It reuses attention state exactly across turns, branches and tool calls, explains every cache miss, and is designed to keep your Mac out of swap.</p>
       <div class="cta">
         <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
         <a class="button ghost" href="{{ config.extra.repo }}" rel="noopener">Star on GitHub</a>
@@ -65,7 +65,7 @@
         <p>Weights, attention state and scratch space are budgeted at startup against unified memory. Requests that cannot fit are refused up front with the numbers. Pressure sheds cache, never your editor.</p>
       </article>
       <article class="card">
-        <h3>Instant interruption</h3>
+        <h3>Fast interruption</h3>
         <p>Cancellation is checked after every model layer and every token, so an interrupted request stops quickly at any context length, and the work already done is kept for the retry.</p>
       </article>
       <article class="card">
@@ -87,7 +87,7 @@
       <ol class="steps">
         <li><strong>Your agent sends the whole conversation</strong> over one of three standard APIs.</li>
         <li><strong>mrun renders and tokenizes it</strong> with the model's own chat template.</li>
-        <li><strong>The prefix cache finds the longest identical token prefix</strong> and restores its attention state by copy — or simply continues the live conversation.</li>
+        <li><strong>The prefix cache finds the longest identical token prefix</strong> and moves its state back in — or simply continues the live conversation.</li>
         <li><strong>Only the new tokens are processed</strong> on the GPU with Apple's MLX, in chunks that can be interrupted.</li>
         <li><strong>Tokens stream back</strong> with exact usage numbers and a cache report.</li>
       </ol>

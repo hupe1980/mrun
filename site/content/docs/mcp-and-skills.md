@@ -20,7 +20,7 @@ keep it fast.
 Tool schemas are expensive: five typical MCP servers add about 55,000 tokens to every prompt. The
 chat templates of the supported models put all tool definitions at the top of the prompt, so the
 first request after a server connects or changes its tools is processed from the start (the miss
-report says `edit`). After that, turns are cached as usual.
+report says `system`). After that, turns are cached as usual.
 
 ## Deferred tool loading
 

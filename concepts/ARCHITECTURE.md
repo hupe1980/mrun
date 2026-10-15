@@ -74,9 +74,9 @@ client ──HTTP──▶ api (Chat | Messages | Responses ─▶ ChatRequest; 
   Competing servers that drive MLX from several threads have hit stream errors and kernel panics.
 - **Budget by construction**: `budget = min(fraction × physical, recommended working set) −
   reserve`, with the reserve defaulting to `clamp(physical ÷ 6, 2 GiB, 8 GiB)`. Weights are
-  measured after load; scratch is measured by one probe chunk at the deepest admissible position
-  (cached per model, machine, MLX version and chunk size); capacity is sized from the remainder
-  and never exceeds the probed depth. MLX memory and cache limits back the budget.
+  measured after load; scratch is measured by one probe at the largest chunk at the deepest
+  admissible position (cached per model identity, machine, macOS, MLX and mrun version, 001
+  FR-008); capacity is sized from the remainder and never exceeds the probed depth. MLX memory and cache limits back the budget.
 - **Allocation never exceeds the reservation**: per-layer attention arrays start at the prompt
   plus up to 4K tokens of output and grow in 4K steps, both clamped to the request's reserved
   total. Before any growth the engine reports the bytes it needs; the worker evicts cache first.
@@ -103,7 +103,7 @@ hanging off it.
 - **Eviction**: least recently used branch leaves; the live path is never evicted while in use.
   Under memory pressure, branches go first, then an idle live path.
 - **Miss report** on every request: cached and processed tokens, divergence position, and a cause
-  (`new`, `edit`, `template`, `evicted`, `capacity`, `checkpoint`, `model`, `disabled`).
+  (`new`, `system`, `edit`, `template`, `evicted`, `capacity`, `checkpoint`, `model`, `disabled`).
 
 Exactness: reuse requires identical tokens and model identity. Reused state equals recomputation
 up to the floating-point rounding any chunked prefill has; tests compare cache-on to cache-off

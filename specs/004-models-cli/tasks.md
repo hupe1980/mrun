@@ -15,20 +15,20 @@ description: "Tasks for 004 Models and CLI Experience"
 ## Phase 2: Foundational
 
 - [ ] T004 `crates/mrun/src/hub/mod.rs`: resolve path → alias → repo id; HF cache resolution (`HF_HUB_CACHE`, `HF_HOME`, `HF_ENDPOINT`); identity via `mrun_engine::identity` (001)
-- [ ] T005 [P] `hub/aliases.rs`: curated table (`qwen3-coder`, `qwen3-8b`) with pinned revisions and file hashes; `scripts/refresh_aliases.py`
+- [ ] T005 [P] `hub/aliases.rs`: curated table (`qwen3.6` default, `qwen3-coder`, `qwen3-8b`) with pinned revisions and file hashes; `cargo xtask refresh-aliases`
 - [ ] T006 [P] `hub/verify.rs` + `cli/verify.rs`: fast checks (size, mtime, inode) and full re-hash; test flipping a byte with preserved mtime is caught by `verify` only
 
 ## Phase 3: US1 — Zero to working agent (P1) 🎯 MVP
 
 - [ ] T007 [US1] `hub/download.rs` + `cli/pull.rs`: size/license/fit preview, disk-space check, hf-hub download with resume, verification, manifest; wiremock tests (resume, corrupt, disk full, gated → `HF_TOKEN` hint, `HF_ENDPOINT` mirror)
-- [ ] T008 [US1] `cli/launch.rs`: process-scoped env/flags per client per FR-005 / research R5 (Claude Code env set incl. emptied `ANTHROPIC_API_KEY`; Codex `-c` overrides + model catalog file; OpenCode `OPENCODE_CONFIG_CONTENT`); start server / offer pull with confirmation; `--dry-run`; missing-client hint; exec the client; tests with a fake server and fake client binary
+- [ ] T008 [US1] `cli/launch.rs`: process-scoped env/flags per client per FR-005 / research R5 (Claude Code env set incl. emptied `ANTHROPIC_API_KEY`; `ENABLE_TOOL_SEARCH=auto:10`; Codex `-c` overrides + model catalog file with `supports_search_tool`; OpenCode `OPENCODE_CONFIG_CONTENT`); start server / offer pull (size, license, fit) with confirmation; `--model` restart rule; `--dry-run`; missing-client hint; exec the client; tests with a fake server and fake client binary
 - [ ] T009 [US1] `cli/connect.rs`: print mode; `--write` with diff, 0600 backup, atomic write to the FR-006 targets (Codex separate `mrun.config.toml` profile); `--undo`; snapshot tests per client; stopped-server detection with `mrun serve --detach` hint
 - [ ] T010 [US1] `serve --detach` and `cli/stop.rs` (pid file, graceful SIGTERM); tests
 
 ## Phase 4: US2 — Manage models (P1)
 
-- [ ] T011 [P] [US2] `cli/ls.rs` table/JSON with size, fit, max context (001 budget function), status (fast checks)
-- [ ] T012 [P] [US2] `cli/rm.rs` (mrun-created refs and unshared blobs only; list kept shared blobs), `cli/show.rs`; tests with a shared cache containing another tool's snapshot
+- [ ] T011 [P] [US2] `cli/ls.rs` table/JSON with size, fit, max context (001 budget function), status (fast checks), plus compatible `unpinned` MLX repos found in the HF cache; `pull <repo>` pins them without downloading
+- [ ] T012 [P] [US2] `cli/rm.rs` per FR-003/R10 (pinned revision's snapshot, blobs no other revision of the repo links to, refs only when they point to it; warning that other tools lose that revision), `cli/show.rs`; tests with a shared cache where another tool uses the same and a different revision
 - [ ] T013 [US2] Corruption handling on load and in `ls`; repair via `pull`
 
 ## Phase 5: US3 — Diagnose (P2)

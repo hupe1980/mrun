@@ -8,7 +8,7 @@ weight = 120
 
 They are general-purpose local model runners. mrun is built for one workload: coding agents that
 resend a growing conversation every turn. That shapes everything — an exact prefix cache with miss
-explanations, a memory budget sized for long contexts, cancellation that takes effect immediately,
+explanations, a memory budget sized for long contexts, cancellation that takes effect within a few hundred milliseconds,
 and first-class support for the Anthropic Messages and OpenAI Responses APIs that Claude Code and
 Codex use. If you chat with a model occasionally, any of those tools works well. If you run an
 agent for hours, mrun is designed for you.

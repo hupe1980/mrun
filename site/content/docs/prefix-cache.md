@@ -32,8 +32,8 @@ Every response reports how many prompt tokens were reused, in each API's own usa
 (`cache_read_input_tokens` for Anthropic, `prompt_tokens_details.cached_tokens` for OpenAI). mrun
 also attaches its own report:
 
-- non-streaming responses: `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`
-  and `x-mrun-cache-divergence` headers;
+- non-streaming responses: `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`,
+  `x-mrun-cache-divergence` and, for hybrid models, `x-mrun-cache-gap` headers;
 - streaming responses: a `: mrun {...}` SSE comment line before the first event.
 
 `mrun ps` shows totals and the last miss.
@@ -43,11 +43,12 @@ also attaches its own report:
 | Cause | Meaning | What to do |
 | --- | --- | --- |
 | `new` | No earlier request shares a prefix | Nothing; the first turn is always computed |
-| `edit` | The conversation, system prompt or tools changed before the divergence point | Expected after compaction, edits or an MCP server connecting; otherwise check what changes per session |
+| `system` | The system prompt or tool list changed | Expected when an MCP server connects or settings change; otherwise check what changes per session |
+| `edit` | An earlier message was changed, removed or replaced | Expected after compaction, edits or retries |
 | `template` | The same messages produced different tokens (for example earlier reasoning dropped by the template) | Usually expected once per turn on thinking models |
 | `checkpoint` | Hybrid model: resumed from the nearest checkpoint before the divergence | Expected; the gap is reported |
-| `evicted` | The branch was removed to free memory | More memory, or fewer parallel conversations |
-| `capacity` | The prompt was too large to keep | Shorter context or more memory |
+| `evicted` | The branch was removed to make room (least recently used) or by `mrun cache clear` | More memory, or fewer parallel conversations |
+| `capacity` | The branch was dropped under memory pressure | Close memory-hungry apps or lower other memory use |
 | `model` | A different model, revision or template was loaded | Expected |
 | `disabled` | Caching was off for this request | `--no-cache` or `x-mrun-cache: off` |
 

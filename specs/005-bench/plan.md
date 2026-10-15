@@ -12,7 +12,7 @@ Completions, Anthropic Messages or OpenAI Responses (mrun, llama.cpp server, Oll
 server). Profiles start, health-check, reset and stop each system so only one is loaded at a time,
 with equal context length. It measures client-side timings from the streamed bytes, samples
 machine state and per-system memory, and writes a versioned JSON result plus a markdown report. A
-regression mode compares against a baseline. It absorbs 001's engine benchmark cells.
+regression mode compares against a baseline.
 
 ## Technical Context
 
