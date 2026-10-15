@@ -3,7 +3,8 @@
 Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [next-features §3](../../concepts/research/next-features-2026-10.md),
 [competitors](../../concepts/research/competitors-2026-10.md), [fact-check](../../concepts/research/fact-check-2026-10-15.md),
 mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qwen3_5.py`,
-`qwen3_5_moe.py`, `gated_delta.py`, `activations.py`, `generate.py`), mlx-c `a341b49` headers.
+`qwen3_5_moe.py`, `gated_delta.py`, `gpt_oss.py`, `mistral3.py`, `ministral3.py`, `rope_utils.py`,
+`switch_layers.py`, `cache.py`, `activations.py`, `generate.py`), mlx-c `a341b49` headers.
 
 ## R1: Engine library and bindings
 
@@ -15,14 +16,15 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
   in `fast.h`; `mlx_compile(res, closure, shapeless)` and `mlx_closure_new_func*` in
   `compile.h`/`closure.h`; `mlx_put_along_axis`, `mlx_conv1d`, `mlx_contiguous`, `mlx_logaddexp`
   (softplus), `mlx_sigmoid`, `mlx_split`, `mlx_argpartition`, `mlx_logsumexp`, `mlx_gather_qmm`,
-  `mlx_quantized_matmul` in `ops.h`; `mlx_fast_rms_norm`, `mlx_fast_rope`,
-  `mlx_fast_scaled_dot_product_attention`; `mlx_device_info_get/get_size` (`device.h`; Metal keys
+  `mlx_quantized_matmul` in `ops.h` (both take `const char* mode`, so MXFP4 is `mode = "mxfp4"`
+  with `biases` null); `mlx_fast_rms_norm`, `mlx_fast_rope` (optional `freqs`, used by YaRN),
+  `mlx_fast_scaled_dot_product_attention` (`mask_mode`, optional `mask_arr` and optional `sinks`); `mlx_device_info_get/get_size` (`device.h`; Metal keys
   `memory_size`, `max_recommended_working_set_size`, `max_buffer_length`);
   `mlx_stream_new_device` and thread-local streams; memory getters/setters incl.
   `mlx_set_wired_limit`, `mlx_clear_cache`.
 - **Rationale**: D010. mlx-rs lacks Linux linking, quant `mode`, `device_info` and metal kernels.
-- **Spike gate (M0)**: on the M4 Pro: matmul, 4-bit quantized_matmul, gather_qmm, sdpa, rope, a
-  `metal_kernel` (the GDN kernel), `compile`, memory APIs, async_eval. Go/no-go within a week.
+- **Spike gate (M0)**: on the M4 Pro: matmul, 4-bit and MXFP4 quantized_matmul, gather_qmm, sdpa
+  (with sinks and an array mask), rope (with `freqs`), a `metal_kernel` (the GDN kernel), `compile`, memory APIs, async_eval. Go/no-go within a week.
 
 ## R2: Attention model graphs
 
@@ -35,14 +37,21 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
 
 ## R3: Weights, quantization and loading
 
-- **Decision**: Read `config.json` (for `qwen3_5_moe` the `text_config` object, or the root when
+- **Decision**: The family registry (FR-023, 010) resolves `model_type` first (wrapped configs:
+  `text_config.model_type`, e.g. `mistral3` → `ministral3` → family `mistral`); an unknown type is
+  refused before any weight is read, listing the supported families. Then the family module reads
+  its fields. Read `config.json` (for `qwen3_5_moe` the `text_config` object, or the root when
   absent); `quantization {group_size, bits, mode}` with per-path overrides (router and
   `shared_expert_gate` at 8-bit/64); mode inferred from scales when absent. Load safetensors with
   MLX's loader. Apply mlx-lm `sanitize`: drop `vision_tower`/`model.visual`/`mtp.*`, remap
   `model.language_model.*` → language model, split `experts.gate_up_proj`; for unconverted
   checkpoints (conv1d weight last dim ≠ 1) move the conv1d axis and add 1 to RMSNorm weights.
-  `A_log` stays float32 (mlx-lm `cast_predicate`). Reject unknown `model_type`, bits, modes or
-  tensor names with named reasons.
+  `A_log` stays float32 (mlx-lm `cast_predicate`). Quantization `mode` per path: `affine` (bits 4/8,
+  scales + biases) or `mxfp4` (bits 4, group 32, uint8 E8M0 scales, no biases), as mlx-lm
+  `utils.py` maps it. Sanitize is per family (gpt_oss: split `gate_up_proj` and its bias into
+  interleaved gate/up halves `[..., ::2]`/`[..., 1::2]`, `_blocks` viewed as uint32, `_scales` →
+  `.scales`, skipped when already sanitized; mistral: drop `vision_tower`/`multi_modal_projector`,
+  strip `language_model.` prefixes). Reject unknown bits, modes or tensor names with named reasons.
 
 ## R4: Sequence state and allocation
 
@@ -58,7 +67,12 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
   lives in the engine, so a callback invoked during `prefill` would need a second mutable borrow of
   the engine. Checking all memory for a call up front keeps every error side-effect free and the
   retry trivial.
-- **Sizes**: Qwen3-8B 36 × 2 × 8 × 128 × 2 B = 144 KiB/token. Qwen3-Coder-30B-A3B 48 × 2 × 4 × 128
+- **State kinds**: attention K/V is *positional* (trim = offset) on every attention layer,
+  sliding-window layers included; linear-layer conv + delta state is *position-bound* (checkpoints,
+  R13). Budget and 003 see only `kv_bytes_per_token` and `recurrent_bytes` (FR-025).
+- **Sizes**: Qwen3-8B 36 × 2 × 8 × 128 × 2 B = 144 KiB/token. gpt-oss-20b 24 × 2 × 8 × 64 × 2 B =
+  48 KiB/token (half of it on the 12 sliding layers, kept in full). Devstral Small 2 40 × 2 × 8 ×
+  128 × 2 B = 160 KiB/token. Qwen3-Coder-30B-A3B 48 × 2 × 4 × 128
   × 2 B = 96 KiB/token. Qwen3.6-35B-A3B: 10 attention layers × 2 × 2 × 256 × 2 B = 20 KiB/token;
   recurrent per linear layer 32 × 128 × 128 × 4 B = 2 MiB + conv 3 × 8,192 × 2 B = 48 KiB, × 30
   ≈ 61.4 MiB per checkpoint (dimensions read from config and checked at load).
@@ -112,7 +126,9 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
 - **Worked example (M4 Pro 48 GB)**: reserve 8 GiB, budget = 36 − 8 = 28 GiB.
   Qwen3.6 4-bit: weights ≈ 20 GiB, scratch ≈ 1–2 GiB → ≈ 6–7 GiB state → capped at max position
   262,144 (≈ 5 GiB of attention state + 0.25 GiB recurrent). Qwen3-Coder: ≈ 16 GiB weights →
-  ≈ 10–11 GiB state ≈ 105–120K tokens. Qwen3-8B: capped at 40,960.
+  ≈ 10–11 GiB state ≈ 105–120K tokens. gpt-oss-20b: ≈ 12–13 GiB weights → ≈ 13 GiB state → capped
+  at max position 131,072 (≈ 6 GiB of KV). Devstral Small 2: ≈ 13 GiB weights → ≈ 13 GiB state ≈
+  85K tokens. Qwen3-8B: capped at 40,960. (gpt-oss and Devstral weights [U] until pinned in 004.)
 
 ## R7: Forward/sample split, pipelining and greedy parity
 
@@ -221,6 +237,66 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
 ## R14: Compiled ops and fused-op parity
 
 - **Decision**: mlx-lm compiles `swiglu`, `precise_swiglu` and `compute_g` (`mx.compile`,
-  shapeless). mrun binds `mlx_compile` with shapeless closures for the same functions, unless an
-  on-device test proves the unfused graph bitwise-equal on all three models' shapes (then unfused
+  shapeless), and `swiglu_oai` for gpt_oss. mrun binds `mlx_compile` with shapeless closures for
+  the same functions, unless an on-device test proves the unfused graph bitwise-equal on every 0.1
+  family's shapes (then unfused
   is kept, simpler). The decision is recorded here after T006a.
+
+## R15: Block library and family modules
+
+- **Decision**: Shared blocks in `models/blocks/` (detailed layout, registry and tiers in 010):
+  attention (projections with optional bias, optional q/k RMSNorm, optional output gate, RoPE
+  default/partial/YaRN with optional position-scaled queries, SDPA with optional sinks; window
+  `None` or `Some(w)`), Gated DeltaNet (R12), feed-forward (SwiGLU, `swiglu_oai`, MoE router
+  variants: softmax-then-top-k with `norm_topk_prob`, or top-k-then-softmax; SwitchGLU with optional
+  per-expert bias; optional shared expert with sigmoid gate), RMSNorm. A family module is config
+  parsing + sanitize + layer composition only; numerics live in blocks, so parity of a block is
+  proven once and reused.
+- **Rationale**: Constitution V (3.2.0): open set of families from shared blocks, no family logic
+  elsewhere. Every 0.1 family differs from the others in at most a few block options.
+- **Alternative rejected**: a generic config-driven "universal transformer": hides per-family
+  quirks (sanitize, router order, query scaling) that parity depends on.
+
+## R16: `gpt_oss` port (gpt-oss-20b)
+
+- **Graph** (mlx-lm `gpt_oss.py`): 24 blocks, each RMSNorm → attention → residual → RMSNorm → MoE
+  → residual. Attention: q/k/v/o with bias, 64 query and 8 KV heads of 64, scale 1/√64, RoPE
+  θ 150,000 with `rope_scaling` YaRN (`initialize_rope`, non-traditional), learned per-head
+  `sinks` passed to SDPA. `layer_types` (default alternating `sliding_attention`, `full_attention`)
+  with `sliding_window` 128. MoE: `router` linear with bias (8-bit override in mlx-lm's quant
+  predicate), top-4 via `argpartition` then `softmax(precise)` over the selected logits (order
+  differs from Qwen), SwitchGLU with per-expert biases and `swiglu_oai` (gate clipped above at 7,
+  linear part clipped to ±7 plus 1, α 1.702), weighted sum. Experts MXFP4 (`gather_qmm` mode
+  `mxfp4`); mlx-community conversions may hold other paths at 8-bit affine (read per path).
+- **Sliding window with full KV**: mlx-lm uses `RotatingKVCache(max_size = 128)`; mrun keeps full
+  KV (FR-024) and attends to the window as a slice of the contiguous arrays: prefill chunk at
+  start s of length L uses keys `[max(0, s − 127), s + L)` with a causal window mask; decode uses
+  `[max(0, p − 127), p + 1)` without mask. Work per token stays O(window). For the
+  first chunk (all L keys, windowed causal mask) and every later chunk (`_update_concat`: trim to
+  the last 127, then concatenate), this equals mlx-lm in content and order.
+- **Parity caveat [U, open]**: in decode once the buffer wraps, mlx-lm's rotating buffer presents
+  the window's keys in rotated (not temporal) order, so SDPA may sum in a different order and
+  differ in the last bits. Decision: the reference script
+  generates gpt_oss outputs with a temporal-order windowed cache (full KV kept, window slice as
+  above) substituted for `RotatingKVCache` in the reference process only (no mlx-lm source patch),
+  and SC-001 compares against that; stock mlx-lm is also run and must match token for token on the
+  reference set (logit bits not required). Resolved on device by the gpt_oss parity task.
+- **Tokenizer and template**: o200k Harmony vocabulary (201,088) from `tokenizer.json`; template
+  from the repo; syntax Harmony (002). EOS union must include `<|return|>` and `<|call|>` (R10;
+  checked against mlx-lm's set).
+
+## R17: `mistral` port (Devstral Small 2 24B)
+
+- **Graph** (mlx-lm `mistral3.py` → `ministral3.py`): `model_type` `mistral3` wraps a
+  `text_config` of type `ministral3`; the family accepts that pair (others refused). Dense
+  Llama-style stack: RMSNorm, attention without bias (GQA, `head_dim` from config), RoPE from
+  `rope_parameters` (YaRN), queries multiplied by `1 + β·log(1 + ⌊pos / original_max⌋)`
+  (`llama_4_scaling_beta`, computed per chunk from the offset, cast to the activation dtype), SDPA;
+  SwiGLU MLP. `layer_types` default all full attention (a sliding layer would use the same window
+  block as gpt_oss). `tie_word_embeddings` defaults to false for the wrapped config.
+- **Sanitize**: drop `vision_tower.*`, `multi_modal_projector.*`; map `model.language_model.*` →
+  `model.*` and strip `language_model.`. Vision input is 009.
+- **Tokenizer and template**: requires `tokenizer.json` and a Jinja chat template in the repo
+  (Mistral also ships `tekken.json` for mistral-common, which mrun does not read) [U: to confirm
+  on the pinned repo; a repo without them is refused naming the missing file]. Syntax Mistral
+  `[TOOL_CALLS]` (002).

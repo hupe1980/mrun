@@ -31,10 +31,12 @@ MRUN_TEST_MODELS=qwen3-8b,qwen3-coder,qwen3.6 cargo test -p mrun-engine --releas
    With `--memory-fraction 0.25 --reserve-gib 8` (budget ≈ 4 GiB < weights) → load refused, exit 4.
 3. **Cancel** (US2): paste a 16K-token prompt, press Ctrl-C during processing → ready within
    300 ms; ask again → stats show the kept whole chunks as cached.
-4. **Conformance** (US4): `mrun run <model> --check` → "20/20 prompts match" for each of the three
-   models.
+4. **Conformance** (US4): `mrun run <model> --check` → "20/20 prompts match" for each 0.1 family
+   (Qwen3.6, Qwen3-Coder, gpt-oss-20b, Devstral Small 2, Qwen3-8B). A model with an unsupported
+   `model_type` → exit 3 listing the supported families.
 5. **State primitives** (US5): `cargo test -p mrun-engine --release --test exactness -- --ignored`
-   → split-off/append and checkpoint-restore logits bit-identical on each model.
+   → split-off/append and checkpoint-restore logits bit-identical on each model, and gpt-oss
+   trims/moves at positions inside and beyond the sliding window.
 6. **Speed and cancel** (SC-002/003/004):
    `cargo run --release -p mrun-engine --example bench_engine -- --model <repo> --ctx 1024,16384
    --cancel-depths 16384,65536,max` and `scripts/bench_reference.sh <repo>`; compare the JSON files.
