@@ -37,7 +37,8 @@ pub struct ChatRequest {
     pub tool_choice: ToolChoice,
     pub parallel_tool_calls: bool,
     pub response_format: ResponseFormat,
-    pub sampling: Sampling,
+    /// Sampling the request sets; the rest comes from the model's generation config.
+    pub sampling: SamplingParams,
     /// `None`: the API's default (Chat: server default; Responses: remaining capacity, FR-019).
     pub max_output_tokens: Option<u32>,
     pub stop: Vec<String>,
@@ -61,7 +62,7 @@ impl ChatRequest {
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: true,
             response_format: ResponseFormat::Text,
-            sampling: Sampling::GREEDY,
+            sampling: SamplingParams::default(),
             max_output_tokens: None,
             stop: Vec::new(),
             reasoning: ReasoningCtl::Off,
@@ -73,6 +74,28 @@ impl ChatRequest {
 
     pub fn tool(&self, name: &str) -> Option<&ToolDef> {
         self.tools.iter().find(|t| t.name == name)
+    }
+}
+
+/// Sampling fields as sent; unset ones fall back to the model's defaults.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SamplingParams {
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<u32>,
+    pub min_p: Option<f32>,
+    pub seed: Option<u64>,
+}
+
+impl SamplingParams {
+    pub fn resolve(&self, defaults: Sampling) -> Sampling {
+        Sampling {
+            temperature: self.temperature.unwrap_or(defaults.temperature),
+            top_p: self.top_p.unwrap_or(defaults.top_p),
+            top_k: self.top_k.unwrap_or(defaults.top_k),
+            min_p: self.min_p.unwrap_or(defaults.min_p),
+            seed: self.seed.or(defaults.seed),
+        }
     }
 }
 
