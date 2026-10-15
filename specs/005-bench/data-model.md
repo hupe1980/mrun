@@ -20,6 +20,11 @@
 | model | {name sent to the system, format (`mlx` \| `gguf`), quantization {bits, group_size, scheme}, file hashes when local} |
 | pid | optional, for memory sampling |
 
+## Trace
+
+JSONL, one record per request: `{api, body, assistant_reply, gap_ms}`, where `gap_ms` is the time
+from the previous response's end to this request's arrival (tool execution and think time).
+
 ## RunResult (JSON, `schema_version: 1`)
 
 | Field | Type |
@@ -29,7 +34,7 @@
 | mrun_version | string |
 | machine | {chip, memory_bytes, macos, power_source, low_power, thermal_start, thermal_end, per_system: [{system, free_memory, swap}]} |
 | systems | SystemUnderTest[] |
-| cells | [{system, cell, api, samples: number[], median, p95, iqr, unit, early_eos: bool, failures: [{rep, error}], turns?: [{n, ttft_ms, tfut_ms, input, cached, output}]}] |
+| cells | [{system, cell, api, samples: number[], median, p95, iqr, unit, early_eos: bool, malformed_tool_calls: n, gaps: recorded\|none, failures: [{rep, error}], turns?: [{n, ttft_ms, tfut_ms, input, cached, output}]}] |
 | quality | [{system, task, seed, passed, duration_s}] |
 | comparability | [{cell, kind: `same-weights` \| `quality-matched` \| `n/a`}] |
 | method | {replay: `teacher-forced`, reps: {synthetic, cancel, agent, quality_seeds}} |

@@ -165,6 +165,10 @@ request and simulate memory pressure; verify eviction order and that requests su
 - **FR-013**: When a client signals that it compacted its context (Claude Code's
   `x-claude-code-context-compacted` hint header), cached state for the superseded conversation MUST
   become the first eviction candidate.
+- **FR-014**: Client cache hints MUST be honored as hints only: Anthropic `cache_control`
+  breakpoints add segment boundaries at their token positions; OpenAI `prompt_cache_key` groups
+  requests of one session so eviction prefers other sessions' state. Hints never change what is
+  reused (matching stays token-exact) and absent hints change nothing.
 
 ### Key Entities
 

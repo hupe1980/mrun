@@ -104,6 +104,11 @@ Each run checks output quality so a configuration that is faster but wrong is ca
   so every system's cache holds the same history the real client would have produced; the report
   states this method. Requests are sent in the trace's API style (Chat Completions, Messages or
   Responses); systems lacking that API are marked "n/a" for the trace.
+- **FR-003a**: Traces MUST record the gap between each response's end and the next request (tool
+  execution and user think time). Replay MUST reproduce gaps capped at 60 s by default
+  (`--gaps recorded|none`), because time-based cache expiry and background work in other systems
+  depend on them; the report states the mode. Each system's timed outputs MUST be checked for
+  malformed tool calls and early end-of-sequence, reported per system next to its speed.
 - **FR-004**: Repetitions: synthetic and cancel cells use one warm-up and at least 5 repetitions;
   agent traces use 3 repetitions; quality tasks use 3 seeds. Reports give median, p95 and IQR.
 - **FR-005**: Results MUST be written as JSON (versioned, hand-written schema file) and a markdown

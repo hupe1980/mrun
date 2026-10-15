@@ -62,7 +62,7 @@ macOS-only tests are `#[ignore]` + `MRUN_TEST_MODELS`.
 - [ ] T029 [P] SC-002/SC-003 with `bench_engine` vs `bench_reference.sh` at 1K/16K for both models; SC-007 cold start (probe cached) for 8B; record in research
 - [ ] T030 [P] 30-minute soak (SC-006): `phys_footprint` sampling and `vm_stat` swap-outs; record
 - [ ] T031 [P] Offline/no-write audit (FR-015): test that loading and generating make no network connections (no network features compiled; run with network namespace/`sandbox-exec` deny) and write nothing outside `~/.mrun`
-- [ ] T032 Update `README.md` (build prerequisites, `mrun run`, `--info`) and run [quickstart](quickstart.md)
+- [ ] T032 Update `README.md` (build prerequisites) and site pages `getting-started.md`, `memory.md` (`mrun run`, `--info`) and run [quickstart](quickstart.md)
 
 ## Dependencies
 

@@ -1,6 +1,6 @@
 # mrun Specs
 
-**Updated**: 2026-10-14 · **Status**: Redesign (hard cut); no feature implemented yet.
+**Updated**: 2026-10-15 · **Status**: Redesign (hard cut); no feature implemented yet.
 
 mrun is a local inference server for coding agents on Apple Silicon. See
 [concepts/VISION](../concepts/VISION.md) for the product and
@@ -33,11 +33,12 @@ spec, clarifications, plan, research, data model, contracts, quickstart and task
 analyzed with `/speckit-analyze` on 2026-10-14 and the findings fixed. Milestones and gates are in
 [concepts/ROADMAP](../concepts/ROADMAP.md).
 
-## Later candidates (not specified yet)
+## Next candidates (not specified yet)
 
-Hybrid-attention models (state checkpoints), SSD prefix-cache tier, speculative decoding (MTP or
-prompt lookup), parallel sessions (small-batch decode), distribution (Homebrew, signed binaries),
-Linux/CUDA evaluation. Each becomes a numbered spec only when evidence from 001–005 justifies it.
+006 hybrid models with state checkpoints, 007 persistent SSD prefix tier, 008 copy-aware
+speculative decoding, 009 8-bit attention state; later parallel sessions and Linux/CUDA. Each
+becomes a spec only after its measure-first check; order and evidence are in
+[concepts/ROADMAP](../concepts/ROADMAP.md).
 
 ## Rules
 

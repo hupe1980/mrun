@@ -183,15 +183,23 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   inside tool results MUST, by default, be replaced with the text `[image omitted: model has no
   vision input]` and an `image-omitted` warning reported per FR-022, so sessions that read an image
   file stay usable; `--reject-tool-images` restores strict rejection.
-- **FR-021**: `mrun serve --record <dir>` (debug aid for feature 005) MAY write request bodies to
-  disk only when given on the command line (never via config or environment), only on loopback,
-  with files mode 0600, a startup warning, and a visible flag in `/mrun/status`.
+- **FR-021**: `mrun serve --record <dir>` (debug aid for feature 005) MAY write request bodies, with
+  arrival and response-end times, to disk only when given on the command line (never via config
+  or environment), only on loopback, with files mode 0600, a startup warning, and a visible flag in `/mrun/status`.
 - **FR-022**: Every response MUST report mrun metadata (cached and processed tokens, miss cause and
   divergence from feature 003, effective output limit, warnings such as `tool-args-invalid`,
   `image-omitted`, `max-tokens-clamped`). Non-streaming responses carry it in `x-mrun-*` headers;
   streaming responses carry it in SSE comment lines (`: mrun {json}`) emitted before the first
   content event and before the final event, because headers are sent before the result is known.
   Bodies stay strictly standard. The last request's metadata is also in `/mrun/status`.
+- **FR-023**: Anthropic Messages requests carrying `diagnostics.previous_message_id` MUST receive
+  the standard `diagnostics.cache_miss_reason` in the response (`model_changed`, `system_changed`,
+  `tools_changed`, `messages_changed` with `cache_missed_input_tokens`,
+  `previous_message_not_found`, `unavailable`), derived from feature 003's miss report against that
+  message's prompt; `diagnostics` is `null` when the prefix was fully reused. mrun keeps the prompt
+  fingerprints of the last 256 message ids for this.
+- **FR-024**: Server-side context management (Anthropic `context_management` edits and compaction)
+  MUST be rejected with 400 naming the field: mrun does not rewrite or summarize client context.
 
 ### Key Entities
 

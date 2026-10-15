@@ -64,7 +64,7 @@ specs/003-prefix-cache/
 crates/mrun/src/cache/
 ├── mod.rs          # PrefixStore API used by runtime::worker
 ├── tree.rs         # radix tree over token ids (edges = token slices)
-├── evict.rs        # scoring, pressure handling
+├── evict.rs        # LRU with turn-type order, pressure handling
 └── miss.rs         # MissReport + cause classification
 crates/mrun/src/runtime/pressure.rs   # macOS memory-pressure source (no-op on Linux)
 crates/mrun/tests/

@@ -31,6 +31,11 @@ definitions; this page lists what mrun serves and where it deliberately differs.
 - **Disconnect cancels.** Closing the connection stops queued or running work at once.
 - **Invalid tool arguments.** When the model emits tool-call arguments that aren't valid JSON, mrun
   reports them in the way each API allows and adds a `tool-args-invalid` warning.
+- **Cache diagnostics.** Anthropic requests with `diagnostics.previous_message_id` receive the
+  standard `diagnostics.cache_miss_reason` (`system_changed`, `tools_changed`, `messages_changed`,
+  and others).
+- **No server-side context editing.** Anthropic `context_management` is rejected with 400; mrun
+  never rewrites or summarizes your conversation.
 - **Images.** The supported models are text-only. Images inside tool results are replaced with a
   short placeholder and an `image-omitted` warning; `--reject-tool-images` makes them an error.
 

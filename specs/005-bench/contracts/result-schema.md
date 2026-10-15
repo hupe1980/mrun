@@ -5,7 +5,7 @@
 ```text
 mrun bench [--suite agent|synthetic|cancel|memory|quality|all] [--trace NAME]...
            [--system NAME=URL[,apis=chat+messages+responses][,model=M][,pid=N][,profile=P]]...
-           [--compare] [--reps N] [--out DIR] [--baseline FILE]
+           [--compare] [--gaps recorded|none] [--reps N] [--out DIR] [--baseline FILE]
 ```
 
 - Without `--system`, benchmarks the local mrun server (`http://127.0.0.1:8484`).

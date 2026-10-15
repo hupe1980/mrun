@@ -38,6 +38,7 @@ description: "Tasks for 002 Agent APIs"
 - [ ] T017 [US2] Usage semantics per API (Anthropic input excludes cache read; others inclusive; `cache_creation_input_tokens` = 0) and the cache values in mrun metadata (delivered by T015) + `cross_*` conformance cases
 - [ ] T018 [US2] Error mapping per API per the contract status table (queue full, queue deadline, context too long with numbers, unsupported modalities with JSON path, unknown tool result id, limits, auth, Host/Origin) + cases
 - [ ] T019 [US2] Request validation limits (body 8 MiB via tower-http, messages, tools, schema size/depth) + cases
+- [ ] T019a [US2] Anthropic `diagnostics` (FR-023): bounded map of the last 256 `msg_` ids → prompt fingerprint, `cache_miss_reason` mapped from 003's MissReport (`previous_message_not_found` for unknown ids, `unavailable` when caching is off), `null` on full reuse; reject `context_management` with 400 (FR-024); conformance cases for each variant
 
 ## Phase 5: US3 — Reliable under agent behavior (P2)
 
@@ -47,7 +48,7 @@ description: "Tasks for 002 Agent APIs"
 ## Phase 6: Polish
 
 - [ ] T022 [P] Serving overhead test (SC-004): same prompt through `EngineHandle` directly and through each API, compare TTFT and decode rate (`crates/mrun/tests/overhead.rs`, macOS real model, `#[ignore]`)
-- [ ] T023 [P] README "Use with Claude Code / Codex / OpenCode" section
+- [ ] T023 [P] Site page `site/content/docs/clients.md` and `api.md` checked against the implemented behavior
 
 ## Dependencies
 

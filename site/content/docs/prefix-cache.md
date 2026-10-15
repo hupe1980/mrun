@@ -55,6 +55,21 @@ mrun evicts the least recently used segments, preferring finished side branches 
 conversation. A request is never refused while evictable cache remains. If macOS reports memory
 pressure, mrun sheds cache first.
 
+## Shared between clients
+
+All clients of one server share the cache. Cached-token counts therefore reveal whether another
+client recently sent the same prefix. On your own Mac this doesn't matter; if you expose mrun to
+other people with `--host`, keep it in mind, or run with `--no-cache`.
+
+## Client hints
+
+Anthropic `cache_control` breakpoints and OpenAI `prompt_cache_key` are accepted as hints:
+breakpoints mark good places to keep a snapshot, and the key groups one session's requests so
+eviction prefers other sessions' state. Hints never change what is reused.
+
+Clients can also ask why a turn missed the cache with `diagnostics.previous_message_id`; mrun
+answers with the standard `diagnostics.cache_miss_reason` in the response.
+
 ## Controls
 
 | Control | Effect |
