@@ -14,7 +14,7 @@ eviction re-prefill is ≥ 10% of prefill time in maintainer recordings and SC-0
 ### Session 2026-10-15
 
 - Q: Is the tier on by default? → A: No. Constitution IV (v3.2.0) requires an explicit opt-in: `mrun serve --persist`, `[cache] persist = true` or `MRUN_CACHE_PERSIST=1`. `mrun launch` does not enable it.
-- Q: What is written, and when? → A: Exact sequence-state bytes of branches (attention state for a token range) and hybrid checkpoints, written by a background writer: when a branch is moved out of the live path, and for the live path's committed tokens once the server is idle for 2 s after a turn. Hybrids persist per turn only the end-of-prompt checkpoint (plus the system+tools checkpoint once). Eviction from memory waits at most for one in-flight 4 MiB block.
+- Q: What is written, and when? → A: Exact sequence-state bytes of branches (positional state for a token range) and checkpoints of position-bound state, written by a background writer: when a branch is moved out of the live path, and for the live path's committed tokens once the server is idle for 2 s after a turn. Families with position-bound state persist per turn only the end-of-prompt checkpoint (plus the system+tools checkpoint once). Eviction from memory waits at most for one in-flight 4 MiB block.
 - Q: What binds an entry to a model? → A: The full cache key of 003 (weights, tokenizer, template, state format) plus the on-disk format version and the MLX version (decided 2026-10-15: mrun patch releases keep entries). Any difference means the entry is invisible; it is never converted.
 - Q: Default size cap? → A: 32 GiB, capped further so the volume keeps at least 10% free; LRU by last use; entries unused for 30 days are deleted. All three are configurable.
 - Q: Encryption at rest? → A: No application-level encryption; files are user-only (0700 directory, 0600 files) under `~/Library/Caches`, and `mrun doctor` warns when FileVault is off and persistence is on.
@@ -39,7 +39,7 @@ morning `claude --resume` sends yesterday's 30K-token conversation; mrun restore
 disk instead of recomputing it, and the first turn answers in about a second.
 
 **Why this priority**: Human pauses and restarts are where in-memory caches lose most; a cold 30K
-re-prefill takes tens of seconds to a minute on the target Mac.
+re-prefill takes ≈ 30–60 s on the target Mac (Qwen3.6/Qwen3-Coder 4-bit, research R1 estimates).
 
 **Independent Test**: With `--persist`, run a 30K-token conversation, restart the server, resend
 the conversation plus one message; compare time to first token with a cold restart without
@@ -50,7 +50,7 @@ persistence.
 1. **Given** persistence on and a finished conversation, **When** the server restarts and the
    conversation is resent, **Then** the prefix is restored from disk, usage reports it as cached,
    and mrun metadata names the source `disk`.
-2. **Given** a hybrid model, **When** a stored conversation is resumed, **Then** only the deepest
+2. **Given** a model with position-bound state, **When** a stored conversation is resumed, **Then** only the deepest
    stored checkpoint at or below the match is imported, with the attention state up to it, and only
    the gap is recomputed.
 3. **Given** a memory-evicted branch that was written to disk, **When** a later request matches
@@ -137,8 +137,9 @@ sizes and files.
   re-prefill is ≥ 10% of prefill time in maintainer recordings and SC-001 holds.
 - **FR-002**: Persistence MUST be off unless enabled by `--persist`, `[cache] persist = true` or
   `MRUN_CACHE_PERSIST=1`; `--no-persist` overrides config.
-- **FR-003**: Entries MUST hold the exact bytes of the in-memory sequence state (attention state
-  ranges and hybrid checkpoints) with their token ids; no conversion, quantization or compression
+- **FR-003**: Entries MUST hold the exact bytes of the in-memory sequence state, for every state
+  kind the family declares in its 010 StateLayout (positional ranges and checkpoints of
+  position-bound state), with their token ids; no conversion, quantization or compression
   of state bytes.
 - **FR-004**: Every entry MUST record the cache key (weights, tokenizer, template, state format),
   the on-disk format version and the MLX version; an entry is eligible only when all match the
@@ -151,11 +152,11 @@ sizes and files.
 - **FR-007**: Writes MUST happen on a background writer: branches when they are moved out of the
   live path (after persisting the live path up to the branch point `at`, so the branch has a
   parent), and the live path's committed tokens after 2 s of idleness, split into entries at
-  persisted checkpoints. Hybrids persist per turn only the end-of-prompt checkpoint, plus the
+  persisted checkpoints. Families with position-bound state persist per turn only the end-of-prompt checkpoint, plus the
   system+tools checkpoint once. The engine thread, including eviction, waits at most for one
   in-flight 4 MiB block before mutating or freeing state the writer reads.
 - **FR-008**: Lookup MUST consider memory and disk; mrun restores from disk when the disk match
-  exceeds the memory match by ≥ 512 tokens. For hybrids only the deepest stored checkpoint at or
+  exceeds the memory match by ≥ 512 tokens. For families with position-bound state only the deepest stored checkpoint at or
   below the match is imported. Restored state is admitted against the budget like any restore
   (003).
 - **FR-009**: Removed (read-ahead at queue admission).
@@ -179,8 +180,8 @@ sizes and files.
 ### Key Entities
 
 - **Tier Entry**: One file: cache key, format and MLX versions, parent entry, token ids `[0, end)`,
-  state range `[start, end)` (attention tensors `[heads, tokens, dim]`), optional checkpoint at
-  `end`, per-block checksums, size, last use.
+  state range `[start, end)` (tensors per 010 StateLayout kind, with family-declared shapes),
+  optional checkpoint of position-bound state at `end`, per-block checksums, size, last use.
 - **Tier Index**: In-memory view built at startup from entry headers: candidate lookup by token
   hash, parent chains, LRU order, sizes.
 - **Writer Job**: Entry being written from an immutable source (branch segment or live-path range),
@@ -193,7 +194,8 @@ sizes and files.
 - **SC-001**: On the target Mac (M4 Pro, 48 GB, internal SSD), after a server restart, restoring a
   30K-token conversation prefix from the tier is at least 20× faster than re-prefilling it (time
   from request arrival to first token minus the same request's decode time, measured with the
-  model loaded), for Qwen3.6-35B-A3B and Qwen3-Coder-30B-A3B 4-bit.
+  model loaded), for Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B and gpt-oss-20b (one model per state
+  kind: Gated DeltaNet, full attention, sliding window).
 - **SC-002**: In a mutation suite of at least 100 cases spanning restarts (model, tokenizer,
   template, state-format, on-disk-format and MLX-version changes; edited, truncated, bit-flipped,
   half-written and foreign files), zero stale or corrupt state is ever loaded; and in the positive

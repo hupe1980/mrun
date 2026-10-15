@@ -151,7 +151,8 @@ number of maximum-size images under memory pressure; peak memory stays within th
   images per client. The feature proceeds when, in each of at least two clients, ≥ 5% of recorded
   sessions contain an image, or when ≥ 3 independent users request image input; the decision and
   data are recorded in research.
-- **FR-002**: When the loaded model has a vision tower and vision is enabled, mrun MUST accept
+- **FR-002**: When the loaded model's family declares a ported vision tower (in this feature:
+  `qwen3_5_moe` only), the checkpoint holds it and vision is enabled, mrun MUST accept
   images in user messages and tool results on all three APIs: Anthropic `image` blocks with
   `source.type: "base64"` (also inside `tool_result.content`), Chat Completions `image_url` parts
   with `data:` URLs (user messages and, where the client sends arrays, tool messages), Responses
@@ -169,10 +170,10 @@ number of maximum-size images under memory pressure; peak memory stays within th
   ≤ 20 MiB per image, measured after base64 decoding, and decoded size ≤ 50 megapixels. Decoding
   runs one image at a time; resized pixels are dropped once the digest is computed, and the image
   is decoded again from the request bytes when the encoder needs it.
-- **FR-005**: Preprocessing MUST follow the model's reference processor (smart resize to multiples
-  of 32 px within `[min_pixels, max_pixels]`, RGB, rescale and normalize, temporal patch 2) and be
-  versioned; images are rendered as the model's template expands them (start, `t·h·w/4` placeholder
-  tokens, end), and usage counts placeholder tokens as prompt tokens. Spans MUST come only from
+- **FR-005**: Preprocessing MUST follow the family's reference processor (for `qwen3_5_moe`: smart
+  resize to multiples of 32 px within `[min_pixels, max_pixels]`, RGB, rescale and normalize,
+  temporal patch 2) and be versioned; images are rendered as the model's template expands them
+  (for `qwen3_5_moe`: start, `t·h·w/4` placeholder tokens, end), and usage counts placeholder tokens as prompt tokens. Spans MUST come only from
   parsed image blocks; placeholder text inside message text never creates a span.
 - **FR-006**: Every image MUST have a digest: SHA-256 over the preprocessing version, resize
   parameters, resulting grid and resized RGB pixels. A bounded memo from the SHA-256 of the raw
@@ -184,10 +185,11 @@ number of maximum-size images under memory pressure; peak memory stays within th
 - **FR-008**: Prefix identity (003 FR-001) MUST include images: each placeholder position is keyed
   by (image digest, index within the image), so two prompts match through an image only if the full
   digests are equal. With vision enabled, model identity (001 FR-003) MUST additionally cover
-  `preprocessor_config.json` and, when used, the vision sidecar's hash: unlike 006's MTP sidecar
-  (D024), the tower changes prompt state, so it is part of the cache key.
-- **FR-009**: The engine MUST compute multimodal positions as the reference does (text: equal on all
-  axes; image: offset by the merged grid; text after an image resumes at the maximum plus one). The
+  `preprocessor_config.json` and, when used, the vision sidecar's hash: the tower changes prompt
+  state, so it is part of the cache key.
+- **FR-009**: The engine MUST compute multimodal positions as the family's reference does (for
+  `qwen3_5_moe` M-RoPE: text equal on all axes; image offset by the merged grid; text after an
+  image resumes at the maximum plus one). The
   position offset from images MUST travel with the live state, segments and checkpoints, so any
   reuse, move or resume restores exactly the positions a cache-off run computes.
 - **FR-010**: Vision encoder output MUST be cached in memory keyed by (model identity, image
@@ -195,21 +197,23 @@ number of maximum-size images under memory pressure; peak memory stays within th
   pressure or eviction. Images MUST be encoded one at a time so cached and recomputed embeddings are
   identical. Encoding runs on demand when prefill reaches an image not covered by reused state; only
   the image being prefilled holds uncached embeddings.
-- **FR-011**: Prefill MAY end chunks inside an image span (attention over image tokens is causal for
-  supported models); checkpoint placement follows 003 FR-004 unchanged. Cancellation during
+- **FR-011**: For families whose attention over image tokens is causal (`qwen3_5_moe`), prefill MAY
+  end chunks inside an image span; other families MUST keep each image span within one chunk.
+  Checkpoint placement follows 003 FR-004 unchanged. Cancellation during
   encoding MUST be checked after every encoder layer.
 - **FR-012**: The miss report (003 FR-010) MUST gain cause `image`: divergence at an image span
   whose surrounding text matches but whose digest differs or that the client replaced with text.
   mrun metadata (002 FR-022) MUST report image count, image tokens, encoder runs and embedding-cache
   hits per request.
-- **FR-013**: Without an active vision tower (model has none, a text-only conversion, or
+- **FR-013**: Without an active vision tower (the family has no ported tower, e.g. Devstral Small 2,
+  whose `mistral3` tower is dropped by `sanitize`; the model has none; a text-only conversion; or
   `--no-vision`), behaviour MUST be exactly 002 FR-020.
 - **FR-014**: `/v1/models` MUST report image input capability. `mrun launch` and `mrun connect`
   (004 FR-005/006) MUST declare it truthfully: Codex model catalog `input_modalities`, OpenCode
   `modalities.input`. Claude Code has no such setting; `launch` warns when vision is off.
 - **FR-015**: `mrun pull qwen3.6` MUST provide the vision tower: if the pinned repository holds
   vision tensors they are verified with the rest; otherwise a vision sidecar is fetched from the
-  pinned original repository (as 006 does for `mtp.*`), verified against pinned hashes and stored
+  pinned original repository by range requests (mechanism owned by 009, T027), verified against pinned hashes and stored
   with the manifest. `mrun show` and `mrun ls` show whether a model is vision-capable and the vision
   memory cost. A text-only model is never silently replaced.
 - **FR-016**: Images and their digests MUST NOT be logged or written to disk, except by
@@ -239,7 +243,7 @@ number of maximum-size images under memory pressure; peak memory stays within th
   cache warm, ≤ that text-only TTFT + 0.1 s.
 - **SC-004**: Cache-on output equals cache-off output bit for bit (token ids and logits, same chunk
   split) for ≥ 20 image cases (image in history, edit before and after an image, subagent with the
-  same image, hybrid resume across an image, embedding-cache hit vs miss).
+  same image, checkpoint resume across an image, embedding-cache hit vs miss).
 - **SC-005**: Greedy outputs on ≥ 10 image prompts, on identical pixel tensors, match mlx-vlm
   `4623cf9` (MLX v0.32.4) token for token for the first 32 tokens (001 conformance tolerance).
 - **SC-006**: With a request of 64 images of 2,560 tokens each whose total decoded bytes reach the
@@ -249,12 +253,13 @@ number of maximum-size images under memory pressure; peak memory stays within th
 
 ## Assumptions
 
-- Supported vision architecture: `qwen3_5_moe` (Qwen3.6-35B-A3B) with the Qwen3-VL tower; other
-  vision models are later work. Qwen3-Coder and Qwen3-8B have no tower.
+- Vision per first-release family: `qwen3_5_moe` (Qwen3.6-35B-A3B): Qwen3-VL tower, ported here;
+  `mistral3` (Devstral Small 2): the original has a vision tower, but `sanitize` drops it and no
+  port is planned, so it is text-only (FR-013); `qwen3_moe` (Qwen3-Coder-30B-A3B), `gpt_oss`
+  (gpt-oss-20b) and `qwen3` (Qwen3-8B): no tower. Other vision families are later work.
 - 001 provides the engine, budget and scratch probe; 002 the request parsing, renderer and metadata;
   003 the prefix store; 004 `pull`, manifests and `launch`; 005 trace recording and replay; 008
-  `/metrics`. 006's range-request sidecar mechanism is reused for FR-015 if needed; if 006 has not
-  shipped it when this feature is built, 009 implements it (T027).
+  `/metrics`. The range-request sidecar mechanism for FR-015, if needed, is owned by 009 (T027).
 - Clients send images inline (verified for Codex and OpenCode; Claude Code per its API usage).
 
 ## Open Questions

@@ -16,7 +16,7 @@
 - Q: Which platforms are released? → A: macOS 15 (Sequoia) or later on Apple Silicon (arm64) only (matching 001). Linux builds stay test-only.
 - Q: Does mrun update itself? → A: No. There is no update check and no network use beyond `mrun pull`; `brew upgrade mrun` is documented, and `mrun doctor` prints the installed version only.
 - Q: How do service and Homebrew relate? → A: `mrun service install` is the only service mechanism; the formula defines no `brew services` block, and its caveats point to `mrun service install`.
-- Q: Does the service load the model at login? → A: No. The service starts the server at login and loads the model on the first request, so logging in does not claim ≈20 GB; once loaded the model stays resident (D020). `mrun service install --preload` loads at login instead. (Maintainer decision 2026-10-15.)
+- Q: Does the service load the model at login? → A: No. The service starts the server at login and loads the model on the first request, so logging in does not claim the model's memory (≈20 GB for the default `qwen3.6`); once loaded the model stays resident (D020). `mrun service install --preload` loads at login instead. (Maintainer decision 2026-10-15.)
 - Q: Is `/metrics` on by default? → A: Yes. It is local, pull-only, contains no prompt data, and follows the same bind and authentication rules as every other endpoint.
 - Q: What do clients see before the lazily loaded model is loaded? → A: `/v1/models`,
   `/mrun/status` and `mrun launch` report capacity from the cached probe, or the 004 fit estimate

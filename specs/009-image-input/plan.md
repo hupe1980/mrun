@@ -22,7 +22,7 @@ with only those codecs), `base64`, `sha2` 0.11 (already used by 004); resize is 
 the reference smart resize and PIL bicubic filter (R3, OQ-4); MLX ops through `mlx-sys`: `conv`
 (Conv3d as reshape + matmul if mlx-c lacks it; checked in T002), fused SDPA, `rope` variants
 **Storage**: Memory only (embedding cache, raw-bytes memo); vision sidecar (if needed) under
-`~/.mrun/sidecars/` as in 006
+`~/.mrun/sidecars/` (mechanism owned by 009, T027)
 **Testing**: `ScriptedEngine` gains media spans, position offsets and an encoder cost model; golden
 preprocessing fixtures (pixels and grids) generated from mlx-vlm `4623cf9` (MLX v0.32.4); macOS
 equality and conformance tests on Qwen3.6
@@ -63,7 +63,7 @@ specs/009-image-input/
 
 ```text
 crates/mrun-engine/src/
-├── models/qwen3_vl_vision.rs   # [mlx] patch embed, blocks with 2D RoPE, pos-embed interpolation, merger
+├── models/blocks/vision/qwen3_vl.rs  # [mlx] patch embed, blocks with 2D RoPE, pos-embed interpolation, merger
 ├── models/qwen3_5_moe.rs       # [mlx] M-RoPE (interleaved, [11,11,10]), embedding injection
 ├── vision.rs                   # VisionInfo, MediaSpan, position offset helpers (no MLX)
 └── load.rs                     # [mlx] keep vision tensors when enabled; sidecar merge
@@ -84,6 +84,11 @@ crates/mrun/tests/
 crates/mrun-engine/tests/
 ├── vision_conformance.rs  vision_equality.rs   # macOS, ignored by default
 ```
+
+**Cross-spec (010, not edited here)**: 010's family contract needs
+`fn vision(&self, cfg) -> Option<VisionSpec>` (default `None`; `qwen3_5_moe` returns the Qwen3-VL
+spec), and its locality rule must cover `models/blocks/vision/**` as shared blocks. Recorded as
+task T034.
 
 **Structure Decision**: Image parsing, preprocessing and digests live in `mrun` (portable, tested
 on Linux); the engine sees only pixel tensors, grids, spans and embedding ids, keeping engine types

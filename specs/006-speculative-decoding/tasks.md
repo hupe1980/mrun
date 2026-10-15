@@ -12,8 +12,8 @@ description: "Tasks for 006 Speculative Decoding"
 ## Phase 1: Setup and measure first
 
 - [ ] T001 `crates/mrun/src/spec/index.rs`: suffix automaton over token ids with sentinel-separated sources, incremental extension, longest-suffix lookup with most-recent tie-break; unit tests in `crates/mrun/tests/spec_index.rs`, plus a perf check (index build ≤ 10 ms per 100K tokens, plan Performance Goals)
-- [ ] T002 [P] `crates/mrun/src/spec/render.rs`: copy-aware rendering (line-number prefixes `␣*N→`/`␣*N<TAB>` stripped); tests with Claude Code `Read` output
-- [ ] T003 `crates/mrun/src/bench/suites/spec.rs` offline cell: reply tokens from the next request's history, simulated drafting, acceptance histogram, `copy_share_16`, `edit-heavy` label; result fields per contract (depends on T001, T002)
+- [ ] T002 [P] `crates/mrun/src/spec/render.rs`: copy-aware rendering (line-number prefixes `␣*N→`/`␣*N<TAB>` stripped) and, for JSON-argument syntaxes (Hermes, Harmony, Mistral), a JSON-escaped rendering (FR-003); tests with Claude Code `Read` output
+- [ ] T003 `crates/mrun/src/bench/suites/spec.rs` offline cell: reply tokens from the next request's history, simulated drafting, acceptance histogram per tool-call syntax, `copy_share_16`, `edit-heavy` label; result fields per contract (depends on T001, T002)
 - [ ] T004 Run `mrun bench --suite spec --offline` on the bundled traces; record the go/no-go note in `research.md` R8 (FR-001 offline part)
 
 **Checkpoint**: offline acceptance known; continue only if edit-heavy traces exist in the bundle.
@@ -22,7 +22,7 @@ description: "Tasks for 006 Speculative Decoding"
 
 - [ ] T005 `crates/mrun-engine/src/engine.rs`: `SpecCaps`, `DraftStep {id, before, width}`, `VerifyOutcome`, `ProposalId`, `forward_draft`, `accept`, `commit`, `spec_caps`, additive `EngineError::{Cancelled, Unsupported}` per contract; `ScriptedEngine` implementation with per-position token provenance and scripted acceptance (`crates/mrun/src/runtime/scripted.rs`)
 - [ ] T006 `crates/mrun-engine/src/sample.rs`: on-device greedy acceptance, point-proposal rejection sampling, residual sampling with the request RNG stream, acceptance ends at the first accepted EOS; `crates/mrun-engine/tests/spec_sampling.rs` chi-square test at a fixed draft-covered position on a tiny CPU model (SC-005)
-- [ ] T007 `crates/mrun-engine/src/mlx_engine.rs`: `forward_draft` (N+1 positions), `accept` and `commit(k)` for `qwen3`, `qwen3_moe`, `qwen3_5_moe`; attention rollback by trim; cancel per layer
+- [ ] T007 `crates/mrun-engine/src/mlx_engine.rs`: `forward_draft` (N+1 positions), `accept` and `commit(k)` on the generic `Graph` for every registered family (no per-family code); positional state (full, sliding-window, MLA) rolled back by trim; a family whose state kinds lack rollback returns `Unsupported` and the controller stays at depth 0; cancel per layer (FR-006)
 - [ ] T008 `crates/mrun-engine/src/state.rs`: keep the pre-round recurrent state and the round's per-position GDN inputs (conv input, q/k/v, g, β); on partial acceptance or `commit(k)`, recompute the recurrence over accepted + 1 positions from the pre-round state (R5); tests against a non-speculative run on a tiny random hybrid model (CPU), including EOS and stop-string cuts
 - [ ] T009 `crates/mrun-engine/src/budget.rs`: rollback input cache bytes (≤ 32 MiB at N = 64) in the scratch envelope; `max_draft` lowered until it fits (FR-013). (Verify-width probe calibration: removed, see FR-008.)
 
@@ -36,7 +36,7 @@ description: "Tasks for 006 Speculative Decoding"
 - [ ] T013 [US1] `crates/mrun/tests/spec_mutations.rs`: ≥ 100 cases (partial/full/zero acceptance, EOS and stop strings inside drafts, hybrid EOS and hybrid stop-string `commit(k)`, limit, cancel mid-round, `NeedsMemory` retry, hybrid rollback) asserting zero rejected tokens in state, store and stream (SC-004)
 - [ ] T014 [US1] `crates/mrun-engine/tests/spec_conformance.rs` (macOS): greedy `auto` vs `off` on 001 conformance prompts and teacher-forced traces; report divergences with margins (SC-003)
 
-**Checkpoint**: n-gram speculation works end to end on both models.
+**Checkpoint**: n-gram speculation works end to end on every Tier 1 0.1 model.
 
 ## Phase 4: US4 — visibility and control (P2)
 
@@ -49,8 +49,8 @@ T017–T020 moved to "Follow-up (gated)".
 
 ## Phase 6: Gates and polish
 
-- [ ] T021 Online `spec` cells (`off|ngram|auto`) in `bench/suites/spec.rs`; run on the target Mac for both models (FR-001 online part)
-- [ ] T022 SC-001: full bench `off` vs `auto` with `--baseline` at the 005 regression threshold (5 repetitions, medians); SC-002: edit-heavy decode ratio ≥ 1.3×; record results and flip the default to `auto` only if both pass
+- [ ] T021 Online `spec` cells (`off|ngram|auto`) in `bench/suites/spec.rs`; run on the target Mac on every Tier 1 0.1 model (FR-001 online part)
+- [ ] T022 SC-001: full bench `off` vs `auto` with `--baseline` at the 005 regression threshold (5 repetitions, medians) on every Tier 1 0.1 model; SC-002: edit-heavy decode ratio ≥ 1.3× on Qwen3.6-35B-A3B and the default model if different; record results and flip the default to `auto` only if both pass
 - [ ] T023 [P] Site page section "Speculative decoding" (how it works, how to turn it off, measured numbers)
 - [ ] T024 Fold cross-spec changes into the 001–005 contracts and specs/README index (plan "Cross-spec changes")
 - [ ] T025 [P] `crates/mrun/src/metrics.rs`: `mrun_spec_drafted_tokens_total`, `mrun_spec_accepted_tokens_total`, `mrun_spec_rounds_total` (label `drafter` = `ngram`) per 008 metrics contract; test with the scripted engine

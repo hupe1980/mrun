@@ -25,8 +25,8 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
   `magic "MRPS" | u32 format_version | u32 header_len | header JSON | token ids (u32 LE) |
   tensor blocks (16 KiB aligned) | footer {xxh3-64 per 4 MiB block, header xxh3}`. Header: cache
   key fields, MLX version, parent entry id and its `end`, `start`, `end`, `checkpoint: bool`, tensor
-  table (layer, kind `k|v|conv|delta`, dtype, shape, offset, length; attention tensors
-  `[heads, tokens, dim]`). Publish: write temp, `fcntl(F_FULLFSYNC)` on the file, rename,
+  table (layer, kind from 010 StateLayout — `k`, `v`, `mla_latent`, `mla_rope`, `gdn_conv`,
+  `gdn_delta`, `mamba_conv`, `mamba_ssm` — dtype, family-declared shape, offset, length). Publish: write temp, `fcntl(F_FULLFSYNC)` on the file, rename,
   `fcntl(F_FULLFSYNC)` on the directory (plain `fsync` does not reach stable storage on macOS;
   Linux uses `fsync`). Load allocates destination
   arrays through the engine (inside the budget), then `pread`s directly into their host pointers
@@ -45,7 +45,7 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
   tokens not yet on disk, after 2 s of server idleness, as an entry whose parent is the previous
   live-path entry; live-path entries are split at persisted checkpoints. Before a branch is
   written, the writer persists the live path up to the branch point `at`, so the branch's parent
-  exists on disk. Hybrids persist per turn only the end-of-prompt checkpoint (plus the system+tools
+  exists on disk. Families with position-bound state persist per turn only the end-of-prompt checkpoint (plus the system+tools
   checkpoint once); restore imports only the deepest checkpoint at or below the match. Writes
   happen once per range; LRU touches update mtime only. Tiny tails (< 256 tokens, which 003
   discards) are not persisted. Requests with `x-mrun-cache: off` are never persisted.

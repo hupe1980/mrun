@@ -59,7 +59,8 @@ pub trait Engine {
 }
 
 // PrefillPlan gains `media: &[MediaSpan]` (absolute, ascending). Positions inside a span take the
-// embedding rows in order; chunk ends may fall inside a span. Every embedding is resolved by the
+// embedding rows in order; chunk ends may fall inside a span only for causal-image-attention
+// families (`qwen3_5_moe`); others keep each span in one chunk (FR-011). Every embedding is resolved by the
 // caller before the call; the engine never encodes during prefill. Segments and checkpoints record
 // the position offset at their boundaries; split_off/append/restore_checkpoint restore it.
 pub struct Embedding { pub id: EmbeddingId, pub tokens: u32, pub bytes: u64 }

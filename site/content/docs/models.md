@@ -18,11 +18,14 @@ mrun supports an open set of model families. The first release covers these:
 
 Context figures are estimates from the [memory budget](@/docs/memory.md); `mrun pull` shows the
 exact value for your Mac. After the first release, GLM-4.7-Flash, Gemma 4 and Nemotron-H follow,
-then other families as coding agents adopt them (see the [roadmap](@/docs/roadmap.md)).
+then other families as coding agents adopt them (see the [roadmap](@/docs/roadmap.md)). These
+later families are planned, not supported yet: until a release lists them here, `mrun pull`
+refuses them.
 
-**The default model.** `qwen3.6` is the expected default: Alibaba reports 73.4% on SWE-bench
-Verified for it, and three of every four layers use linear attention, so a token of context costs
-about 20 KiB instead of 96 KiB and the full 262K window fits a 48 GB Mac. The default is chosen
+**The default model.** `qwen3.6` is the expected default: Alibaba's model card reports 73.4% on
+SWE-bench Verified (full-precision weights, Alibaba's harness; not measured by mrun), and three of
+every four layers use linear attention, so a token of context costs about 20 KiB, against 96 KiB
+for the full-attention Qwen3-Coder-30B-A3B, and the full 262K window fits a 48 GB Mac. The default is chosen
 among the models above by running the `mrun bench` agent suite before each release.
 
 ## How model support works
@@ -40,7 +43,8 @@ among the models above by running the `mrun bench` agent suite before each relea
 - **Every position stays reusable.** Sliding-window layers keep their full attention state and
   apply the window as a mask, so a cached prefix can be cut at any token, as with plain attention.
   Linear-attention state exists only for the position it was computed at, so mrun saves
-  checkpoints at message boundaries while it processes a prompt and resumes from the nearest one;
+  checkpoints at the end of the system prompt and tools, at the start of the last user or tool
+  message, and where the reply starts, while it processes a prompt, and resumes from the nearest one;
   see [Prefix cache](@/docs/prefix-cache.md).
 
 Other checkpoints of a supported family in MLX format also work by repository name:
@@ -81,7 +85,9 @@ mrun rm qwen3-coder     # warns if other tools use the same revision
 Models with a thinking mode follow the client: thinking is on when the request asks for it
 (Anthropic `thinking`, OpenAI `reasoning_effort` or Responses `reasoning.effort` other than
 `none`/`minimal`) and off otherwise. Override with
-`mrun serve --thinking on|off`. Qwen3-Coder and Devstral have no thinking mode.
+`mrun serve --thinking on|off`. gpt-oss always reasons: "off" selects low reasoning effort, and
+its reasoning is always returned in the API's reasoning field. Qwen3-Coder and Devstral have no
+thinking mode; a request for thinking gets a `thinking-unsupported` warning.
 
 ## Licenses
 

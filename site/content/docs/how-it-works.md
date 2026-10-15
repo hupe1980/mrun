@@ -40,10 +40,9 @@ explanations.
 
 All GPU work runs on a single engine thread that owns the model and the attention state. HTTP
 handlers only parse, queue and stream. Requests run one at a time in arrival order; others wait
-in a bounded queue with keepalives so clients don't time out. On a single Mac GPU, decode speed is
-limited by memory bandwidth, so running requests one after another loses little, keeps latency
-predictable and keeps reuse exact. Batching concurrent sessions is on the
-[roadmap](@/docs/roadmap.md) if measurements show agents waiting on each other.
+in a bounded queue with keepalives so clients don't time out. Requests run one after another,
+which keeps latency predictable and reuse exact. Whether batching would help is measured with
+`mrun bench` before it is added (see the [roadmap](@/docs/roadmap.md)).
 
 ## MLX from Rust
 
@@ -64,9 +63,9 @@ cached in the way that keeps reuse exact:
 - **Sliding-window attention** (gpt-oss) only looks at recent tokens, but mrun keeps the full
   state and applies the window as a mask, so any position stays reusable here too.
 - **Linear attention** (the hybrid layers of Qwen3.6) keeps one fixed-size state per layer. That
-  makes long context cheap — about 20 KiB per token instead of 96 KiB — but the state exists only
-  for the position it was computed at. mrun saves checkpoints of it at message boundaries while
-  processing a prompt, so an edited or branching conversation resumes from the nearest checkpoint
+  makes long context cheap — about 20 KiB per token, against 96 KiB for the full-attention Qwen3-Coder-30B-A3B — but the state exists only
+  for the position it was computed at. mrun saves checkpoints of it at the end of the system prompt and
+  tools, at the start of the last user or tool message, and where the reply starts, so an edited or branching conversation resumes from the nearest checkpoint
   instead of from the start.
 
 See [Models](@/docs/models.md) for the supported families.

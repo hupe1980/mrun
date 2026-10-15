@@ -8,8 +8,8 @@ weight = 120
 
 They are general-purpose local model runners. mrun is built for one workload: coding agents that
 resend a growing conversation every turn. That shapes everything — an exact prefix cache with miss
-explanations, a memory budget sized for long contexts, cancellation designed to free the server within 300 ms (a release gate measured on an M4 Pro,
-48 GB),
+explanations, a memory budget sized for long contexts, cancellation designed to free the server within 300 ms (release gate: p95 at 16K and 64K
+context for each first-release model on an M4 Pro, 48 GB; not yet measured),
 and first-class support for the Anthropic Messages and OpenAI Responses APIs that Claude Code and
 Codex use. If you chat with a model occasionally, any of those tools works well. If you run an
 agent for hours, mrun is designed for you.
@@ -62,8 +62,8 @@ No. It listens only on loopback by default, has no telemetry and does not log pr
 
 ## How good is a local model compared to a frontier API?
 
-Smaller. Qwen3.6-35B-A3B handles everyday edits, refactors and tool loops well, but it is not a
-substitute for the strongest hosted models on hard problems. mrun's goal is to make the local
+The supported models are much smaller than frontier models, and mrun does not measure their
+coding quality against hosted APIs; judge them on your own tasks. mrun's goal is to make the local
 option fast and dependable, not to claim parity.
 
 ## What license is mrun under?

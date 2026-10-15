@@ -135,15 +135,17 @@ speculation when diagnosing output differences.
 
 - **FR-001 (measure first)**: Before the controller ships enabled by default, `mrun bench --suite
   spec` MUST report, per bundled agent trace: the n-gram acceptance-length distribution simulated
-  offline against the recorded replies (tokenizer only, no model) and decode speed with
-  speculation `off`, `ngram` and `auto`. The default stays `off` until SC-001 and SC-002 pass.
+  offline against the recorded replies (tokenizer only, no model), reported per tool-call syntax,
+  and decode speed with speculation `off`, `ngram` and `auto`. The default stays `off` until SC-001 and SC-002 pass.
 - **FR-002**: The n-gram drafter MUST index, per request, the prompt tokens (which include every
   rendered tool call and tool result) and the tokens emitted so far, and propose the continuation
   of the most recent occurrence of the longest suffix match of at least `min_match` tokens.
 - **FR-003**: The drafter MUST also index a copy-aware rendering of tool-result and message text
   with line-number prefixes of file-read output removed (`␣*N→` and `␣*N<TAB>` at line start). The
   rendering is tokenized with the model tokenizer and used only for drafting, never rendered into
-  the prompt. (JSON-escaped renderings: removed.)
+  the prompt. For families whose tool-call syntax passes arguments as JSON (Hermes, Harmony,
+  Mistral), it MUST also index a JSON-escaped rendering of the same text, so copied file content
+  inside JSON string arguments matches.
 - **FR-004**: Removed (MTP drafter; see "Follow-up (gated)").
 - **FR-005**: The target MUST verify a draft of length N in one forward over N+1 positions and
   commit the longest accepted prefix plus one target token. Greedy: a draft token is accepted iff it
@@ -151,11 +153,13 @@ speculation when diagnosing output differences.
   probability p(x) and otherwise replaced by a sample from p with x removed and renormalized; p is
   the distribution after the request's temperature, top-k, top-p and min-p. Acceptance ends at the
   first accepted EOS (no position after it is committed).
-- **FR-006**: Rejected positions MUST be rolled back before the round ends. Attention state: trim.
-  Recurrent state (hybrids): the engine keeps the pre-round recurrent state and the round's
+- **FR-006**: Rejected positions MUST be rolled back before the round ends, per state kind (010
+  StateLayout). Positional state (full, sliding-window, MLA): trim. Gated DeltaNet state: the engine keeps the pre-round recurrent state and the round's
   per-position linear-attention inputs (conv input, q/k/v, g, β; ≈ 0.5 MiB per position on
   Qwen3.6-35B-A3B) and, on partial acceptance, recomputes only the recurrence over the accepted
-  positions plus one from the pre-round state; nothing is re-forwarded. Only committed tokens ever
+  positions plus one from the pre-round state; nothing is re-forwarded. Mamba2 state (and any state
+  kind without a rollback): the engine returns `Unsupported` and the controller stays at depth 0
+  for that family. Only committed tokens ever
   reach the prefix store, the conversation and the client.
 - **FR-007**: A per-model controller MUST choose a depth N ∈ {0} ∪ [N_min, N_max] maximizing
   expected committed tokens per second, where acceptance is measured by match-length bucket and
@@ -164,7 +168,8 @@ speculation when diagnosing output differences.
   (`pipeline = next_depth == 0`). The controller MUST probe deeper periodically with exponential
   back-off and MUST keep its statistics across requests in memory for the server's lifetime.
 - **FR-008**: Verify cost per width and context-length bucket MUST start from an analytic prior
-  (decode cost scaled by the expected union of routed experts for the width) and be refined by an
+  (MoE: decode cost scaled by the expected union of routed experts for the width; dense: decode
+  cost, since every position reads the same weights, plus per-position attention cost) and be refined by an
   online EWMA of measured rounds. No probe calibration, nothing persisted.
 - **FR-009**: Speculation MUST NOT run for requests with a grammar mask, an explicit `seed`,
   `logprobs`, or a remaining output limit of 1; the metadata names the reason (`grammar`, `seed`,
@@ -202,8 +207,8 @@ speculation when diagnosing output differences.
 - **ProposalId**: Device-side handle of a proposal distribution; unused by n-gram drafts (`None`),
   reserved for the follow-up.
 - **Verify Round**: Draft, accepted length, bonus token, wall time, context-length bucket.
-- **Draft Index**: Suffix structure over prompt, output and the line-number-stripped rendering of
-  one request.
+- **Draft Index**: Suffix structure over prompt, output and the copy-aware renderings (line-number-stripped;
+  JSON-escaped for JSON-argument syntaxes) of one request.
 - **Controller State**: Per model: acceptance statistics, per-depth cost curve, current depth,
   probe interval.
 
@@ -213,11 +218,12 @@ speculation when diagnosing output differences.
 
 - **SC-001**: With speculation `auto`, no `mrun bench` cell (synthetic prefill and decode at every
   size, every agent trace's TTFT and session time) is slower than with `off` beyond the 005
-  regression threshold (5 repetitions, medians), on Qwen3.6-35B-A3B and Qwen3-Coder-30B-A3B 4-bit
-  on the target Mac.
+  regression threshold (5 repetitions, medians), on every Tier 1 0.1 model (Qwen3.6-35B-A3B,
+  Qwen3-Coder-30B-A3B, gpt-oss-20b, Devstral Small 2, Qwen3-8B) on the target Mac.
 - **SC-002**: On the edit-heavy traces (bench traces where at least 40% of reply tokens lie in
   matches of ≥ 16 tokens against the prompt), median decode tokens per second with `auto` is at
-  least 1.3× that with `off`, on both models.
+  least 1.3× that with `off`, on Qwen3.6-35B-A3B and on the default model if different; other
+  models need only SC-001.
 - **SC-003**: On 001's conformance prompts and the bundled traces (teacher-forced), greedy output
   with `auto` equals `off` token for token in at least 95% of sequences; every divergence occurs at
   a position whose `off` top-2 logit margin is below the chunked-prefill tolerance (log-probability

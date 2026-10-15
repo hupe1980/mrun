@@ -18,7 +18,7 @@ Before the model is loaded (service mode without `--preload`, D022), only `mrun_
 | Name | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `mrun_build_info` | gauge (1) | `version`, `commit`, `mlx_version` | Build identity |
-| `mrun_model_info` | gauge (1) | `model`, `identity` (first 12 hex), `architecture`, `quantization` | Loaded model |
+| `mrun_model_info` | gauge (1) | `model`, `identity` (first 12 hex), `architecture`, `family`, `syntax`, `tier`, `quantization` (e.g. `affine4`, `mxfp4+affine8`) | Loaded model |
 | `mrun_start_time_seconds` | gauge | — | Server start (Unix time) |
 | `mrun_model_loaded` | gauge | — | 1 once the model is loaded, else 0 |
 

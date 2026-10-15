@@ -6,11 +6,11 @@
 
 ## Summary
 
-An opt-in disk tier below 003's memory store. Branch segments and hybrid checkpoints are written
+An opt-in disk tier below 003's memory store. Branch segments and checkpoints of position-bound state are written
 once, as exact bytes with their token ids, by a background writer reading immutable host views
 handed over by the engine thread; the live path is written after 2 s of idleness. Entries are
 self-describing files bound to the full cache key, format and MLX version; startup rebuilds an
-in-memory index from headers. Hybrids persist per turn only the end-of-prompt checkpoint (plus
+in-memory index from headers. Families with position-bound state persist per turn only the end-of-prompt checkpoint (plus
 system+tools once); branch entries always have a persisted parent (the live path is written up to
 the branch point first). Lookup confirms by full token comparison, and restore reads straight into
 budgeted arrays with per-block checksums when the disk match extends the memory match by ≥ 512

@@ -37,7 +37,7 @@ evict first) → reader fills buffers (checksums per block) → `import_seal` �
 `append(consume: true)` / `restore_checkpoint` → prefill the gap → decode → `finish` (memory) →
 after 2 s idle: writer job for the live path (split at persisted checkpoints). Branch move-out
 (003) first enqueues the live path up to the branch point `at` (if not yet persisted), then the
-moved segment, so the branch entry has a persisted parent. Hybrids write per turn only the
+moved segment, so the branch entry has a persisted parent. Families with position-bound state write per turn only the
 end-of-prompt checkpoint, plus the system+tools checkpoint once. Nothing is written for requests
 with `x-mrun-cache: off`. Quiesce before any mutation (including eviction) waits at most one 4 MiB
 block. Any reader error before sealing drops the buffers and falls back to recompute; the

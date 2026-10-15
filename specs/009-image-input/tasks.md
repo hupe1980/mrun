@@ -33,7 +33,7 @@ description: "Tasks for 009 Image Input"
 
 ## Phase 3: US1 — Show the agent a screenshot (P1) 🎯 MVP
 
-- [ ] T014 [US1] `models/qwen3_vl_vision.rs` [mlx]: patch embed, blocks with 2D RoPE, position-embedding interpolation, merger; loader keeps vision tensors when enabled (`--no-vision` skips them)
+- [ ] T014 [US1] `models/blocks/vision/qwen3_vl.rs` [mlx]: patch embed, blocks with 2D RoPE, position-embedding interpolation, merger; loader keeps vision tensors when enabled (`--no-vision` skips them)
 - [ ] T015 [US1] `models/qwen3_5_moe.rs` [mlx]: interleaved M-RoPE `[11,11,10]` with text positions equal on all axes (text-only path bit-identical to before); embedding injection at span positions; `next_position`
 - [ ] T016 [US1] Budget: tower weights measured, encoder scratch probed at `max_image_tokens` (extends 001 FR-008 cache key with vision settings); `--info`, `mrun ps`, `/mrun/status` breakdown (FR-007)
 - [ ] T017 [US1] Worker: split prefill at each uncached span start, resolve its embedding (cache or encode from re-decoded pixels) before that prefill call, one image at a time; release uncached embeddings after commit; engine `allocated()` includes embedding bytes (003 invariant); cancel during encoding
@@ -52,7 +52,7 @@ description: "Tasks for 009 Image Input"
 
 - [ ] T025 [US3] No active tower → 002 FR-020 path untouched; run 002's image tests on a text-only model and with `--no-vision` (SC-007)
 - [ ] T026 [US3] `/v1/models` capabilities; 004 `launch`/`connect`: Codex catalog `input_modalities`, OpenCode `modalities.input`, Claude Code warning when vision is off; snapshot tests; update the 004 CLI contract when it lands
-- [ ] T027 [US3] 004 `pull`/`show`/`ls`: vision presence from the index; sidecar fetch via 006's range-request path if T001 found no tower (FR-015), implemented here if 006 has not shipped it; identity includes `preprocessor_config.json` and the sidecar hash (FR-008); test that changing either changes the identity
+- [ ] T027 [US3] 004 `pull`/`show`/`ls`: vision presence from the index; sidecar fetch by range requests if T001 found no tower (FR-015), mechanism owned and implemented here; identity includes `preprocessor_config.json` and the sidecar hash (FR-008); test that changing either changes the identity
 
 ## Phase 6: US4 — Vision fits the budget (P2)
 
@@ -64,6 +64,7 @@ description: "Tasks for 009 Image Input"
 - [ ] T030 [P] `mrun bench --suite vision` cells: encoder time per size, TTFT overhead cold and warm; add the suite to the 005 contract and 004 CLI contract when it lands
 - [ ] T031 [P] Site page `site/content/docs/images.md` (sources, limits, no remote fetching, memory cost, `--no-vision`); update 002/003/004 public docs where behaviour changes
 - [ ] T032 [P] Audit test: with images in requests, server logs, `/mrun/status`, `/metrics` and error messages contain no pixels, raw bytes or digests (FR-016)
+- [ ] T034 Cross-spec request to 010's owner (do not edit 010 here): add `fn vision(&self, cfg) -> Option<VisionSpec>` to the family contract (default `None`) and extend the locality rule to `models/blocks/vision/**`; T014 depends on it
 - [ ] T033 When this feature lands, reconcile upstream specs: 002 FR-020 (images accepted with vision), 002 contract metadata, 003 contract and data model (key symbols, `image` cause, offsets), 004 CLI contract, 005 contract, 008 metrics contract
 
 ## Dependencies
@@ -71,7 +72,6 @@ description: "Tasks for 009 Image Input"
 - Gate: T001–T006 before everything else; T006 decides whether Phase 1 starts.
 - 001: engine, budget, probe (T014–T016). 002: parsing, renderer, metadata (T011, T012, T018).
   003: store (T020–T023). 004: launch, pull (T026, T027). 005: trace stats and harness (T004, T029).
-  006: sidecar mechanism (T027, only if needed; built in 009 if 006 has not shipped it).
   008: `/metrics` exporter (T003).
 - T007 → T008 → T009/T010 → T011 → T012 → T013 → T014 → T015 → T016 → T017 → T018 (MVP) → T019;
   T020 → T021 → T022 → T023 → T024; T025–T028 after T018; T027 → T014 when T001 found no tower; T029–T033 last.

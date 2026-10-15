@@ -40,7 +40,7 @@ Revisions: mlx-lm `ba8a08f` (2026-10-10), mlx-vlm `4623cf9` (2026-10-14), Codex 
 - **Decision**: 004's pinned `qwen3.6` repository stays the source. `mrun pull` inspects the
   safetensors index: vision tensors present → the manifest records `vision: present` with their
   precision and bytes. Absent → a vision sidecar is fetched from the pinned original repository by
-  range requests, exactly as 006 R1 does for `mtp.*` (cast to bf16, no quantization, hashes pinned).
+  range requests (mechanism owned by 009, T027; cast to bf16, no quantization, hashes pinned).
   Which case applies to the pinned revision is open question OQ-1.
 
 ## R3: How the vision path works (mlx-vlm reference)
@@ -67,8 +67,9 @@ Revisions: mlx-lm `ba8a08f` (2026-10-10), mlx-vlm `4623cf9` (2026-10-14), Codex 
   equal token indices (`language.py:993-1007` tiles the 1D offset ×3), which is why the text-only
   path (mlx-lm, mrun 001) is exact with plain RoPE **[I]**.
 - **Gated DeltaNet layers [I]**: position-free; they consume image embeddings like any other
-  input. LLM attention over image tokens is causal, so a prefill chunk may end inside an image span
-  and recomputation is exact (unlike bidirectional-image models, where Ollama forbids resume points
+  input. In `qwen3_5_moe` LLM attention over image tokens is causal, so a prefill chunk may end
+  inside an image span and recomputation is exact; families with bidirectional image attention keep
+  each span in one chunk (FR-011) (unlike bidirectional-image models, where Ollama forbids resume points
   inside a media item, `mlxrunner/prefix_cache.go:22`).
 
 ## R4: How agent clients send images

@@ -27,8 +27,8 @@ header and compared field by field.
 | start, end | u32 | state range `[start, end)`; `start == parent.end` or 0 |
 | tokens | u32 × end | full prefix token ids |
 | boundaries | list of {pos, kind} | message boundaries inside `(start, end]` (lookup hashes) |
-| checkpoint | bool | recurrent state at `end` included (hybrids; only end-of-prompt per turn, plus system+tools once) |
-| tensors | list of {layer, kind `k`\|`v`\|`conv`\|`delta`, dtype, shape, offset, len} | 16 KiB aligned; attention `k`/`v` shape `[heads, tokens, dim]` |
+| checkpoint | bool | recurrent state at `end` included (families with position-bound state; only end-of-prompt per turn, plus system+tools once) |
+| tensors | list of {layer, kind, dtype, shape, offset, len}; kind from 010 StateLayout: `k`, `v`, `mla_latent`, `mla_rope`, `gdn_conv`, `gdn_delta`, `mamba_conv`, `mamba_ssm` | 16 KiB aligned; shapes as declared by the family's StateLayout (e.g. attention `k`/`v` `[heads, tokens, dim]`) |
 | checksums | xxh3-64 per 4 MiB block + header hash | verified on load |
 | size | u64 | file length |
 | last_use | file mtime | touched on reuse |
