@@ -1,7 +1,8 @@
 # mrun Specs
 
-**Updated**: 2026-10-15 (design sprint 3, lean 0.1 cut, D025) · **Status**: No feature implemented
-beyond the portable foundation of 001.
+**Updated**: 2026-10-15 (design sprint 3, lean 0.1 cut, D025; implementation sprint) · **Status**:
+the portable (Linux-testable) parts of 002, 003, 004 and 008 are implemented on the scripted
+engine; the MLX engine (001) and every gate measured on the target Mac are open.
 
 mrun is a local inference server for coding agents on Apple Silicon. See
 [concepts/VISION](../concepts/VISION.md) for the product, [concepts/ROADMAP](../concepts/ROADMAP.md)
@@ -25,11 +26,11 @@ engineering principles.
 | # | Feature | Release | Depends on | Covers | Status |
 | --- | --- | --- | --- | --- | --- |
 | 001 | [Engine core](001-engine-core/spec.md): 0.1 families (Qwen3.6 hybrid, Qwen3-Coder, gpt-oss; Qwen3-8B test reference) on a block library; budget; checkpoints; cancellation | 0.1 (M0–M1) | — | PR-3, PR-4, PR-5 | Foundation implemented; MLX engine in progress |
-| 002 | [Agent APIs](002-agent-apis/spec.md): Messages, Chat Completions, Responses; MCP, namespaces, deferred tools; owns the client gate (SC-001) | 0.1 (M2) | 001 | PR-1, PR-4, PR-5 | Planned |
-| 003 | [Prefix cache](003-prefix-cache/spec.md): live path plus moved branches, hybrid checkpoints, five-cause miss reports | 0.1 (M3) | 001, 002 | PR-2, PR-3 | Planned |
-| 004 | [Models and CLI](004-models-cli/spec.md): pull, launch, connect (print), doctor, ps; three aliases | 0.1 (M4) | 001; 002 for launch/connect/ps | PR-6 | Planned |
+| 002 | [Agent APIs](002-agent-apis/spec.md): Messages, Chat Completions, Responses; MCP, namespaces, deferred tools; owns the client gate (SC-001) | 0.1 (M2) | 001 | PR-1, PR-4, PR-5 | Implemented on the scripted engine; client gate (macOS) open |
+| 003 | [Prefix cache](003-prefix-cache/spec.md): live path plus moved branches, hybrid checkpoints, five-cause miss reports | 0.1 (M3) | 001, 002 | PR-2, PR-3 | Implemented on the scripted engine; MLX equality and pressure source (macOS) open |
+| 004 | [Models and CLI](004-models-cli/spec.md): pull, launch, connect (print), doctor, ps; three aliases | 0.1 (M4) | 001; 002 for launch/connect/ps | PR-6 | Client side implemented; hub (pull/ls/show/rm/verify) in progress |
 | 005 | [Benchmark harness](005-bench/spec.md): in-order trace replay, fair comparisons incl. Splash | 0.1 (M5) | 002; 003 for cache cells; 004 (xtask, aliases) | PR-7 | Planned |
-| 008 | [Distribution](008-distribution/spec.md): Homebrew tap, ad-hoc-signed tarball, `--version`, sleep assertion (service, `/metrics`, notarization later) | 0.1 (M6) | 002, 004 | PR-6 | Planned |
+| 008 | [Distribution](008-distribution/spec.md): Homebrew tap, ad-hoc-signed tarball, `--version`, sleep assertion (service, `/metrics`, notarization later) | 0.1 (M6) | 002, 004 | PR-6 | `--version`, power assertion, release workflow and formula template done; dry run and first RC open |
 | 010 | [Model families](010-model-families/spec.md): family contract and post-0.1 families (Devstral 0.2; GLM, Gemma 4, Nemotron-H later); the 0.1 family modules are delivered by 001 | 0.2+ | 001, 002, 003, 004, 005 | PR-1 | Planned |
 | 006 | [Speculative decoding](006-speculative-decoding/spec.md): copy-aware n-gram drafts (MTP heads gated on measurement) | After 0.1 | 001, 003, 005 | PR-1 | Planned (measure first) |
 | 007 | [Persistent prefix tier](007-persistent-prefix-tier/spec.md): opt-in SSD branches and checkpoints | After 0.1 | 003, 005 | PR-2, PR-5 | Planned (measure first) |
