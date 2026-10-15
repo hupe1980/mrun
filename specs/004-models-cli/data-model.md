@@ -49,4 +49,5 @@ States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (has
 [limits]  body_mib = 8  messages = 4096  tools = 256  schema_kib = 64  schema_depth = 16
 ```
 
-Every key is optional; `mrun config` shows effective values and sources.
+Every key is optional; `mrun config` shows effective values and sources. Environment variables
+are `MRUN_<SECTION>_<KEY>` (for example `MRUN_SERVER_PORT`, `MRUN_MEMORY_RESERVE_GIB`).

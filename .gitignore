@@ -56,3 +56,6 @@ Thumbs.db
 .vscode/
 
 TODO.md
+
+# Zola build output
+site/public/

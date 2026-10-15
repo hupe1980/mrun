@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {%- block seo %}
+  {%- set page_title = config.title %}
+  {%- set page_description = config.description %}
+  {%- set page_url = config.base_url ~ "/" %}
+  {%- endblock seo %}
+  {% include "partials/head.html" %}
+  {%- block structured_data %}{% endblock structured_data %}
+</head>
+<body class="{% block body_class %}{% endblock body_class %}">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <nav class="nav wrap" aria-label="Primary">
+      <a class="brand" href="{{ get_url(path='/') }}" aria-label="mrun home">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M8 22V11l5 6 5-6v11M21 22v-6.5a2.5 2.5 0 0 1 5 0"/></svg>
+        <span>mrun</span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="{{ get_url(path='@/docs/getting-started.md') }}">Docs</a></li>
+        <li><a href="{{ get_url(path='@/docs/clients.md') }}">Clients</a></li>
+        <li><a href="{{ get_url(path='@/docs/how-it-works.md') }}">How it works</a></li>
+        <li><a href="{{ get_url(path='@/docs/roadmap.md') }}">Roadmap</a></li>
+        <li><a class="nav-gh" href="{{ config.extra.repo }}" rel="noopener">GitHub</a></li>
+      </ul>
+    </nav>
+  </header>
+  <main id="main">
+    {%- block content %}{% endblock content %}
+  </main>
+  <footer class="site-footer">
+    <div class="wrap footer-grid">
+      <div>
+        <p class="brand-small">mrun</p>
+        <p class="muted">Local inference for coding agents on Apple Silicon. MIT OR Apache-2.0.</p>
+      </div>
+      <nav aria-label="Footer">
+        <ul>
+          <li><a href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a></li>
+          <li><a href="{{ get_url(path='@/docs/api.md') }}">API reference</a></li>
+          <li><a href="{{ get_url(path='@/docs/faq.md') }}">FAQ</a></li>
+          <li><a href="{{ config.extra.repo }}" rel="noopener">Source code</a></li>
+        </ul>
+      </nav>
+    </div>
+  </footer>
+  {%- block scripts %}{% endblock scripts %}
+</body>
+</html>
