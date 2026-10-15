@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-engine-core`
 
-**Created**: 2026-10-14 · **Revised**: 2026-10-15 (design sprint 3: hybrid default, reshaped engine contract, audit fixes)
+**Created**: 2026-10-14 · **Revised**: 2026-10-15 (design sprint 3: hybrid default, reshaped engine contract, audit fixes; open model architecture, D015)
 
 **Status**: Draft
 
@@ -18,13 +18,20 @@
 
 ### Session 2026-10-15
 
-- Q: Which models? → A: Qwen3-8B (dense, correctness reference), Qwen3-Coder-30B-A3B (attention MoE), Qwen3.6-35B-A3B (hybrid: 30 Gated DeltaNet + 10 gated attention layers, MoE 256 experts, `model_type` `qwen3_5_moe`). The default is confirmed by `mrun bench` before release (D015).
+- Q: Which models? → A: Qwen3-8B (dense, correctness reference), Qwen3-Coder-30B-A3B (attention MoE), Qwen3.6-35B-A3B (hybrid: 30 Gated DeltaNet + 10 gated attention layers, MoE 256 experts, `model_type` `qwen3_5_moe`). The default is confirmed by `mrun bench` before release (D015). *Extended below: 0.1 adds gpt-oss-20b and Devstral Small 2.*
 - Q: What is "greedy parity"? → A: The token chosen is the argmax over log-probabilities (`logits − logsumexp(logits)`) computed in the logits dtype, exactly as mlx-lm `generate_step` does, with the same prefill chunk split. Any fused (compiled) op mlx-lm uses must be bitwise-equal in mrun: either compiled the same way or proven equal unfused.
-- Q: What is the sequence state? → A: Attention K/V per attention layer (cut at any position by offset) plus, for hybrid models, the recurrent state (convolution + delta-rule state) per linear layer, which exists only at the position it was computed for. Hybrid models resume earlier positions from checkpoints.
+- Q: What is the sequence state? → A: **Positional state**, the K/V of every attention layer (cut at any position by offset), plus, for models with linear-attention layers, **position-bound state** (convolution + delta-rule state per linear layer), which exists only at the position it was computed for. Models with position-bound state resume earlier positions from checkpoints (ARCHITECTURE "Sequence state").
 - Q: How large is a prefill chunk? → A: Depth-adaptive: `clamp(2048 × 16384 / depth, 128, 2048)` tokens where depth is the chunk's start position; chunks also end at caller-given boundaries. Cancellation is checked after every layer with one layer in flight. A cancelled partial chunk is discarded; whole chunks are kept.
 - Q: When is memory allocated? → A: Lazily and in steps, never above the request's reserved total or the state capacity. Before any allocation the engine reports the bytes it needs so the caller can evict cache first.
 - Q: What does a conversation keep after a turn? → A: Exactly its committed tokens: prompt plus emitted output. Held-back, stop-matched and pipelined tokens are trimmed.
 - Q: Is the model ever unloaded when idle? → A: No (D020).
+
+### Session 2026-10-15 (open model architecture, D015)
+
+- Q: One model or many? → A: An open set of **families**. A family module maps `config.json` and weight names onto a shared block library (attention: full GQA, sliding window with optional sinks; Gated DeltaNet; dense SwiGLU and MoE feed-forward; norms; RoPE variants) and composes the layer stack; it is a port of the mlx-lm reference with a parity test. Block library, family registry, chat-syntax registry and the post-0.1 families are spec 010; 001 delivers the blocks and families of release 0.1.
+- Q: Which families ship in 0.1? → A: `qwen3_5_moe` (Qwen3.6-35B-A3B, default candidate), `qwen3_moe` (Qwen3-Coder-30B-A3B), `gpt_oss` (gpt-oss-20b, MXFP4), `mistral` (Devstral Small 2 24B, dense) and `qwen3` (Qwen3-8B, correctness reference).
+- Q: How are sliding-window layers (gpt-oss) stored? → A: Full KV is kept and the window is applied when attending, so they are positional state like any attention layer: trimmable and movable at any position. A rotating buffer would make earlier positions unrecoverable; the cost is small (gpt-oss: 12 of 24 layers, 24 KiB per token).
+- Q: What happens with an unknown `model_type`? → A: Refused at load, before weights are read, with the list of supported families.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -45,10 +52,12 @@ cached tokens on the second answer.
 1. **Given** a supported model on disk, **When** the developer runs `mrun run <model>` and enters a
    prompt, **Then** the answer streams until the model stops or reaches the output limit.
 2. **Given** an active conversation, **When** the developer enters a follow-up, **Then** the model
-   answers with the earlier turns as context and only the new turn is processed (hybrid models:
-   plus at most the previous reply, when the template re-renders it differently).
+   answers with the earlier turns as context and only the new turn is processed (models with
+   position-bound state: plus at most the previous reply, when the template re-renders it
+   differently).
 3. **Given** a model name or path that does not exist or is not supported, **When** the developer
-   runs `mrun run`, **Then** mrun exits with a message naming the problem and the next step.
+   runs `mrun run`, **Then** mrun exits with a message naming the problem and the next step; an
+   unsupported architecture names its `model_type` and lists the supported families.
 
 ---
 
@@ -95,15 +104,15 @@ prompts at capacity − 1 and capacity tokens, and an oversized output limit.
    rejects it before processing, stating requested tokens and capacity.
 3. **Given** an output limit larger than the remaining capacity, **When** submitted, **Then** the
    limit is clamped, the applied limit is reported, and generation stops with "length" there.
-4. **Given** `mrun run --info`, **When** the model loads, **Then** mrun prints weights, scratch,
-   recurrent state, state capacity in tokens and bytes, probed depth, reserve and headroom.
+4. **Given** `mrun run --info`, **When** the model loads, **Then** mrun prints family, weights, scratch,
+   position-bound state, state capacity in tokens and bytes, probed depth, reserve and headroom.
 
 ---
 
 ### User Story 4 - Trustworthy output (Priority: P2)
 
 A maintainer verifies that mrun produces exactly the reference implementation's greedy tokens on
-the same weights for every supported model, that chat templates render exactly as Hugging Face
+the same weights for every supported family, that chat templates render exactly as Hugging Face
 does, and that sampling controls behave as documented.
 
 **Why this priority**: Exactness is the foundation for prefix reuse (003) and fair benchmarks.
@@ -127,7 +136,7 @@ does, and that sampling controls behave as documented.
 ### User Story 5 - State primitives for branching (Priority: P2)
 
 A maintainer of the prefix cache (003) can move the tail of the conversation state out, restore
-recurrent state from a checkpoint, and move a stored tail back in, without ever holding the same
+position-bound state from a checkpoint, and move a stored tail back in, without ever holding the same
 state twice and without changing results.
 
 **Why this priority**: Subagents and retries must not destroy the main conversation (D017); the
@@ -142,11 +151,15 @@ uninterrupted run that used the same chunk split.
 1. **Given** a live conversation, **When** its tail is split off and appended back, **Then** the
    next-token logits are bit-identical to never having moved it, and peak memory never exceeds
    the state capacity plus one layer.
-2. **Given** a hybrid conversation with a checkpoint at position p, **When** state is restored to
+2. **Given** a conversation on a model with position-bound state and a checkpoint at position p, **When** state is restored to
    that checkpoint and the gap re-prefilled with the same chunk split, **Then** logits are
    bit-identical to the uninterrupted run.
 3. **Given** state growth that needs memory, **When** cache holds evictable state, **Then** the
    engine reports the bytes before allocating, the caller evicts, and the operation succeeds.
+4. **Given** a gpt-oss conversation longer than the sliding window, **When** it is trimmed or its
+   tail is split off at an arbitrary position (inside or beyond the last window) and prefill
+   continues with the same chunk split, **Then** next-token logits are bit-identical to the
+   uninterrupted run.
 
 ### Edge Cases
 
@@ -160,13 +173,16 @@ uninterrupted run that used the same chunk split.
   never blocks on it again and still delivers `Finished` without waiting.
 - A panic inside a request: that request finishes with an error, the state is reset, the worker
   keeps serving.
-- Hybrid divergence inside the previous reply: state resumes from the deepest checkpoint at or
+- Divergence inside the previous reply on a model with position-bound state: state resumes from the deepest checkpoint at or
   below the divergence and the gap is re-processed.
 - Model files changed on disk after load: the loaded weights keep serving; the change is reported
   at next load (identity covers `generation_config.json` and `special_tokens_map.json` too).
 - Other applications consume memory after startup: `--info` reports reduced headroom; cache is
   shed first (003).
-- Unsupported architecture, quantization or tensor layout: rejected at load with the reason.
+- Unsupported architecture, quantization or tensor layout: rejected at load with the reason;
+  an unknown `model_type` lists the supported families.
+- A gpt-oss prompt shorter than the sliding window: sliding layers attend to all positions,
+  exactly like full layers.
 
 ## Requirements *(mandatory)*
 
@@ -174,11 +190,18 @@ uninterrupted run that used the same chunk split.
 
 - **FR-001**: `mrun run <model>` MUST load a supported model from a local path, a Hugging Face cache
   repo id, or (with 004) an alias, and start an interactive streaming chat session.
-- **FR-002**: The engine MUST run three architectures in the community MLX quantized format
-  (affine 4-bit, with 8-bit router and shared-expert gates): `qwen3` (reference Qwen3-8B),
-  `qwen3_moe` (Qwen3-Coder-30B-A3B-Instruct) and `qwen3_5_moe` (Qwen3.6-35B-A3B, text model only;
-  vision and `mtp.*` tensors ignored). Other architectures and layouts MUST be rejected with a named
-  reason.
+- **FR-002**: The engine MUST run the release-0.1 families in the community MLX quantized format
+  (affine 4-/8-bit and MXFP4 via the quantization `mode`, with per-path overrides such as 8-bit
+  routers and shared-expert gates), each built from the shared block library (FR-023):
+  `qwen3_5_moe` (Qwen3.6-35B-A3B: 30 Gated DeltaNet + 10 gated attention layers, MoE; text model
+  only, vision and `mtp.*` tensors ignored), `qwen3_moe` (Qwen3-Coder-30B-A3B-Instruct: full
+  attention, MoE), `gpt_oss` (gpt-oss-20b: MXFP4 experts, attention alternating sliding window 128
+  and full, both with per-head sinks, MoE with biases), `mistral` (Devstral Small 2 24B,
+  `model_type` `mistral3` with text config `ministral3`: dense full attention, YaRN RoPE with
+  position-scaled queries; vision tower and projector ignored) and `qwen3` (Qwen3-8B, dense
+  reference). An unknown `model_type` MUST be refused before weights are read, naming it and
+  listing the supported families; unsupported quantization modes, layouts or tensor names MUST be
+  rejected with a named reason.
 - **FR-003**: Every loaded model MUST have a content identity over all files that determine output:
   weights, `config.json`, `generation_config.json`, `tokenizer.json`, `tokenizer_config.json`,
   `special_tokens_map.json`, `chat_template.jinja`. End-of-sequence tokens MUST be the union of the
@@ -188,8 +211,8 @@ uninterrupted run that used the same chunk split.
   processes only new tokens. The runtime MUST track committed tokens (prompt + emitted output) and,
   after every finish (stop, EOS, stop sequence, length, cancel, error), leave the state holding
   exactly the longest committed prefix it can represent: held-back, stop-matched and pipelined
-  tokens are trimmed; hybrid models that cannot trim that far resume from the deepest checkpoint
-  at or below it. The runtime's view of the state MUST equal the engine's token for token.
+  tokens are trimmed; models with position-bound state that cannot trim that far resume from the
+  deepest checkpoint at or below it. The runtime's view of the state MUST equal the engine's token for token.
 - **FR-005**: Prompt processing MUST run in chunks of `clamp(2048 × 16384 / depth, 128, 2048)`
   tokens (depth = chunk start, minimum 1), ending additionally at caller-given boundaries and
   planned checkpoint positions; it MUST keep one layer in flight and check cancellation after
@@ -203,11 +226,11 @@ uninterrupted run that used the same chunk split.
   MLX device info (`memory_size`, `max_recommended_working_set_size`). Users may lower the budget,
   and raise it only with an explicit flag.
 - **FR-007**: Before loading weights the engine MUST estimate weights from file sizes and refuse a
-  model whose weights + scratch estimate + recurrent state + 4,096 tokens of attention state
-  exceed the budget, stating each number; after loading it MUST verify with measured sizes.
+  model whose weights + scratch estimate + position-bound state + 4,096 tokens of attention state
+  (the family's bytes per token) exceed the budget, stating each number; after loading it MUST verify with measured sizes.
 - **FR-008**: The engine MUST measure peak scratch by probe chunks at the deepest admissible
   position and at the largest chunk (including the one-layer copy transient of growth and moves,
-  and the recurrent rollback copy), cache it per (model identity, machine, macOS, MLX version,
+  and the position-bound rollback copy), cache it per (model identity, machine, macOS, MLX version,
   mrun version, chunk policy), and size state capacity from the remainder. Callers never budget the
   move transient separately. Token capacity MUST NOT exceed the model's maximum position or the
   probed depth.
@@ -241,38 +264,59 @@ uninterrupted run that used the same chunk split.
 - **FR-018**: An in-repo engine benchmark MUST measure prompt-processing speed, generation speed
   and cancellation latency at configurable depths and write results with machine and model
   identity.
-- **FR-019**: For hybrid models the engine MUST capture checkpoints (deep copies of all recurrent
-  state) at planned positions during prefill and on request at the current position, restore
-  recurrent state from a checkpoint (attention state cut to its position), and drop checkpoints.
+- **FR-019**: For models with position-bound state the engine MUST capture checkpoints (deep
+  copies of all position-bound state) at planned positions during prefill and on request at the
+  current position, restore position-bound state from a checkpoint (positional state cut to its
+  position), and drop checkpoints. For models without it, checkpoints are zero-byte.
 - **FR-020**: The engine MUST move the tail of the live state into an owned segment and back,
   one layer at a time, freeing the source as it goes, so no state is held twice.
 - **FR-021**: Chat templates MUST render as Hugging Face does: `trim_blocks` and `lstrip_blocks`,
   a `tojson` equal to Python `json.dumps` (no HTML escaping, `", "`/`": "` separators, `indent`
   supported, non-ASCII kept), Python string methods and `raise_exception`.
 - **FR-022**: The loaded model MUST stay resident; it is never unloaded on an idle timer.
+- **FR-023**: Each family MUST be one module that maps its `config.json` and weight names onto the
+  shared block library and composes the layer stack; family-specific logic MUST NOT appear outside
+  that module and its chat syntax (constitution V). The family registry maps `model_type` (and,
+  for wrapped configs, `text_config.model_type`) to a module, its state kinds and its chat syntax
+  (002); its full design is spec 010. Each module is a port of the pinned mlx-lm reference with a
+  parity test (SC-001).
+- **FR-024**: Sliding-window attention layers MUST keep the full KV of every position and apply the
+  window when attending (attending only to the last `window` positions, in position order), so
+  their state is positional: trim, `split_off` and `append` are exact at any position, with no
+  checkpoint. Attention sinks (per-head logits added to the softmax denominator) MUST be passed to
+  the fused attention kernel as in the reference.
+- **FR-025**: `ModelInfo` MUST report the family, the kind of every layer (full attention, sliding
+  attention with its window, linear attention) and the family's bytes per token of positional state
+  and bytes of position-bound state; the budget (FR-006–FR-010) uses only these numbers, never the
+  family name.
 
 ### Key Entities
 
-- **Model**: Loaded weights with configuration, layer kinds, tokenizer, template, EOS set and
-  content identity.
-- **Sequence state**: Attention K/V per attention layer plus recurrent state per linear layer of
-  the live conversation; its length, allocation and reserved total.
-- **Checkpoint**: A deep copy of all recurrent state at one position.
+- **Family**: A module composing shared blocks for one `model_type`, with its state kinds and
+  chat syntax (registry in 010).
+- **Model**: Loaded weights with family, configuration, layer kinds, tokenizer, template, EOS set
+  and content identity.
+- **Sequence state**: Positional state (K/V of every attention layer, sliding-window layers
+  included) plus position-bound state (per linear-attention layer) of the live conversation; its
+  length, allocation and reserved total.
+- **Checkpoint**: A deep copy of all position-bound state at one position (zero bytes for families
+  without it).
 - **Segment**: State for positions `[start, end)` moved out of the live sequence (attention tail
-  plus, for hybrids, recurrent state at `end`).
+  plus, where present, position-bound state at `end`).
 - **Session**: Committed tokens of the conversation and the tokens the state holds; the reuse
   policy of `mrun run` (003's prefix cache is the other policy of the same generation loop).
 - **Request**: Prompt, sampling, limits, stop sequences, optional mask, cancellation; produces
   events and one `Finished`.
-- **Memory budget**: Physical memory, working set, reserve, weights, scratch, recurrent state,
+- **Memory budget**: Physical memory, working set, reserve, weights, scratch, position-bound state,
   state capacity in bytes and tokens, probed depth.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: For all three models, greedy outputs match mlx-lm at the pinned commit token for
-  token on 100% of the reference set (≥ 20 prompts up to 8K tokens, 256 output tokens), on the same
+- **SC-001**: For each 0.1 family (Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, gpt-oss-20b, Devstral
+  Small 2 24B, Qwen3-8B), greedy outputs match mlx-lm at the pinned commit token for token on 100%
+  of the reference set (≥ 20 prompts up to 8K tokens, 256 output tokens), on the same
   weights and chunk split (all but the last prompt token in 2,048-token chunks).
 - **SC-002**: Generation speed is ≥ 90% of mlx-lm's on the same weights at 1K and 16K context for
   each model on the target Mac.
@@ -294,11 +338,15 @@ uninterrupted run that used the same chunk split.
   token in under 15 s for Qwen3-8B on the target Mac.
 - **SC-008**: Moves and checkpoints are exact: after split-off/append and after
   checkpoint-restore + re-prefill (same chunk split), next-token logits are bit-identical to the
-  uninterrupted run in 100% of tests on each model; peak sequence-state memory never exceeds the
+  uninterrupted run in 100% of tests on each model, including gpt-oss trims and moves at arbitrary
+  positions inside and beyond the sliding window; peak sequence-state memory never exceeds the
   state capacity plus one layer.
-- **SC-009**: 100% of template golden fixtures (≥ 10 per model family, including tools and tool
+- **SC-009**: 100% of template golden fixtures (≥ 10 per 0.1 family, including tools and tool
   results) render to the same text and token IDs as Hugging Face `apply_chat_template` at the
   pinned version.
+- **SC-010**: 100% of load-refusal fixtures (unknown `model_type`, unknown wrapped
+  `text_config.model_type`, unsupported quantization mode, unknown tensor name) are refused before
+  weights are read, and the unknown-architecture message lists every supported family.
 
 ## Assumptions
 
@@ -308,8 +356,13 @@ uninterrupted run that used the same chunk split.
   recorded once and stored with the tests.
 - Models are on disk in the community MLX layout (`mrun pull` is 004).
 - One active sequence; queueing and APIs are 002; storing branches and planning checkpoints across
-  conversations is 003. 001 keeps one conversation (with at most two checkpoints for hybrids) and
-  provides the primitives.
+  conversations is 003. 001 keeps one conversation (with at most two checkpoints for models with
+  position-bound state) and provides the primitives.
 - Linux builds compile and run engine-independent tests; the MLX engine is validated on macOS.
 - Qwen3.6-35B-A3B dimensions (expected: 32 value / 16 key linear heads of 128, conv kernel 4;
-  2 KV heads of 256 on attention layers) are read from `config.json` and checked at load.
+  2 KV heads of 256 on attention layers) are read from `config.json` and checked at load; so are
+  gpt-oss-20b (expected: 24 layers, 64 query / 8 KV heads of 64, window 128, 32 experts top-4) and
+  Devstral Small 2 (expected: 40 layers, 8 KV heads of 128) [dimensions to confirm on the pinned
+  weights].
+- Post-0.1 families (GLM-4.7-Flash MLA, Gemma 4, Nemotron-H Mamba2) and the block library's
+  design are spec 010; nothing in 001 depends on them.

@@ -6,11 +6,16 @@
 
 ## Summary
 
-Run Qwen3-8B, Qwen3-Coder-30B-A3B and the hybrid Qwen3.6-35B-A3B (MLX 4-bit) from the `mrun`
-binary on Apple Silicon. Own `mlx-sys` over vendored mlx-c/MLX, a thin safe layer, and 1:1 ports of
-mlx-lm's `qwen3`, `qwen3_moe` and `qwen3_5` graphs including the Gated DeltaNet Metal kernel
-(bound through `mlx_fast_metal_kernel_*`). One worker thread owns all MLX state. The sequence state
-is attention K/V per attention layer plus recurrent state per linear layer, allocated lazily within
+Run the release-0.1 model families from the `mrun` binary on Apple Silicon: `qwen3_5_moe`
+(Qwen3.6-35B-A3B, hybrid), `qwen3_moe` (Qwen3-Coder-30B-A3B), `gpt_oss` (gpt-oss-20b, MXFP4,
+sliding window with sinks), `mistral` (Devstral Small 2 24B, dense) and `qwen3` (Qwen3-8B). Own
+`mlx-sys` over vendored mlx-c/MLX, a thin safe layer, a shared block library (attention: full,
+sliding window, sinks; Gated DeltaNet with mlx-lm's Metal kernel bound through
+`mlx_fast_metal_kernel_*`; dense and MoE feed-forward; norms; RoPE incl. YaRN) and one small family
+module per architecture, each a port of the mlx-lm graph with a parity test; the registry and block
+design are shared with 010. Unknown architectures are refused with the supported families. One
+worker thread owns all MLX state. The sequence state is positional (K/V of every attention layer;
+sliding-window layers keep full KV) plus position-bound (linear-layer state, Qwen3.6 only), allocated lazily within
 a per-request reservation, with growth reported before allocation so the caller evicts first. The
 reshaped `Engine` trait exposes depth-adaptive chunked prefill with planned boundaries and
 checkpoints (one layer in flight, whole chunks committed), a forward/sample split with one-token
@@ -29,15 +34,17 @@ sha2; toml
 `crates/mrun-engine/tests/reference/*.json`; template goldens in `crates/mrun/tests/templates/`
 **Testing**: cargo test. Linux CI: `ScriptedEngine` (allocation, growth, pipelining, checkpoints,
 moves), chat layer goldens, MLX CPU backend with tiny random-weight `qwen3`/`qwen3_moe`/`qwen3_5_moe`
-configs (GDN via the ops reference). macOS (`#[ignore]`, `MRUN_TEST_MODELS`): GDN kernel vs ops,
+configs and tiny `gpt_oss`/`mistral` configs
+(GDN via the ops reference; MXFP4 on the CPU backend). macOS (`#[ignore]`, `MRUN_TEST_MODELS`): GDN kernel vs ops,
 conformance on real weights, exactness of moves/checkpoints, bench cells
 **Target Platform**: macOS 15+ on Apple Silicon; Linux x86_64/aarch64 for CI (CPU)
 **Project Type**: Rust workspace producing one CLI/server binary
 **Performance Goals**: ≥ 90% of mlx-lm decode (1K, 16K) and prefill (16K) per model; cancel
 ≤ 300 ms p95 at 16K, 64K and max depth; first token ≤ 15 s cold for 8B
 **Constraints**: Budget by construction (III); exact greedy parity (II); no network; input caps
-**Scale/Scope**: 3 models, 1 live sequence; capacity on 48 GB ≈ 262K (Qwen3.6, max position),
-≈ 105–120K (Qwen3-Coder), 40,960 (Qwen3-8B, max position)
+**Scale/Scope**: 5 families (one model each), 1 live sequence; capacity on 48 GB ≈ 262K (Qwen3.6,
+max position), ≈ 105–120K (Qwen3-Coder), 131,072 (gpt-oss-20b, max position; ≈ 13 GiB of KV
+would allow more), ≈ 80K (Devstral Small 2, 160 KiB/token), 40,960 (Qwen3-8B, max position)
 
 ## Constitution Check
 
@@ -47,7 +54,7 @@ conformance on real weights, exactness of moves/checkpoints, bench cells
 | II Exactness | Greedy parity defined as mlx-lm's argmax over logprobs; same kernels and compiled ops; deterministic chunk splits; deep-copied checkpoints and segments; trim to committed tokens | Pass |
 | III Memory budget | Pre-load check, probed scratch (two points), capacity ≤ probed depth, lazy allocation clamped to the reservation, `NeedsMemory` before every allocation, input caps, MLX limits | Pass |
 | IV Local, private | No network; identity covers every output-determining file | Pass |
-| V Own runtime, reuse kernels | MLX kernels; GDN kernel is mlx-lm's source ported unchanged (reference kernel, not a new one) | Pass (see Complexity) |
+| V Own runtime, reuse kernels | MLX kernels (incl. `quantized_matmul`/`gather_qmm` mode `mxfp4`, SDPA with sinks); GDN kernel is mlx-lm's source ported unchanged (reference kernel, not a new one); open set of families from shared blocks, family logic only in its module and chat syntax | Pass (see Complexity) |
 | VI Simple | One thread, one sequence, contiguous arrays, no paging; dead code removed; `--chunk` flag dropped | Pass |
 
 Post-design re-check: Pass.
@@ -77,7 +84,10 @@ crates/
 │   │   ├── mlx/               # [mlx] Array, ops, fast, metal_kernel, compile, memory, device
 │   │   ├── load.rs            # config/text_config, quantization, sanitize, safetensors
 │   │   ├── state.rs           # attention K/V + recurrent state, allocation, checkpoints, segments
-│   │   ├── models/{common.rs, qwen3.rs, qwen3_moe.rs, qwen3_5_moe.rs, gated_delta.rs}
+│   │   ├── models/blocks/     # shared blocks (layout per 010): attention (full, sliding, sinks),
+│   │   │                      # gated_delta, ffn (SwiGLU, SwigluOAI, MoE/SwitchGLU), norm, rope (default, YaRN)
+│   │   ├── models/registry.rs # model_type → family module, state kinds, chat syntax (010)
+│   │   ├── models/{qwen3.rs, qwen3_moe.rs, qwen3_5_moe.rs, gpt_oss.rs, mistral.rs}  # one per family
 │   │   ├── kernels/gated_delta.metal.inc   # mlx-lm kernel bodies, verbatim
 │   │   ├── sample.rs          # logprobs, greedy, top-k/p, min-p, seed, mask
 │   │   └── mlx_engine.rs      # MlxEngine
@@ -101,4 +111,5 @@ holds everything engine-agnostic. `cargo test -p mrun --no-default-features` nev
 | Own `mlx-sys` over vendored mlx-c | Linux CI, quant `mode`, `device_info`, metal kernels, pinned MLX | `mlx-rs` fails on Linux and lacks these ([mlx-rust §7.1](../../concepts/research/mlx-rust.md)) |
 | Separate engine crate | Keeps MLX out of fast iteration; one-thread ownership | Single crate builds MLX for every test |
 | Custom Metal kernel (GDN) | No MLX op implements the gated delta recurrence at speed; parity needs mlx-lm's exact kernel | Ops loop (`gated_delta_ops`) is per-token and not bitwise-equal to the kernel; kept only as CPU/test reference |
-| Recurrent rollback (chunk start, pending step) | Whole-chunk commit and pipelining on non-trimmable state | Disabling pipelining for hybrids costs decode speed; re-prefill on every cancel loses progress |
+| Position-bound rollback (chunk start, pending step) | Whole-chunk commit and pipelining on non-trimmable state | Disabling pipelining for hybrids costs decode speed; re-prefill on every cancel loses progress |
+| Full KV on sliding-window layers | Positional state stays exact at any position (trim, moves, 003 reuse) | A rotating buffer (mlx-lm `RotatingKVCache`) saves 24 KiB/token on gpt-oss but makes earlier positions unrecoverable, so every branch or edit would need checkpoints |
