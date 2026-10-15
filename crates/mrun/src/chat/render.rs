@@ -209,7 +209,7 @@ fn entries(
     let mut calls: HashSet<&str> = HashSet::new();
     let mut i = 0;
     while i < request.messages.len() {
-        let index = base + i as u32;
+        let index = request.api_index.get(i).copied().unwrap_or(base + i as u32);
         match &request.messages[i] {
             Message::User(parts) => {
                 let text = parts
@@ -296,11 +296,27 @@ fn entries(
                         out.push(assistant(c, r, vec![call]));
                         if let Some(pos) = results.iter().position(|(_, cid, _)| *cid == id) {
                             let (at, cid, text) = results.remove(pos);
-                            out.push(tool_entry(cid, text, base + at as u32));
+                            out.push(tool_entry(
+                                cid,
+                                text,
+                                request
+                                    .api_index
+                                    .get(at)
+                                    .copied()
+                                    .unwrap_or(base + at as u32),
+                            ));
                         }
                     }
                     for (at, cid, text) in results {
-                        out.push(tool_entry(cid, text, base + at as u32));
+                        out.push(tool_entry(
+                            cid,
+                            text,
+                            request
+                                .api_index
+                                .get(at)
+                                .copied()
+                                .unwrap_or(base + at as u32),
+                        ));
                     }
                     i = j;
                     continue;

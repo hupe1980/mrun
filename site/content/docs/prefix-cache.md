@@ -42,14 +42,15 @@ also attaches its own report:
 ## Why a miss happened
 
 Every miss report names one of five causes, the token position where the prompt differed from the
-best cached candidate, and the index and role of the message that position falls in (message 0
-is the system prompt and tools). That tells you what changed without any prompt text.
+best cached candidate, and the message that position falls in: its index in your request's
+`messages` (or `input`) array and its role, with role `system` for the system prompt and tool
+list. That tells you what changed without any prompt text.
 
 | Cause | Meaning | What to do |
 | --- | --- | --- |
 | `new` | The request shares at most the system prompt and tools with stored state (a new conversation), or nothing is stored | Nothing; the first turn is always computed |
-| `changed` | Something the cache had already seen differs: the system prompt or tool list (message 0), an earlier message that was edited, removed or replaced, or a message the chat template rendered differently (for example re-serialized tool arguments) | Expected after an MCP server connects, compaction, edits or retries; if it happens every turn at the same message, check what your client changes there |
-| `evicted` | The stored state was removed: least recently used, `mrun cache clear`, or memory pressure | More memory, or fewer parallel conversations |
+| `changed` | Something the cache had already seen differs: the system prompt or tool list (role `system`), an earlier message that was edited, removed or replaced, or a message the chat template rendered differently (for example re-serialized tool arguments) | Expected after an MCP server connects, compaction, edits or retries; if it happens every turn at the same message, check what your client changes there |
+| `evicted` | The stored state was removed: least recently used, `mrun cache clear`, memory pressure, or a short leftover (under 256 tokens) that was dropped instead of kept as a branch | More memory, or fewer parallel conversations |
 | `model` | A different model, revision or template was loaded | Expected |
 | `disabled` | The server runs with `--no-cache` | — |
 

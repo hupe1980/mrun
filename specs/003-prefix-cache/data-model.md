@@ -23,22 +23,23 @@ opt-out).
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| edge | Vec<u32> | tokens from parent to this node |
-| depth | u32 | tokens from root to end of edge |
-| state | Live \| Stored(SegmentView) | Live = held by the sequence state |
+| start | u32 | position where the node attaches to its parent (the live path or another node) |
+| tokens | Vec<u32> | the node's positions `[start, start + len)` |
+| state | Live \| Stored(Segment) | Live = the trunk, held by the sequence state; a stored node is exactly one 001 segment |
 | checkpoints | Vec<Checkpoint> | positions within this edge |
 | messages | Vec<MessageMark> | marks starting within this edge |
 | evicted | small map first_token → {count, reason: Lru \| Clear \| Tiny \| Pressure} | removed children |
 | last_used | Instant | set on match, move and commit |
 
-`SegmentView {buffer: BufferId, start, end}`; `Buffer {per-layer arrays, bytes, views: u32}` is
-freed when its last view drops.
+A child may attach at any position of its parent, so nothing is ever split for bookkeeping: a
+node is split only by a real `split_off` when a request's match ends inside it (revised at
+implementation, 2026-10-15; replaces refcounted segment views).
 
 ## Checkpoint
 
 `{pos: u32, id: CheckpointId (001), bytes: u64 (≈ 61 MiB on Qwen3.6), kind: SystemTools |
 LastMessage | GenerationStart}`. A moved-out tail's end state is not a checkpoint: it stays inside
-its 001 segment (the node's `SegmentView` buffer), is restored by `append`, and does not count
+its 001 segment (the node's segment), is restored by `append`, and does not count
 toward the cap of 8.
 
 Drop rule when a path exceeds 8: drop the shallowest checkpoint other than the first.
@@ -89,7 +90,8 @@ prompt_tokens_total, cached_tokens_total, evicted_total, pressure_events, last: 
 
 1. Children of a node have distinct first tokens; the live path is one root path.
 2. Every stored node's ancestors are stored or live; positions along a path are contiguous.
-3. Views of one buffer lie on one root path and are contiguous; an edge split creates views only.
+3. Each stored node is one segment owned by that node alone; a child attaches at a position within
+   its parent's range.
 4. `live_bytes + Σ buffer bytes + Σ checkpoint bytes ≤ capacity bytes` before and after every
    operation; during a move the excess is at most one layer of the moved buffer.
 5. The live path is never evicted while a request runs; after `prepare` no node is pinned.

@@ -35,6 +35,7 @@ pub fn router(state: ServerState) -> Router {
         .route("/v1/messages", post(messages::handle))
         .route("/v1/models", get(status::models))
         .route("/mrun/status", get(status::status))
+        .route("/mrun/cache/clear", post(status::clear_cache))
         .route("/v1/messages/count_tokens", post(messages::count_tokens))
         .route("/v1/responses", post(responses::handle))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))

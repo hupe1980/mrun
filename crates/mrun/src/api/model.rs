@@ -34,6 +34,9 @@ pub struct ChatRequest {
     /// Leading system, developer and instructions text, in order.
     pub system: Vec<String>,
     pub messages: Vec<Message>,
+    /// Index of each message in the request's `messages`/`input` array (one API message can
+    /// become several here, and leading system entries are not here), for miss reports.
+    pub api_index: Vec<u32>,
     pub tools: Vec<ToolDef>,
     pub tool_choice: ToolChoice,
     pub parallel_tool_calls: bool,
@@ -61,6 +64,7 @@ impl ChatRequest {
             model: String::new(),
             system: Vec::new(),
             messages: Vec::new(),
+            api_index: Vec::new(),
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
             parallel_tool_calls: true,
@@ -74,6 +78,12 @@ impl ChatRequest {
             include_usage: false,
             ignore_eos: false,
         }
+    }
+
+    /// Labels the messages added since the last call with API index `index`.
+    pub fn label_new(&mut self, index: u32) {
+        let missing = self.messages.len().saturating_sub(self.api_index.len());
+        self.api_index.extend(std::iter::repeat_n(index, missing));
     }
 
     pub fn tool(&self, name: &str) -> Option<&ToolDef> {

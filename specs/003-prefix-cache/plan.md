@@ -8,8 +8,9 @@
 
 A token radix tree per cache key whose live path is the engine's sequence state. Continuing a
 conversation appends; switching moves the old tail out and the matched branch in, one layer at a
-time, through 001's `split_off` and `append(consume)`. Segments are refcounted buffer views, so
-edge splits are metadata; buffers move whole. Models with position-bound state (linear attention;
+time, through 001's `split_off` and `append(consume)`. Each stored node is one segment attached
+at a position of the live path or of another node, so nothing is ever shared and buffers move
+whole. Models with position-bound state (linear attention;
 0.1: Qwen3.6) capture up to 8 checkpoints per path at planned chunk ends and resume from the deepest
 one at or below the match; all other families, gpt-oss sliding-window layers included (full KV
 kept), are positional only and resume exactly at the match. Eviction is LRU over
@@ -67,7 +68,7 @@ specs/003-prefix-cache/
 ```text
 crates/mrun/src/cache/
 ├── mod.rs        # PrefixStore API (contract)
-├── tree.rs       # radix tree, live path, segment views, buffers, merge on commit
+├── mod.rs        # PrefixStore: trunk (live path), nodes (one segment each), lookup, moves, eviction, merge on commit
 ├── switch.rs     # plan + prepare: move out/in, split back, checkpoint restore
 ├── chunks.rs     # prefill plan (R4), checkpoint placement and the 8-per-path cap (R3)
 ├── evict.rs      # LRU units, pressure levels
@@ -87,4 +88,4 @@ crates/mrun/tests/
 
 | Item | Why needed | Simpler alternative rejected because |
 | --- | --- | --- |
-| Buffer views with whole-buffer moves (R2) | Edge splits without copies; no double-held state after partial matches | Copy on split costs a transient of the segment size; view-only moves hold matched state twice |
+| Whole-node moves with children attached at any position (R2) | No edge splits and no double-held state after partial matches | View-only moves hold matched state twice; refcounted views (the earlier design) added bookkeeping the position-attached tree does not need |

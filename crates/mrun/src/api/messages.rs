@@ -102,6 +102,9 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
         return Err(ApiError::invalid("messages must not be empty", "messages"));
     }
     for (i, message) in messages.iter().enumerate() {
+        if i > 0 {
+            request.label_new(i as u32 - 1);
+        }
         let path = format!("messages[{i}]");
         obj(message, &path)?;
         match str_field(message, "role", &path)? {
@@ -127,6 +130,7 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
             }
         }
     }
+    request.label_new(messages.len().saturating_sub(1) as u32);
     request.prefill = matches!(request.messages.last(), Some(Message::Assistant(_)));
 
     let choice = &body["tool_choice"];

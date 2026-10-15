@@ -4,6 +4,7 @@
 //! and the engine never waits on that consumer again; `Finished` is still delivered. The engine
 //! stays loaded until the last handle is dropped; idle time never unloads it.
 
+use crate::cache::{CacheStats, ClearReport};
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::generate::{
     self, Event, EventSink, FinishReason, Finished, GenerateRequest, PressureGauge, ReusePolicy,
@@ -14,7 +15,7 @@ use crate::runtime::session::Session;
 use flume::{Receiver, Sender, bounded, unbounded};
 use mrun_engine::{Engine, MemoryBudget, ModelInfo};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -30,6 +31,9 @@ enum Command {
         finished: Sender<Finished>,
     },
     Reset,
+    ClearCache {
+        reply: Sender<Option<ClearReport>>,
+    },
 }
 
 impl std::fmt::Debug for Command {
@@ -37,6 +41,7 @@ impl std::fmt::Debug for Command {
         match self {
             Self::Generate { .. } => f.write_str("Generate"),
             Self::Reset => f.write_str("Reset"),
+            Self::ClearCache { .. } => f.write_str("ClearCache"),
         }
     }
 }
@@ -48,6 +53,8 @@ pub struct EngineHandle {
     budget: MemoryBudget,
     pressure: Arc<PressureGauge>,
     queue: Arc<QueueGauge>,
+    /// The policy's cache statistics after the last command (`None` for `Session`).
+    cache: Arc<Mutex<Option<CacheStats>>>,
 }
 
 /// Why a request was not queued.
@@ -79,7 +86,8 @@ impl Generation {
 }
 
 impl EngineHandle {
-    /// Starts the worker thread; `factory` builds the engine on that thread.
+    /// Starts the worker thread with `Session` reuse (`mrun run`); `factory` builds the engine
+    /// on that thread.
     pub fn spawn<E, F>(
         factory: F,
         tokenizer: Arc<Tokenizer>,
@@ -89,12 +97,31 @@ impl EngineHandle {
         E: Engine + 'static,
         F: FnOnce() -> Result<E, String> + Send + 'static,
     {
+        Self::spawn_with(factory, tokenizer, stall_timeout, |_| Session::default())
+    }
+
+    /// Starts the worker thread with the reuse policy `policy` builds from the loaded model
+    /// (`PrefixStore` under `serve`).
+    pub fn spawn_with<E, F, P, Q>(
+        factory: F,
+        tokenizer: Arc<Tokenizer>,
+        stall_timeout: Duration,
+        policy: Q,
+    ) -> Result<Self, String>
+    where
+        E: Engine + 'static,
+        F: FnOnce() -> Result<E, String> + Send + 'static,
+        P: ReusePolicy,
+        Q: FnOnce(&ModelInfo) -> P + Send + 'static,
+    {
         let (commands, inbox) = unbounded::<Command>();
         let (ready_tx, ready_rx) = bounded(1);
         let pressure = Arc::new(PressureGauge::default());
         let gauge = pressure.clone();
         let queue = Arc::new(QueueGauge::default());
         let worker_queue = queue.clone();
+        let cache = Arc::new(Mutex::new(None));
+        let worker_cache = cache.clone();
         thread::Builder::new()
             .name("mrun-engine".into())
             .spawn(move || {
@@ -105,14 +132,18 @@ impl EngineHandle {
                         return;
                     }
                 };
+                let mut policy = policy(engine.info());
+                *worker_cache.lock().unwrap_or_else(PoisonError::into_inner) = policy.stats();
                 let _ = ready_tx.send(Ok((engine.info().clone(), *engine.budget())));
                 worker(
                     &mut engine,
+                    &mut policy,
                     &tokenizer,
                     &inbox,
                     stall_timeout,
                     &gauge,
                     &worker_queue,
+                    &worker_cache,
                 );
             })
             .map_err(|error| format!("cannot start engine thread: {error}"))?;
@@ -125,7 +156,22 @@ impl EngineHandle {
             budget,
             pressure,
             queue,
+            cache,
         })
+    }
+
+    /// Cache statistics after the last request (`None` without a cache).
+    pub fn cache_stats(&self) -> Option<CacheStats> {
+        *self.cache.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `mrun cache clear`: queued like a request; returns the receiver of its report.
+    pub fn clear_cache(&self) -> Result<Receiver<Option<ClearReport>>, SubmitError> {
+        let (reply, receiver) = bounded(1);
+        self.commands
+            .send(Command::ClearCache { reply })
+            .map_err(|_| SubmitError::Stopped)?;
+        Ok(receiver)
     }
 
     /// Waiting requests and the running flag; the capacity is set with `--queue`.
@@ -194,15 +240,17 @@ impl EventSink for ChannelSink {
     }
 }
 
-fn worker<E: Engine>(
+#[allow(clippy::too_many_arguments)]
+fn worker<E: Engine, P: ReusePolicy>(
     engine: &mut E,
+    policy: &mut P,
     tokenizer: &Tokenizer,
     inbox: &Receiver<Command>,
     stall_timeout: Duration,
     pressure: &PressureGauge,
     queue: &QueueGauge,
+    cache: &Mutex<Option<CacheStats>>,
 ) {
-    let mut session = Session::default();
     for command in inbox {
         match command {
             Command::Generate {
@@ -231,7 +279,7 @@ fn worker<E: Engine>(
                     let mut detok = tokenizer.stream();
                     generate::generate(
                         engine,
-                        &mut session,
+                        &mut *policy,
                         &mut detok,
                         request,
                         &mut sink,
@@ -243,7 +291,7 @@ fn worker<E: Engine>(
                 let done = outcome.unwrap_or_else(|_| {
                     // A panic left the engine state unknown: drop everything it holds.
                     engine.reset_all();
-                    session = Session::default();
+                    policy.clear(engine);
                     Finished {
                         reason: FinishReason::Error("internal error; state reset".into()),
                         prefilled: 0,
@@ -254,8 +302,12 @@ fn worker<E: Engine>(
                 // The slot is empty and never waited on; this fails only if the consumer left.
                 let _ = finished.try_send(done);
             }
-            Command::Reset => session.clear(engine),
+            Command::Reset => policy.clear(engine),
+            Command::ClearCache { reply } => {
+                let _ = reply.try_send(policy.clear_cache(engine, true));
+            }
         }
+        *cache.lock().unwrap_or_else(PoisonError::into_inner) = policy.stats();
     }
 }
 

@@ -182,6 +182,7 @@ fn decode_items(
     request: &mut ChatRequest,
 ) -> Result<(), ApiError> {
     let mut assistant: Vec<AssistantPart> = Vec::new();
+    let mut assistant_start = 0u32;
     let flush = |assistant: &mut Vec<AssistantPart>, messages: &mut Vec<Message>| {
         // Reasoning alone is no turn: there is nothing to attach it to.
         if assistant
@@ -193,6 +194,8 @@ fn decode_items(
         assistant.clear();
     };
     for (i, item) in items.iter().enumerate() {
+        label(request, i.saturating_sub(1) as u32, assistant_start);
+        let assistant_was_empty = assistant.is_empty();
         let path = format!("input[{i}]");
         obj(item, &path)?;
         let kind = match opt_str(item, "type", &path)? {
@@ -333,9 +336,29 @@ fn decode_items(
                 ));
             }
         }
+        if assistant_was_empty && !assistant.is_empty() {
+            assistant_start = i as u32;
+        }
     }
     flush(&mut assistant, &mut request.messages);
+    label(
+        request,
+        items.len().saturating_sub(1) as u32,
+        assistant_start,
+    );
     Ok(())
+}
+
+/// API indices for messages added since the last call: an assistant turn takes the index of
+/// its first item, everything else `index`.
+fn label(request: &mut ChatRequest, index: u32, assistant_start: u32) {
+    for k in request.api_index.len()..request.messages.len() {
+        let i = match request.messages[k] {
+            Message::Assistant(_) => assistant_start,
+            _ => index,
+        };
+        request.api_index.push(i);
+    }
 }
 
 /// A function tool, flattened into `namespace` when it came from one.

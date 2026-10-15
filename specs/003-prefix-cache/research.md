@@ -22,13 +22,14 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine th
 
 - **Decision**: Moving out = `split_off(d)`: per layer, copy the tail into a new buffer and free
   that layer's slack. Moving in = `append(segment, consume = true)` per node: per layer, copy into
-  the live arrays and drop the source layer. Segments are refcounted views of per-layer buffers, so
-  splitting an edge (a branch forking inside a moved-out tail) is metadata only. A buffer is always
+  the live arrays and drop the source layer. Each stored node is exactly one segment, and a child
+  attaches at any position of its parent, so a branch forking inside a moved-out tail needs no
+  edge split at all (revised at implementation, 2026-10-15: no buffer views or refcounts). A buffer is always
   moved in whole: when the match ends inside a buffer, all of it is appended and the unmatched part
   is split out again (or discarded under 256 tokens), so a partial move never leaves the matched
   part held twice. Tails under 256 tokens are discarded: re-prefilling them costs well under a
   second, and they would add tree churn. At commit, output that retraces a stored branch is merged
-  (the branch's overlap view is dropped).
+  (a stored node the live path now retraces entirely is dropped and its children move up).
 - **Rationale**: Peak stays at one layer above steady state (SC-004). Cost is bandwidth, never
   memory: a 90K-token Qwen3-Coder tail is 90K × 96 KiB ≈ 8.2 GiB read and written, ≥ 65 ms at the
   M4 Pro's 273 GB/s, so a switch round trip (out + in) takes ≈ 0.15–0.2 s. In a switch the
@@ -86,9 +87,8 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine th
 
 ## R6: Eviction policy
 
-- **Decision**: LRU over eviction units. A unit is a branch leaf plus its chain of single-child
-  ancestors that are views of the same buffer; its bytes are the buffers it alone references. Units
-  freeing nothing are skipped. Order: branch units, then live-path checkpoints (R3 drop order). Evicting increments the fork node's evicted counter (keyed by the
+- **Decision**: LRU over eviction units. A unit is a stored leaf node (one segment, with its
+  checkpoints); evicting it can turn its parent into the next leaf. Order: branch units, then live-path checkpoints (R3 drop order). Evicting increments the fork node's evicted counter (keyed by the
   unit's first token, with the reason) and calls MLX `clear_cache`.
 - **Rationale**: "When Fancy Eviction Fails" (2609.28870) and "Where Should the KV Cache Live?"
   (2609.16215) find LRU at the offline optimum for single long sessions (D017).

@@ -29,6 +29,9 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
 
     let messages = arr(&body["messages"], "messages")?;
     for (i, message) in messages.iter().enumerate() {
+        if i > 0 {
+            request.label_new(i as u32 - 1);
+        }
         let path = format!("messages[{i}]");
         obj(message, &path)?;
         let role = str_field(message, "role", &path)?;
@@ -66,6 +69,7 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
             }
         }
     }
+    request.label_new(messages.len().saturating_sub(1) as u32);
     if request.messages.is_empty() && request.system.is_empty() {
         return Err(ApiError::invalid("messages must not be empty", "messages"));
     }

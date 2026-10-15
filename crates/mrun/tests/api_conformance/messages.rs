@@ -431,3 +431,104 @@ async fn msg_midconversation_system_in_place() {
     assert!(with_reminder > without);
     assert_eq!(server.post("/v1/messages", &body).await.status, 200);
 }
+
+#[tokio::test]
+async fn cache_report_status_and_clear() {
+    let server = common::start(&["Sure.", "Again.", "Once more.", "Fourth."]).await;
+    let first = json!({"max_tokens": 50, "system": "S", "messages": [
+        {"role": "user", "content": "first question"}]});
+    let reply = server.post("/v1/messages", &first).await;
+    assert_eq!(reply.header("x-mrun-cache-cause"), Some("new"));
+    let input = reply.json()["usage"]["input_tokens"].as_u64().unwrap();
+
+    // The next turn: this Qwen3-style template renders an empty think block in the generation
+    // header but not in history, so the previous reply re-renders differently. The report says
+    // so (changed, at the assistant message), and everything before the reply is reused.
+    let second = json!({"max_tokens": 50, "system": "S", "messages": [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "Sure."},
+        {"role": "user", "content": "and then?"}]});
+    let reply = server.post("/v1/messages", &second).await;
+    assert_eq!(reply.header("x-mrun-cache-cause"), Some("changed"));
+    assert_eq!(reply.header("x-mrun-cache-message"), Some("1:assistant"));
+    let usage = &reply.json()["usage"];
+    let cached: u64 = reply
+        .header("x-mrun-cache-cached")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(cached, usage["cache_read_input_tokens"].as_u64().unwrap());
+    assert!(
+        cached + 10 >= input,
+        "only the reply header differs: {cached} vs {input}"
+    );
+    // The same request again is a full hit.
+    let reply = server.post("/v1/messages", &second).await;
+    assert_eq!(
+        reply.header("x-mrun-cache-cause"),
+        None,
+        "{:?}",
+        reply.headers
+    );
+
+    let status: Value = server
+        .client
+        .get(server.url("/mrun/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(status["cache"]["live_tokens"].as_u64().unwrap() > 0);
+    assert!(status["cache"]["cached_tokens_total"].as_u64().unwrap() >= cached);
+    assert!(status["last"]["cause"].is_null());
+
+    // Clear while idle: the live state goes now; the next request starts from nothing.
+    let cleared: Value = server
+        .client
+        .post(server.url("/mrun/cache/clear"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cleared["live_reset"], "now");
+    let reply = server.post("/v1/messages", &second).await;
+    assert_eq!(reply.header("x-mrun-cache-cause"), Some("new"));
+    assert_eq!(reply.header("x-mrun-cache-cached"), Some("0"));
+}
+
+#[tokio::test]
+async fn no_cache_reports_disabled() {
+    let setup = Setup {
+        no_cache: true,
+        ..Setup::default()
+    };
+    let server = common::start_with(&["a", "b"], setup).await;
+    server.post("/v1/messages", &user("same")).await;
+    let reply = server.post("/v1/messages", &user("same")).await;
+    assert_eq!(reply.header("x-mrun-cache-cause"), Some("disabled"));
+    assert_eq!(reply.json()["usage"]["cache_read_input_tokens"], 0);
+}
+
+#[tokio::test]
+async fn cache_divergence_names_the_message_in_the_stream_comment() {
+    let server = common::start(&["one", "two"]).await;
+    let body = |edited: &str| {
+        json!({"max_tokens": 50, "stream": true, "system": "S", "messages": [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": edited},
+            {"role": "user", "content": "follow-up"}]})
+    };
+    server.post("/v1/messages", &body("original answer")).await;
+    let reply = server.post("/v1/messages", &body("edited answer")).await;
+    let comment = &reply.frames()[0].1;
+    assert!(comment.contains("\"cause\":\"changed\""), "{comment}");
+    assert!(comment.contains("\"role\":\"assistant\""), "{comment}");
+    assert!(
+        comment.contains("\"index\":1"),
+        "API message index: {comment}"
+    );
+}

@@ -381,3 +381,36 @@ fn mutation_suite_hybrid() {
         mutation_suite(true, seed);
     }
 }
+
+#[test]
+fn a_cancelled_prefill_keeps_its_whole_chunks_for_the_retry() {
+    let mut engine = ScriptedEngine::new(script(&[reply(5)]), 20_000);
+    // Four layers per chunk: cancel inside the third chunk.
+    engine.cancel_after_layers = Some(4 * 2 + 2);
+    let mut rig = Rig::new(engine, CacheMode::Cached);
+    let p = conv(&[(Role::System, 400, 1), (Role::User, 6000, 2)]);
+    let (_, _, finished) = rig.run(&p, 50);
+    assert_eq!(
+        finished.reason,
+        mrun::runtime::generate::FinishReason::Cancelled
+    );
+    let kept = rig.store.live_tokens().len() as u32;
+    assert!(kept > 0 && kept < p.len(), "whole chunks kept: {kept}");
+    // The client retries: the kept chunks are reused, not recomputed.
+    let (miss, _, _) = rig.run(&p, 50);
+    assert_eq!(miss.cached, kept);
+    assert_eq!(miss.cause, None);
+}
+
+#[test]
+fn a_new_cache_key_discards_the_tree_and_reports_model() {
+    let mut rig = Rig::new(
+        ScriptedEngine::new(script(&[reply(5), reply(5)]), 10_000),
+        CacheMode::Cached,
+    );
+    let p = conv(&[(Role::System, 100, 1), (Role::User, 50, 2)]);
+    rig.run(&p, 50);
+    rig.store.rekey(&mut rig.engine, "other-template".into());
+    let (miss, _, _) = rig.run(&p, 50);
+    assert_eq!((miss.cause, miss.cached), (Some(Cause::Model), 0));
+}

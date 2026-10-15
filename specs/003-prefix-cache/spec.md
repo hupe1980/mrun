@@ -256,8 +256,8 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 
 - **Cache key**: model identity (weights, tokenizer, template, state format).
 - **Live path**: the tree path held by the sequence state.
-- **Branch**: a stored subtree hanging off the live path; nodes hold segments (refcounted views of
-  per-layer buffers) and checkpoints.
+- **Branch**: a stored subtree hanging off the live path; each node holds one segment (and the
+  checkpoints within it) and attaches at a position of its parent.
 - **Checkpoint**: position-bound state at one position (families with linear-attention layers
   only).
 - **Miss report**: cached, processed, divergence, message index and role, gap, cause.

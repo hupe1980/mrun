@@ -59,6 +59,8 @@ pub struct Setup {
     pub timing: Timing,
     /// Delay per generated token.
     pub step_delay: Option<Duration>,
+    /// `--no-cache`.
+    pub no_cache: bool,
 }
 
 impl Default for Setup {
@@ -71,6 +73,7 @@ impl Default for Setup {
                 queue_wait: Duration::from_secs(600),
             },
             step_delay: None,
+            no_cache: false,
         }
     }
 }
@@ -116,8 +119,8 @@ pub async fn start_tokens(replies: Vec<Vec<u32>>, setup: Setup) -> Server {
     }
     let capacity = setup.capacity;
     let step_delay = setup.step_delay;
-    let factory: EngineFactory = Box::new(move |_| {
-        let handle = EngineHandle::spawn(
+    let factory: EngineFactory = Box::new(move |args| {
+        let handle = EngineHandle::spawn_with(
             move || {
                 let mut engine = ScriptedEngine::new(script, capacity);
                 engine.step_delay = step_delay;
@@ -125,6 +128,7 @@ pub async fn start_tokens(replies: Vec<Vec<u32>>, setup: Setup) -> Server {
             },
             tokenizer.clone(),
             DEFAULT_STALL_TIMEOUT,
+            serve::cache_policy(args),
         )?;
         let grammar = Some(Arc::new(GrammarEnv::new(&tokenizer, &[]).unwrap()));
         Ok(Loaded {
@@ -138,7 +142,9 @@ pub async fn start_tokens(replies: Vec<Vec<u32>>, setup: Setup) -> Server {
             grammar,
         })
     });
-    let mut inner = serve::start_with(args(setup.queue), factory, setup.timing)
+    let mut serve_args = args(setup.queue);
+    serve_args.no_cache = setup.no_cache;
+    let mut inner = serve::start_with(serve_args, factory, setup.timing)
         .await
         .unwrap();
     inner.loaded().await.unwrap();

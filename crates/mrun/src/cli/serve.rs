@@ -8,11 +8,12 @@ use crate::api::decode::DecodeOptions;
 use crate::api::record::Recorder;
 use crate::api::run::Timing;
 use crate::api::status::Tracker;
+use crate::cache::{CacheMode, PrefixStore};
 use crate::chat::constrain::GrammarEnv;
 use crate::chat::template::ChatTemplate;
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::handle::EngineHandle;
-use mrun_engine::{Sampling, SyntaxId};
+use mrun_engine::{ModelInfo, Sampling, SyntaxId};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -235,6 +236,17 @@ async fn terminate() {
         _ = ctrl_c => {}
         _ = term => {}
     }
+}
+
+/// The reuse policy of `serve`: the prefix cache, keyed by the model identity (`--no-cache`
+/// turns reuse off).
+pub fn cache_policy(args: &ServeArgs) -> impl FnOnce(&ModelInfo) -> PrefixStore + Send + 'static {
+    let mode = if args.no_cache {
+        CacheMode::Off
+    } else {
+        CacheMode::Cached
+    };
+    move |info: &ModelInfo| PrefixStore::new(info.identity.clone(), mode)
 }
 
 /// The engine factory of this build: the MLX engine with feature `mlx`, otherwise none.

@@ -3,6 +3,7 @@
 use crate::api::handler;
 use crate::api::model::ApiKind;
 use crate::api::run::DEFAULT_MAX_OUTPUT;
+use crate::cache::miss::{MissReport, role_str};
 use crate::chat::syntax::registry::ChatSyntax;
 use crate::cli::serve::ServerState;
 use axum::extract::State;
@@ -67,6 +68,56 @@ pub async fn models(State(state): State<ServerState>) -> Response {
     .into_response()
 }
 
+/// A miss report as `/mrun/status` and the `: mrun` comment show it.
+pub fn miss_json(miss: &MissReport) -> Value {
+    json!({
+        "cached": miss.cached,
+        "processed": miss.processed,
+        "cause": miss.cause.map(|c| c.as_str()),
+        "divergence": miss.divergence,
+        "message": miss.message.map(|m| json!({"index": m.index, "role": role_str(m.role)})),
+        "gap": miss.gap,
+    })
+}
+
+/// `POST /mrun/cache/clear`: drops branches and checkpoints, and the live state when idle. While
+/// a request runs the clear is queued behind it (202, live state reset after the request).
+pub async fn clear_cache(State(state): State<ServerState>) -> Response {
+    let loaded = match handler::ready(&state) {
+        Ok(loaded) => loaded,
+        Err(error) => return crate::api::chat_completions::SHAPE.error(&error),
+    };
+    let busy = loaded.handle.queue().running() || loaded.handle.queue().waiting() > 0;
+    let receiver = match loaded.handle.clear_cache() {
+        Ok(receiver) => receiver,
+        Err(error) => {
+            let error = crate::api::model::ApiError::new(
+                crate::api::model::ErrorKind::Internal,
+                error.to_string(),
+            );
+            return crate::api::chat_completions::SHAPE.error(&error);
+        }
+    };
+    if busy {
+        return (
+            axum::http::StatusCode::ACCEPTED,
+            axum::Json(json!({"branches_dropped": null, "bytes_freed": null,
+                "live_reset": "after-request"})),
+        )
+            .into_response();
+    }
+    match receiver.recv_async().await {
+        Ok(Some(report)) => axum::Json(json!({
+            "branches_dropped": report.branches_dropped,
+            "bytes_freed": report.bytes_freed,
+            "live_reset": if report.live_reset_now { "now" } else { "after-request" },
+        }))
+        .into_response(),
+        _ => axum::Json(json!({"branches_dropped": 0, "bytes_freed": 0, "live_reset": "now"}))
+            .into_response(),
+    }
+}
+
 /// `GET /mrun/status`
 pub async fn status(State(state): State<ServerState>) -> Response {
     let mut body = json!({
@@ -100,6 +151,22 @@ pub async fn status(State(state): State<ServerState>) -> Response {
             "kv_bytes_per_token": info.kv_bytes_per_token,
         });
         body["queued"] = loaded.handle.queue().waiting().into();
+        if let Some(stats) = loaded.handle.cache_stats() {
+            body["cache"] = json!({
+                "live_tokens": stats.live_tokens,
+                "branches": stats.branches,
+                "branch_tokens": stats.branch_tokens,
+                "buffer_bytes": stats.buffer_bytes,
+                "checkpoints": stats.checkpoints,
+                "checkpoint_bytes": stats.checkpoint_bytes,
+                "prompt_tokens_total": stats.prompt_tokens_total,
+                "cached_tokens_total": stats.cached_tokens_total,
+                "evicted_total": stats.evicted_total,
+                "pressure_events": stats.pressure_events,
+                "enabled": !state.args.no_cache,
+            });
+            body["last"] = stats.last.as_ref().map_or(Value::Null, miss_json);
+        }
         if let Some(active) = state.tracker.active() {
             body["active"] = json!({
                 "id": active.id,
