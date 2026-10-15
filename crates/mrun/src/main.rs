@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use mrun::chat::limits::MAX_PROMPT_BYTES;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -64,9 +65,6 @@ struct RunArgs {
     #[arg(long)]
     check: bool,
 }
-
-/// Largest prompt accepted on the command line, checked before tokenization.
-const MAX_PROMPT_BYTES: usize = 8 * 1024 * 1024;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();

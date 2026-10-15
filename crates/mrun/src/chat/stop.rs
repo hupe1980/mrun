@@ -1,8 +1,6 @@
 //! Stop-sequence matching on streamed text with hold-back of possible partial matches.
 
-/// Limits on stop sequences: count and length in bytes.
-pub const MAX_STOPS: usize = 4;
-pub const MAX_STOP_BYTES: usize = 256;
+use super::limits::{MAX_STOP_BYTES, MAX_STOPS};
 
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum StopError {
