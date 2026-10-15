@@ -82,3 +82,9 @@ output_tokens, outcome, body}`. Files mode 0600.
   any signature accepted on input.
 - Responses: reasoning item `{summary: [], encrypted_content: "mrun1." + base64(text)}`; decoded on
   input to restore reasoning text (not encrypted: content stays on the client's machine).
+
+## RenderedPrompt (renderer → 003)
+
+`{tokens, messages: [{start, role, content_hash}], system_tools_end, generation_start}`. Content
+hashes cover role, visible text and tool calls as canonical JSON, never reasoning, so 003 can tell
+an edit from a template re-render. Offsets come from rendering message prefixes incrementally.

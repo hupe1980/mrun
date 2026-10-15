@@ -1,54 +1,67 @@
 ---
-description: "Tasks for 003 Prefix Cache"
+description: "Tasks for 003 Prefix Store"
 ---
 
-# Tasks: Prefix Cache
+# Tasks: Prefix Store
 
-**Input**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/cache.md](contracts/cache.md)
+**Input**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md),
+[data-model.md](data-model.md), [contracts/cache.md](contracts/cache.md)
+
+## Format: `[ID] [P?] [Story] Description`
 
 ## Phase 1: Setup
 
-- [ ] T001 Add proptest dev-dependency; create `crates/mrun/src/cache/{mod.rs, tree.rs, evict.rs, miss.rs}` skeletons
+- [ ] T001 proptest dev-dependency; skeletons `crates/mrun/src/cache/{mod,tree,switch,chunks,evict,miss}.rs`
 
-## Phase 2: Foundational
+## Phase 2: Foundational (blocks all stories)
 
-- [ ] T002 Verify 001's `Engine::snapshot/restore/drop_segment/trim` meet the contract on CPU (tiny model): restore + continue equals uninterrupted within 1e-3; snapshot buffers never alias the active cache; append after restore does not copy the whole buffer (memory counters)
-- [ ] T003 `ScriptedEngine` segment tracking (which token ranges each segment holds) for structural tests
-- [ ] T004 `cache/tree.rs`: radix tree (insert with edge split by segment copy, longest-match walk incl. live path, pin/unpin, leaf removal, `state_checkpoint` field always None and preserved by all operations — FR-012) + proptest invariants from the data model in `crates/mrun/tests/prefix_tree_props.rs`; lookup microbench (≤ 1 ms at 100K tokens)
+- [ ] T002 Verify 001 primitives against this contract on `ScriptedEngine` and the CPU tiny model: `split_off` then `append(consume)` restores identical state; peak ≤ one layer above steady state; `reserve(keep, total)` is lazy and reports growth before allocating; `checkpoint`/`restore_checkpoint` + re-prefill equals uninterrupted at the same split (needs 001 engine contract tasks)
+- [ ] T003 `ScriptedEngine` profiles used by 003 tests: attention and hybrid (recurrent state only at computed positions), per-buffer view counts, peak-byte tracking, configurable capacity (Qwen3-Coder ≈ 105K tokens) (needs 001)
+- [ ] T004 `cache/tree.rs`: nodes, live path, segment views over refcounted buffers, metadata edge splits, checkpoint and message marks, evicted counters, merge on commit; invariants 1–6 in `crates/mrun/tests/prefix_tree_props.rs`; lookup microbench ≤ 1 ms at 100K tokens
+- [ ] T005 Consume 002 renderer output: message marks with content hashes (reasoning excluded), `system_tools_end`, `generation_start`; tests on golden renders (needs 002 renderer task)
 
 ## Phase 3: US1 — Fast repeated turns (P1) 🎯 MVP
 
-- [ ] T005 [US1] `cache/mod.rs` lookup / evict_for / prepare / finish / release per contract, live-path materialization on replacement, boundaries from 002's renderer, periodic 4,096-token cuts
-- [ ] T006 [US1] Integrate in `runtime/worker.rs` in contract order (lookup → admission → prepare → release → prefill → decode with lazy eviction → finish); tests: admission failure after a hit leaves the store unchanged; restore at exactly-full capacity never exceeds capacity (restore peak checked, partial restore with cause `capacity` when needed, materialization bounded, restored segments unpinned)
-- [ ] T007 [US1] Supply cached/processed counts and miss data to 002's usage mapping and mrun metadata (headers / `: mrun` SSE comments, 002 FR-022); `--no-cache` and per-request opt-out
-- [ ] T008 [US1] Full-prompt hit reprocesses exactly the last token (FR-004); divergence inside the live path trims without copying (FR-003) — tests
+- [ ] T006 [US1] `cache/mod.rs` lookup and plan for the live path (extend, trim, full hit at `P − 1`)
+- [ ] T007 [US1] `cache/chunks.rs` prefill plan (R4); determinism tests; chunk ends at boundaries
+- [ ] T008 [US1] Worker integration in contract order (`runtime/worker.rs`): admission rejection leaves the store unchanged; `initial_need` eviction; growth callback → `evict`; commit of whole chunks on cancel (needs 002 worker)
+- [ ] T009 [US1] Usage `cached = min(resume, P − 1)` and processed into 002 usage and metadata; tests for full hit, append, cancel-then-retry
 
-## Phase 4: US2 — Branches share safely (P1)
+## Phase 4: US2 — Subagents never destroy the main conversation (P1)
 
-- [ ] T009 [US2] Mutation suite (≥ 100 cases: append, edit at positions, rewind, interleaved branches, model/template change, cancel mid-prefill) in `crates/mrun/tests/prefix_mutations.rs` asserting structural exactness and in-memory only (no files written)
-- [ ] T010 [US2] macOS numerics `crates/mrun-engine/tests/prefix_numerics.rs` on 30 cases (SC-002 thresholds)
-- [ ] T011 [US2] Template round-trip tests per model and API: re-rendered history (with reasoning, tool calls) vs generated tokens; mismatches classified `template`
+- [ ] T010 [US2] `cache/switch.rs`: move out (tail ≥ 256 stored, else discarded), move in whole buffers, split back at the match, Off mode moves the live path out; engine error drops affected state and resets
+- [ ] T011 [US2] `crates/mrun/tests/prefix_branches.rs`: main(≥ 80K) → subagent → main and main → title → main at 105K capacity keep 100% of the parent; peak ≤ one layer (SC-002, SC-004 structural)
+- [ ] T012 [US2] Mutation suite `crates/mrun/tests/prefix_mutations.rs` (≥ 100 cases, attention + hybrid; asserts no stale reuse, expected cause and divergence, no files written) (SC-003)
+- [ ] T013 [P] [US2] macOS `crates/mrun-engine/tests/prefix_equality.rs`: cache-on vs cache-off at the same split, ≥ 30 cases on Qwen3-8B and Qwen3.6, identical ids and logits (SC-005)
 
-## Phase 5: US3 — Know why the cache missed (P1)
+## Phase 5: US3 — Hybrid models reuse exactly (P1)
 
-- [ ] T012 [P] [US3] `cache/miss.rs`: closest-prefix tracking with ghost list, text hashes per boundary, classification precedence, volatile pattern table (Claude Code attribution block, timestamps); ≥ 20 injected cases (SC-004)
-- [ ] T013 [US3] MissReport in headers, `/mrun/status`, `mrun ps`; `--debug-cache` excerpts on the server terminal only, refused off-loopback; audit test (no excerpts in responses or on disk)
+- [ ] T014 [US3] Checkpoint placement (system+tools end, last user/tool start, prompt end), tail-end checkpoint on move-out, cap 8 with middle-first drop; resume from deepest ≤ match with trim and re-prefill of the gap
+- [ ] T015 [US3] Hybrid tests on `ScriptedEngine` (append, re-rendered reply, edited last message, retried tool result, round trip) and on Qwen3.6 for SC-006 (needs 001 hybrid model)
 
-## Phase 6: US4 — Cache never costs memory safety (P2)
+## Phase 6: US4 — Know why the cache missed (P1)
 
-- [ ] T014 [P] [US4] `cache/evict.rs`: LRU with turn-type order, never pinned, `clear_cache()` after evicting; tests
-- [ ] T015 [US4] `runtime/pressure.rs`: macOS dispatch memory-pressure source → worker queue, handled between steps (warning → 50%, critical → all unpinned); Linux no-op; injected-event test asserting < 1 s and running request unaffected
-- [ ] T016 [US4] `mrun cache clear` + `POST /mrun/cache/clear`; running request unaffected — test
-- [ ] T016a [US4] Compaction hint (FR-013): on `x-claude-code-context-compacted`, mark the previous live path's segments as first eviction candidates; test with a scripted two-request sequence
-- [ ] T016c [US1] Idle warm-up (FR-015): after a tool-call turn, render the finished conversation through 002's renderer (as the client will resend it), prefill it with no output when idle, preempt on any request arrival (per-layer cancel), expire after 120 s; tests: warm-up turns a template-normalization miss into a hit; arriving request waits ≤ one layer; `--no-warmup`
-- [ ] T016b [US4] Cache hints (FR-014): `cache_control` breakpoints become segment boundaries (via 002's renderer offsets); session tag from client headers (`x-claude-code-session-id`/agent ids, Codex `thread-id`, OpenCode `x-session-id`) or `prompt_cache_key`, values capped at 256 bytes and hashed: leaves tagged with a different session than the incoming request are evicted before the same session's leaves (FR-007 order); `x-mrun-cache: off` header (FR-009); tests that hints never change matched lengths and that the full eviction order holds
+- [ ] T016 [P] [US4] `cache/miss.rs`: causes and precedence per data model; one test per cause, including `template` from re-serialized tool arguments (002 FR-004) and `capacity` after pressure
+- [ ] T017 [US4] Miss report in 002 metadata (headers, `: mrun` comments), `/mrun/status`, `mrun ps`; `--debug-cache` terminal excerpts refused off-loopback; audit test that no excerpt reaches responses or disk (needs 002 metadata task)
 
-## Phase 7: Polish
+## Phase 7: US5 — The cache never costs memory safety (P2)
 
-- [ ] T017 [P] SC-001 (agent replay 5× TTFT, trace from 005) and SC-003 (restore < 10% of prefill) measured; record in research
-- [ ] T018 [P] Site page `site/content/docs/prefix-cache.md` checked against the implementation, incl. the shared-cache side-channel note (FR-011)
+- [ ] T018 [P] [US5] `cache/evict.rs`: LRU units (leaf + same-buffer single-child chain), soft pins last, live-path checkpoints after all branches, `clear_cache`; tests that growth-time eviction always succeeds after admission
+- [ ] T019 [US5] `runtime/pressure.rs`: macOS source → atomic level read at per-layer check points and per token; warning halves branch bytes, critical evicts all branches and resets an idle live path; injected-event test < 1 s with the running request unaffected
+- [ ] T020 [US5] Controls: `--no-cache`, `x-mrun-cache: off`, `mrun cache clear` / `POST /mrun/cache/clear` (live reset when idle); tests
+
+## Phase 8: Polish
+
+- [ ] T021 [P] SC-001 and SC-002 on the target Mac for Qwen3-Coder and Qwen3.6; SC-004 peak measured with MLX peak memory; record in research (needs 005 harness and trace)
+- [ ] T022 [P] Site page `site/content/docs/prefix-cache.md` checked against the implementation (moves, checkpoints, causes, controls, shared-cache side channel)
 
 ## Dependencies
 
-Needs 001 (Engine primitives) and 002 (renderer boundaries, headers, worker). T002–T004 → T005 →
-T006 → T007/T008 → US2/US3/US4 in any order. SC-001 needs 005's trace.
+- 001: engine primitives (T002, T003), hybrid model (T015). 002: renderer marks (T005), worker
+  (T008), metadata (T009, T017). 005: harness and trace for T021.
+- T002–T005 → T006 → T007 → T008 → T009 (MVP) → T010 → T011/T012/T013; T014 after T010; T015 after
+  T014; T016–T020 after T008 in any order; T021–T022 last.
+
+## Parallel opportunities
+
+T013, T016 and T018 touch separate files; T021 and T022 run together.

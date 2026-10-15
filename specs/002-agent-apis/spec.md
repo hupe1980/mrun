@@ -231,7 +231,7 @@ timeouts and that the next request runs normally.
   (never via config or environment), only on loopback, with files mode 0600, a startup warning,
   and a visible flag in `/mrun/status`.
 - **FR-022**: Every response MUST report mrun metadata (cached and processed tokens, miss cause and
-  divergence from feature 003, effective output limit, warnings such as `tool-args-invalid`,
+  divergence and checkpoint gap from feature 003, effective output limit, warnings such as `tool-args-invalid`,
   `tool-unknown`, `image-omitted`, `max-tokens-clamped`, `strict-unsupported`,
   `history-args-raw`). Non-streaming responses carry it in `x-mrun-*` headers; streaming responses
   carry it in SSE comment lines (`: mrun {json}`) emitted before the first content event and before

@@ -1,55 +1,56 @@
 # Implementation Plan: Engine Core
 
-**Branch**: `001-engine-core` | **Date**: 2026-10-14 | **Spec**: [spec.md](spec.md)
+**Branch**: `001-engine-core` | **Date**: 2026-10-15 (revised) | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/001-engine-core/spec.md`
 
 ## Summary
 
-Run Qwen3 dense and Qwen3-MoE MLX-quantized models from the `mrun` binary on Apple Silicon. We
-build our own `mlx-sys` bindings over vendored mlx-c/MLX, a thin safe array layer, and 1:1 ports
-of mlx-lm's `qwen3` and `qwen3_moe` graphs. One engine thread owns all MLX state: weights, the
-active KV cache (allocated at admission, trim by offset, deep-copy snapshots), chunked prefill
-(2,048 tokens like mlx-lm, cancellable after every layer), on-device sampling with async-eval
-pipelining, and a startup memory budget that pre-checks file sizes, measures weights and a cached
-worst-case scratch probe, then sizes KV capacity (capped by max position). The `Engine` trait is
-primitive-based and MLX-free so the generation loop, 002 and 003 are testable everywhere. `mrun run` provides an interactive
-streaming chat; `mrun run --check` runs the greedy conformance set against stored mlx-lm outputs.
+Run Qwen3-8B, Qwen3-Coder-30B-A3B and the hybrid Qwen3.6-35B-A3B (MLX 4-bit) from the `mrun`
+binary on Apple Silicon. Own `mlx-sys` over vendored mlx-c/MLX, a thin safe layer, and 1:1 ports of
+mlx-lm's `qwen3`, `qwen3_moe` and `qwen3_5` graphs including the Gated DeltaNet Metal kernel
+(bound through `mlx_fast_metal_kernel_*`). One worker thread owns all MLX state. The sequence state
+is attention K/V per attention layer plus recurrent state per linear layer, allocated lazily within
+a per-request reservation, with growth reported before allocation so the caller evicts first. The
+reshaped `Engine` trait exposes depth-adaptive chunked prefill with planned boundaries and
+checkpoints (one layer in flight, whole chunks committed), a forward/sample split with one-token
+pipelining, checkpoints, and move primitives (`split_off`, `append`) for 003. The runtime tracks
+committed tokens, delivers `Finished` unconditionally, and survives panics. `mrun run` provides
+an interactive chat; `--check` runs greedy conformance against stored mlx-lm outputs.
 
 ## Technical Context
 
-**Language/Version**: Rust 1.94.0 (edition 2024); C/C++17 for vendored MLX built via CMake
-**Primary Dependencies**: MLX v0.32.4 + mlx-c v0.7.0 (`a341b49`), vendored and hash-checked;
-bindgen output checked in (no libclang at build time); `tokenizers` 0.23 (HF tokenizer.json);
-`minijinja` 3 + `minijinja-contrib` (pycompat) for chat templates (tokenizers built without its
-`http` feature: no network, FR-015); `safetensors` via MLX loader;
-tokio 1.53 (async side), crossbeam-channel (engine command/event channels); clap 4.6
-**Storage**: Model files in the HF cache (feature 004 resolves paths); reference outputs for
-conformance in `crates/mrun-engine/tests/reference/*.json`
-**Testing**: cargo test. Linux CI: MLX CPU backend, tiny random-weight Qwen3/Qwen3-MoE configs
-(generated in tests), KV/sampler/budget unit tests. macOS: logits oracle and greedy conformance vs
-mlx-lm on real 4-bit weights (`MRUN_TEST_MODELS=...`), `mrun bench` speed cells (005)
-**Target Platform**: macOS 15+ on Apple Silicon (Metal); Linux x86_64/aarch64 for CI (CPU)
+**Language/Version**: Rust 1.94.0 (edition 2024); C/C++17 for vendored MLX via CMake
+**Primary Dependencies**: MLX v0.32.4 (`36969c0`) + mlx-c v0.7.0 (`a341b49`), vendored and
+hash-checked, bindings checked in; `tokenizers` 0.23 (no `http`); `minijinja` 3 +
+`minijinja-contrib` (pycompat); `flume` 0.12 (sync + async channels); clap 4.6; serde/serde_json;
+sha2; toml
+**Storage**: HF cache for models; `~/.mrun/{identity,probe}.toml`; references in
+`crates/mrun-engine/tests/reference/*.json`; template goldens in `crates/mrun/tests/templates/`
+**Testing**: cargo test. Linux CI: `ScriptedEngine` (allocation, growth, pipelining, checkpoints,
+moves), chat layer goldens, MLX CPU backend with tiny random-weight `qwen3`/`qwen3_moe`/`qwen3_5_moe`
+configs (GDN via the ops reference). macOS (`#[ignore]`, `MRUN_TEST_MODELS`): GDN kernel vs ops,
+conformance on real weights, exactness of moves/checkpoints, bench cells
+**Target Platform**: macOS 15+ on Apple Silicon; Linux x86_64/aarch64 for CI (CPU)
 **Project Type**: Rust workspace producing one CLI/server binary
-**Performance Goals**: ≥ 90% of mlx-lm decode and prefill tok/s on the same weights (SC-002/003);
-cancellation ≤ 300 ms p95 at 16K (SC-004); first token ≤ 15 s cold start for 8B (SC-007)
-**Constraints**: Memory budget by construction (Principle III); no network (FR-015); input caps
-(FR-016); exact match with mlx-lm greedy output under the same chunk size and schedule (SC-001)
-**Scale/Scope**: 2 model families, 1 active sequence, contexts up to the budgeted capacity
-(≈ 100–110K tokens for Qwen3-Coder-30B-A3B on 48 GB; Qwen3-8B capped at 40,960)
+**Performance Goals**: ≥ 90% of mlx-lm decode (1K, 16K) and prefill (16K) per model; cancel
+≤ 300 ms p95 at 16K, 64K and max depth; first token ≤ 15 s cold for 8B
+**Constraints**: Budget by construction (III); exact greedy parity (II); no network; input caps
+**Scale/Scope**: 3 models, 1 live sequence; capacity on 48 GB ≈ 262K (Qwen3.6, max position),
+≈ 105–120K (Qwen3-Coder), 40,960 (Qwen3-8B, max position)
 
 ## Constitution Check
 
 | Principle | Gate | Status |
 | --- | --- | --- |
-| I Agent latency | Gates measured with the in-repo engine benchmark (FR-017) on named models | Pass |
-| II Exactness | Conformance vs mlx-lm (same schedule); deep-copy snapshots; trim to committed tokens | Pass |
-| III Memory budget | Pre-load check, measured scratch, admission before execution, input caps, MLX limits | Pass |
-| IV Local, private | No network, no prompt logging; content-hash identity computed in 001 (R10) | Pass |
-| V Own runtime, reuse kernels | MLX kernels only; graphs ported from mlx-lm; no new kernels | Pass |
-| VI Simple | One engine thread, one sequence, no batching, no paging | Pass |
+| I Agent latency | Speed and cancel gates per model and depth bucket via the in-repo bench (FR-018) | Pass |
+| II Exactness | Greedy parity defined as mlx-lm's argmax over logprobs; same kernels and compiled ops; deterministic chunk splits; deep-copied checkpoints and segments; trim to committed tokens | Pass |
+| III Memory budget | Pre-load check, probed scratch (two points), capacity ≤ probed depth, lazy allocation clamped to the reservation, `NeedsMemory` before every allocation, input caps, MLX limits | Pass |
+| IV Local, private | No network; identity covers every output-determining file | Pass |
+| V Own runtime, reuse kernels | MLX kernels; GDN kernel is mlx-lm's source ported unchanged (reference kernel, not a new one) | Pass (see Complexity) |
+| VI Simple | One thread, one sequence, contiguous arrays, no paging; dead code removed; `--chunk` flag dropped | Pass |
 
-Post-design re-check: Pass. Complexity note: vendoring MLX + our own sys crate is justified below.
+Post-design re-check: Pass.
 
 ## Project Structure
 
@@ -58,48 +59,46 @@ Post-design re-check: Pass. Complexity note: vendoring MLX + our own sys crate i
 ```text
 specs/001-engine-core/
 ├── plan.md  research.md  data-model.md  quickstart.md
-├── contracts/engine.md   # internal Engine trait + `mrun run` CLI contract
+├── contracts/engine.md   # Engine trait, generation loop, `mrun run`
+├── checklists/requirements.md
 └── tasks.md
 ```
 
 ### Source Code (repository root)
 
 ```text
-Cargo.toml                     # workspace
-rust-toolchain.toml
 crates/
-├── mlx-sys/
-│   ├── build.rs               # cmake vendored mlx-c/MLX; Metal on macOS, CPU+OpenBLAS on Linux
-│   ├── vendor/                # mlx-c (submodule @a341b49) + MLX source tarball sha256-pinned
-│   └── src/bindings.rs        # checked-in bindgen output
-├── mrun-engine/               # features: mlx (default) pulls in mlx-sys
+├── mlx-sys/                   # build.rs (cmake), vendor/ (mlx-c submodule, MLX tarball), src/bindings.rs
+├── mrun-engine/               # feature `mlx` (default) pulls in mlx-sys
 │   ├── src/
-│   │   ├── engine.rs          # Engine trait, ModelInfo, MemoryBudget, Segment, errors (no MLX)
-│   │   ├── identity.rs        # model identity (R10), shared with 004
-│   │   ├── mlx/               # [mlx] safe layer: Array (RAII, !Send, !Sync), ops, fast, memory, device
-│   │   ├── load.rs            # config.json + safetensors, quantization (mode/bits/group, per-path overrides)
-│   │   ├── models/{qwen3.rs, qwen3_moe.rs, common.rs}
-│   │   ├── kv.rs              # per-layer K/V, cap rounded to 256, 4,096-token per-layer growth, trim, deep-copy snapshot/restore
-│   │   ├── sample.rs          # temperature, top-k, top-p, min-p, seed (on device), optional mask
-│   │   ├── budget.rs          # budget formula (no MLX) + [mlx] scratch probe with cache
-│   │   └── mlx_engine.rs      # [mlx] MlxEngine implementing Engine
+│   │   ├── engine.rs          # Engine trait, chunk_len, plan/step/segment/checkpoint types, errors (no MLX)
+│   │   ├── identity.rs        # identity + EOS union (R10)
+│   │   ├── budget.rs          # formula (no MLX) + [mlx] probe with cache
+│   │   ├── mlx/               # [mlx] Array, ops, fast, metal_kernel, compile, memory, device
+│   │   ├── load.rs            # config/text_config, quantization, sanitize, safetensors
+│   │   ├── state.rs           # attention K/V + recurrent state, allocation, checkpoints, segments
+│   │   ├── models/{common.rs, qwen3.rs, qwen3_moe.rs, qwen3_5_moe.rs, gated_delta.rs}
+│   │   ├── kernels/gated_delta.metal.inc   # mlx-lm kernel bodies, verbatim
+│   │   ├── sample.rs          # logprobs, greedy, top-k/p, min-p, seed, mask
+│   │   └── mlx_engine.rs      # MlxEngine
 │   ├── examples/{spike.rs, bench_engine.rs}
-│   └── tests/                 # tiny random models (CPU), reference conformance (macOS, opt-in)
-└── mrun/
-    └── src/
-        ├── main.rs  cli/run.rs           # features: mlx (default) → mrun-engine/mlx
-        ├── chat/{tokenizer.rs, template.rs, stop.rs, utf8.rs}
-        └── runtime/{handle.rs (worker thread), generate.rs (loop), session.rs, scripted.rs}
+│   └── tests/                 # tiny CPU models, conformance, exactness (macOS)
+└── mrun/src/
+    ├── main.rs  cli/run.rs  errors.rs
+    ├── chat/{limits.rs, tokenizer.rs, template.rs, stop.rs}
+    └── runtime/{handle.rs, generate.rs, session.rs, scripted.rs}
+scripts/{gen_reference.py, gen_template_golden.py, bench_reference.sh}
 ```
 
-**Structure Decision**: Three crates (see [ARCHITECTURE](../../concepts/ARCHITECTURE.md)): `mlx-sys`
-isolates the C/C++ build, `mrun-engine` holds the MLX-free `Engine` contract plus the MLX
-implementation behind a feature, `mrun` holds everything engine-agnostic. `cargo test -p mrun
---no-default-features` never builds MLX.
+**Structure Decision**: Three crates (ARCHITECTURE): `mlx-sys` isolates the C/C++ build;
+`mrun-engine` holds the MLX-free contract and the MLX implementation behind a feature; `mrun`
+holds everything engine-agnostic. `cargo test -p mrun --no-default-features` never builds MLX.
 
 ## Complexity Tracking
 
 | Item | Why needed | Simpler alternative rejected because |
 | --- | --- | --- |
-| Own `mlx-sys` over vendored mlx-c | Linux CI build, quant `mode` parameter, `device_info`, pinned MLX with the gather_qmm fix | `mlx-rs` fails to link on Linux and hard-codes affine quantization ([mlx-rust §7.1](../../concepts/research/mlx-rust.md)) |
-| Separate engine crate | Keeps MLX/C++ build out of fast iteration on API/CLI code; enforces one-thread ownership | Single crate makes every test build MLX |
+| Own `mlx-sys` over vendored mlx-c | Linux CI, quant `mode`, `device_info`, metal kernels, pinned MLX | `mlx-rs` fails on Linux and lacks these ([mlx-rust §7.1](../../concepts/research/mlx-rust.md)) |
+| Separate engine crate | Keeps MLX out of fast iteration; one-thread ownership | Single crate builds MLX for every test |
+| Custom Metal kernel (GDN) | No MLX op implements the gated delta recurrence at speed; parity needs mlx-lm's exact kernel | Ops loop (`gated_delta_ops`) is per-token and not bitwise-equal to the kernel; kept only as CPU/test reference |
+| Recurrent rollback (chunk start, pending step) | Whole-chunk commit and pipelining on non-trimmable state | Disabling pipelining for hybrids costs decode speed; re-prefill on every cancel loses progress |

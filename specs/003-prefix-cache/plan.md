@@ -1,49 +1,47 @@
-# Implementation Plan: Prefix Cache
+# Implementation Plan: Prefix Store
 
-**Branch**: `003-prefix-cache` | **Date**: 2026-10-14 | **Spec**: [spec.md](spec.md)
+**Branch**: `003-prefix-cache` | **Date**: 2026-10-15 | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/003-prefix-cache/spec.md`
 
 ## Summary
 
-A token-level radix tree per model identity. The active cache is the tree's *live path*: while a
-conversation continues, nothing is copied and divergence inside it is handled by trimming. Owned
-KV segments (deep copies) are materialized only when the live path is about to be replaced (a
-different conversation or branch arrives) and only for its message-boundary prefixes not already
-stored. Lookup walks tokens; then admission (with lazy eviction), then restore by copy, then
-prefill of the remainder. Every node owns a segment for exactly its edge; edge splits copy slices;
-only leaves are evicted (LRU, assistant before user/tool before system). Memory-pressure events
-reach the worker between steps and evict before running work is touched. Every request yields a
-`MissReport` exposed through 002's mrun metadata (headers or SSE comments) and `mrun ps`.
+A token radix tree per cache key whose live path is the engine's sequence state. Continuing a
+conversation appends; switching moves the old tail out and the matched branch in, one layer at a
+time, through 001's `split_off` and `append(consume)`. Segments are refcounted buffer views, so
+edge splits are metadata; buffers move whole. Hybrid models capture up to 8 checkpoints per path at
+planned chunk ends and resume from the deepest one at or below the match. Eviction is LRU over
+branch units, lazily at the initial allocation and at each growth step; memory pressure is read at
+the per-layer check point. Every request yields a miss report delivered through 002.
 
 ## Technical Context
 
 **Language/Version**: Rust 1.94.0
-**Primary Dependencies**: none new (uses 001's `Engine` snapshot API and 002's renderer boundaries);
-macOS `dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE)` via a tiny FFI shim
-**Storage**: In memory only (FR-010)
-**Testing**: Property tests (proptest) for the radix tree (insert/lookup/split/evict invariants);
-mutation suite (≥100 cases) on `ScriptedEngine` for structural staleness; macOS suite on real
-weights for logit tolerance and TTFT (SC-001/002/003)
-**Target Platform**: macOS; tree logic and staleness suite on Linux
+**Primary Dependencies**: none new; 001 `Engine` primitives, 002 renderer marks and metadata;
+macOS `dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE)` via a small FFI shim
+**Storage**: In memory only (FR-013)
+**Testing**: proptest for tree invariants; mutation suite (≥ 100 cases) on `ScriptedEngine` with
+attention and hybrid profiles and buffer/peak tracking; macOS equality and timing tests on real
+weights
+**Target Platform**: macOS (Metal); tree, policy and suites run on Linux
 **Project Type**: Module of the `mrun` crate
-**Performance Goals**: Lookup ≤ 1 ms for 100K-token prompts (microbench); restore of 30K tokens <
-10% of its prefill time (SC-003); pressure response < 1 s (SC-005)
-**Constraints**: Admission before restore; cache uses only KV capacity not occupied by the active
-request; never evict in-use segments; no hashing-only matches
-**Scale/Scope**: ≈ 100–110K tokens of KV in total on 48 GB with Qwen3-Coder-30B-A3B (96 KiB/token),
-shared by the live conversation and cached segments ([001 R6](../001-engine-core/research.md#r6-memory-budget))
+**Performance Goals**: lookup ≤ 1 ms at 100K tokens; SC-001 ≥ 10× TTFT; move of 80K tokens bounded by
+memory bandwidth (≈ 0.1 s on Qwen3-Coder); pressure response < 1 s
+**Constraints**: one copy per unique token; transient ≤ one layer; no hard pins after `prepare`;
+no hash-only matches; equality tests at a fixed chunk split
+**Scale/Scope**: Qwen3-Coder ≈ 105K tokens of attention state (96 KiB/token); Qwen3.6 ≈ 8 GiB for
+attention (≈ 20 KiB/token) plus checkpoints of 60–150 MiB each
 
 ## Constitution Check
 
 | Principle | Gate | Status |
 | --- | --- | --- |
-| I Agent latency | TTFT 5× on agent replay; zero-copy hot path | Pass |
-| II Exactness | Token-walk matching under full model identity; stored-byte restore; no prompt rewriting | Pass |
-| III Memory budget | Admission before restore; lazy eviction as output grows; pressure sheds cache + `clear_cache` | Pass |
-| IV Local, private | In-memory only; excerpts only on the server terminal with `--debug-cache`, loopback only | Pass |
-| V Own runtime | Pure Rust tree; MLX only via `Engine` | Pass |
-| VI Simple | Whole-segment nodes, LRU by turn type, no normalization layer (deferred) | Pass |
+| I Agent latency | SC-001 (10×), SC-002 (subagent round trip keeps the parent), measured with `mrun bench` | Pass |
+| II Exactness | Token-walk matching under the full cache key; checkpoints exact; SC-005 bit equality at a fixed split; no prompt rewriting here | Pass |
+| III Memory budget | Static admission (001); lazy eviction before every growth; one copy per token; peak ≤ one layer (SC-004); pressure sheds branches first | Pass |
+| IV Local, private | In memory only; excerpts only with `--debug-cache` on loopback, terminal only; side channel documented | Pass |
+| V Own runtime | Pure Rust tree; MLX only through `Engine` | Pass |
+| VI Simple | Plain LRU, one opt-out header, three controls, no tuning knobs | Pass |
 
 Post-design re-check: Pass.
 
@@ -53,29 +51,34 @@ Post-design re-check: Pass.
 
 ```text
 specs/003-prefix-cache/
-├── plan.md  research.md  data-model.md  quickstart.md
+├── spec.md  plan.md  research.md  data-model.md  quickstart.md  tasks.md
 ├── contracts/cache.md
-└── tasks.md
+└── checklists/requirements.md
 ```
 
 ### Source Code (repository root)
 
 ```text
 crates/mrun/src/cache/
-├── mod.rs          # PrefixStore API used by runtime::worker
-├── tree.rs         # radix tree over token ids (edges = token slices)
-├── evict.rs        # LRU with turn-type order, pressure handling
-└── miss.rs         # MissReport + cause classification
-crates/mrun/src/runtime/pressure.rs   # macOS memory-pressure source (no-op on Linux)
+├── mod.rs        # PrefixStore API (contract)
+├── tree.rs       # radix tree, live path, segment views, buffers, merge on commit
+├── switch.rs     # plan + prepare: move out/in, split back, checkpoint restore
+├── chunks.rs     # prefill plan (R4), checkpoint placement and the 8-per-path cap (R3)
+├── evict.rs      # LRU units, soft pins, pressure levels
+└── miss.rs       # MissReport and cause classification
+crates/mrun/src/runtime/pressure.rs   # macOS memory-pressure source; injectable no-op on Linux
 crates/mrun/tests/
 ├── prefix_tree_props.rs
-└── prefix_mutations.rs              # ≥100 structural cases on ScriptedEngine
-crates/mrun-engine/tests/prefix_numerics.rs   # macOS: cache-on vs cache-off logits tolerance
+├── prefix_mutations.rs               # ≥ 100 cases, attention + hybrid ScriptedEngine
+└── prefix_branches.rs                # SC-002 round trips at Qwen3-Coder capacity
+crates/mrun-engine/tests/prefix_equality.rs   # macOS: SC-005
 ```
 
-**Structure Decision**: Tree and policy in `mrun` (testable anywhere); KV bytes stay in
-`mrun-engine` addressed by `KvSegmentId`.
+**Structure Decision**: Tree and policy live in `mrun` (testable anywhere); state bytes stay in
+`mrun-engine`, addressed by segment and checkpoint ids.
 
 ## Complexity Tracking
 
-None.
+| Item | Why needed | Simpler alternative rejected because |
+| --- | --- | --- |
+| Buffer views with whole-buffer moves (R2) | Edge splits without copies; no double-held state after partial matches | Copy on split costs a transient of the segment size; view-only moves hold matched state twice |

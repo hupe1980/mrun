@@ -26,11 +26,12 @@ Cross-cutting:
 - **Output limit**: absent → server default (16,384); too large → clamped to remaining capacity
   (001 FR-009) and reported as `x-mrun-max-tokens` (non-streaming) or in the first `: mrun` comment
   (streaming), with warning `max-tokens-clamped`.
-- **mrun metadata** `{cached, processed, cause, divergence, max_tokens, warnings[]}` (warnings:
+- **mrun metadata** `{cached, processed, cause, divergence, gap, max_tokens, warnings[]}`
+  (`gap`: tokens re-prefilled between a hybrid checkpoint and the match, 003) (warnings:
   `tool-args-invalid`, `tool-unknown`, `image-omitted`, `max-tokens-clamped`,
   `strict-unsupported`, `history-args-raw`):
   - non-streaming: headers `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`,
-    `x-mrun-cache-divergence`, `x-mrun-max-tokens`, `x-mrun-warning` (comma-separated);
+    `x-mrun-cache-divergence`, `x-mrun-cache-gap`, `x-mrun-max-tokens`, `x-mrun-warning` (comma-separated);
   - streaming: SSE comment lines `: mrun {json}` before the first content event (cache, limit) and
     before the final event (warnings); clients ignore comments;
   - bodies stay strictly standard; the last request's metadata is in `/mrun/status`.

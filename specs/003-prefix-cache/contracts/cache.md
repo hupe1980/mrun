@@ -1,41 +1,62 @@
-# Contract: Prefix Cache
+# Contract: Prefix Store
 
-## Internal API (`crates/mrun/src/cache/mod.rs`, called by `runtime::worker` on the engine thread)
+## Internal API (`crates/mrun/src/cache/mod.rs`, engine worker thread only)
 
 ```rust
 impl PrefixStore {
-    /// Longest exact match over the live path and the tree; pins matched nodes.
-    fn lookup(&mut self, key: &CacheKey, tokens: &[u32], hints: &CacheHints) -> Lookup;
-    /// Free memory for `tokens` more KV by evicting unpinned leaves; returns tokens freed.
-    fn evict_for(&mut self, tokens: u32, engine: &mut dyn Engine) -> u32;
-    /// Make the engine's active cache hold exactly `lookup.matched` tokens of this prompt:
-    /// trim on the live path, or materialize the live path then restore matched segments.
-    fn prepare(&mut self, lookup: &Lookup, engine: &mut dyn Engine) -> Result<(), EngineError>;
-    /// Record the new live path (prompt + committed output) with message boundaries from the
-    /// renderer (002) after the request finishes. Cancelled requests record up to `prefilled`.
-    /// `hints` adds `cache_control` breakpoints as boundaries and tags nodes with the session.
-    fn finish(&mut self, key: &CacheKey, tokens: &[u32], boundaries: &[Boundary], hints: &CacheHints, prefilled: u32);
-    fn release(&mut self, lookup: Lookup);                   // unpin (called right after prepare)
-    fn on_pressure(&mut self, level: Pressure, engine: &mut dyn Engine);
-    fn clear(&mut self, engine: &mut dyn Engine);
+    fn new(key: CacheKey) -> Self;
+    /// Longest exact match over the live path and branches, the switch plan and the miss report.
+    /// Pure: changes only `last_used`.
+    fn lookup(&mut self, prompt: &Prompt) -> Plan;
+    /// Queued requests: evicted last while waiting; released on dequeue or cancel.
+    fn soft_pin(&mut self, plan: &Plan) -> SoftPin;
+    fn release(&mut self, pin: SoftPin);
+    /// Bytes to free before `prepare`: attention growth to `P + min(out, 4K)` beyond what the
+    /// engine has allocated after the switch, one layer of the largest moved buffer, planned
+    /// checkpoints.
+    fn initial_need(&self, plan: &Plan, out_limit: u32, engine: &dyn Engine) -> u64;
+    /// Evict LRU units (R6) until `bytes` are free; never touches the live path in use or `plan`.
+    fn evict(&mut self, bytes: u64, protect: Option<&Plan>, engine: &mut dyn Engine) -> u64;
+    /// Switch: move the old tail out (or discard < 256), move matched buffers in, split back,
+    /// trim or restore checkpoint, `reserve(keep = resume, total)`. Nothing pinned afterwards.
+    fn prepare(&mut self, plan: Plan, total: u32, engine: &mut dyn Engine) -> Result<Prepared, EngineError>;
+    /// Chunk ends and checkpoint positions from `resume` (R4).
+    fn prefill_plan(&self, prepared: &Prepared, prompt: &Prompt) -> PrefillPlan;
+    /// Record committed tokens (finish or cancel), message marks, captured checkpoints; merge
+    /// overlap with stored branches; enforce ≤ 8 checkpoints per path.
+    fn commit(&mut self, prompt: &Prompt, committed: &Committed, engine: &mut dyn Engine);
+    fn on_pressure(&mut self, level: Pressure, idle: bool, engine: &mut dyn Engine);
+    /// Drop branches and checkpoints; reset the live path now if idle, else after the request.
+    fn clear(&mut self, idle: bool, engine: &mut dyn Engine);
     fn stats(&self) -> CacheStats;
 }
 ```
 
-Worker order per request: `lookup` → admission (`evict_for` until `prompt + clamped max_output` fits; the clamp uses total capacity, so eviction can always make room) →
-`prepare` (bounded materialization, restore) → `release` (segments copied into the active cache are
-no longer pinned) → prefill remainder → decode (calling `evict_for` when the active cache grows) →
-`finish`. The finish reason used for recording comes from the worker (002), so tool
-calls and stops are both recorded.
+## Engine primitives used (001 contract is authoritative for names)
+
+`allocated()`, `reserve(keep, total)` (lazy), growth notification before each allocation,
+`prefill(tokens, plan, cancel)` returning whole committed chunks and checkpoint ids,
+forward/sample split, `split_off(at) → Segment`, `append(segment, consume)`, `checkpoint()`,
+`restore_checkpoint(id)`, `trim`, `reset`, drop of segments and checkpoints.
+
+## Worker order per request
+
+1. On enqueue: `lookup` + `soft_pin`. On dequeue: `release`, then `lookup` again.
+2. Admission (001): reject if `P ≥ capacity`; clamp output to `capacity − P`. Store unchanged on
+   rejection.
+3. `evict(initial_need)` protecting the plan.
+4. `prepare`. Mode Off: the whole live path is moved out (fork 0), resume 0.
+5. Prefill per `prefill_plan`; before each growth the engine reports bytes and the worker calls
+   `evict`; pressure level read at every per-layer check point.
+6. Decode: same growth and pressure handling per token.
+7. `commit` (mode Off: discard this request's state afterwards; `--no-cache`: reset).
 
 ## User-visible surface
 
-- Usage fields: cached tokens per API (owned by 002).
-- mrun metadata (all APIs, owned by 002 FR-022): headers for non-streaming responses, `: mrun`
-  SSE comments for streaming responses: cached, processed, cause, divergence.
-- `mrun ps`: CacheStats and last MissReport.
-- `mrun cache clear` → `POST /mrun/cache/clear`.
-- `CacheHints {breakpoints, session}` come from 002's ChatRequest `cache_hints`; they order eviction
-  and add boundaries, never change matching.
-- Flags: `--no-cache`; per-request `x-mrun-cache: off` (all APIs) or `"mrun": {"cache": false}` in Chat/Responses bodies;
-  `--debug-cache` (loopback only; excerpts on the server terminal only).
+- Usage: `cached = min(resume, P − 1)` per API (002 data model).
+- mrun metadata (002): `x-mrun-cache-cached`, `-processed`, `-divergence`, `-gap`, `-cause` headers;
+  the same fields in `: mrun {json}` SSE comments; `last` in `/mrun/status`.
+- `mrun ps`: CacheStats and the last miss report.
+- `mrun cache clear` → `POST /mrun/cache/clear` → `{branches_dropped, bytes_freed, live_reset: "now" | "after-request"}`.
+- `--no-cache`; header `x-mrun-cache: off` (all APIs; other values ignored); `--debug-cache`
+  (refused with a non-loopback bind; excerpts on the server terminal only).
