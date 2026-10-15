@@ -5,12 +5,19 @@ pub mod clients;
 pub mod connect;
 pub mod doctor;
 pub mod launch;
+pub mod ls;
 pub mod ps;
+pub mod pull;
+pub mod rm;
 pub mod serve;
 pub mod server;
+pub mod show;
 pub mod stop;
+pub mod verify;
 pub mod version;
 
+use crate::errors::{CliError, Code};
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -37,17 +44,35 @@ pub fn mrun_home() -> PathBuf {
     home.join(".mrun")
 }
 
-/// Asks a yes/no question on the terminal; `false` without a terminal (use `--yes`).
-pub fn confirm(question: &str) -> bool {
-    use std::io::{BufRead, IsTerminal, Write};
+/// Asks `question` with y/N on a terminal; `--yes` answers yes. Without a terminal and without
+/// `--yes` nobody can answer: E002.
+pub fn confirm(question: &str, yes: bool) -> Result<bool, CliError> {
+    if yes {
+        return Ok(true);
+    }
     if !std::io::stdin().is_terminal() {
-        return false;
+        return Err(CliError::new(
+            Code::NeedsConfirmation,
+            format!("{question} (needs confirmation)"),
+        )
+        .hint("pass --yes to confirm when stdin is not a terminal"));
     }
     eprint!("{question} [y/N] ");
     let _ = std::io::stderr().flush();
     let mut answer = String::new();
-    std::io::stdin().lock().read_line(&mut answer).is_ok()
-        && matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|error| CliError::new(Code::Internal, error.to_string()))?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "Yes"))
+}
+
+/// Exit code of a command result, printing the error.
+pub fn exit(result: Result<(), CliError>) -> u8 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => error.report(),
+    }
 }
 
 /// Finds `name` on `PATH`.

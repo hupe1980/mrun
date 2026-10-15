@@ -4,9 +4,14 @@ use mrun::cli::cache::CacheCommand;
 use mrun::cli::connect::{self, ConnectArgs};
 use mrun::cli::doctor::{self, DoctorArgs};
 use mrun::cli::launch::{self, LaunchArgs};
+use mrun::cli::ls::{self, LsArgs};
 use mrun::cli::ps::{self, PsArgs};
+use mrun::cli::pull::{self, PullArgs};
+use mrun::cli::rm::{self, RmArgs};
 use mrun::cli::serve::{self, ServeArgs};
+use mrun::cli::show::{self, ShowArgs};
 use mrun::cli::stop::{self, StopArgs};
+use mrun::cli::verify::{self, VerifyArgs};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -58,6 +63,23 @@ enum Command {
         after_help = "Examples:\n  mrun completions zsh > ~/.zfunc/_mrun\n  mrun completions bash > /etc/bash_completion.d/mrun"
     )]
     Completions { shell: clap_complete::Shell },
+    /// Download a model into the Hugging Face cache, verify it and record it.
+    #[command(
+        after_help = "Examples:\n  mrun pull qwen3.6\n  mrun pull mlx-community/Qwen3-8B-4bit@main --yes"
+    )]
+    Pull(PullArgs),
+    /// List pulled models with family, size, fit and maximum context on this machine.
+    #[command(after_help = "Examples:\n  mrun ls\n  mrun ls --json")]
+    Ls(LsArgs),
+    /// Show a pulled model: family, architecture, quantization, license, identity and fit.
+    #[command(after_help = "Examples:\n  mrun show qwen3-coder")]
+    Show(ShowArgs),
+    /// Remove a pulled model's revision from the Hugging Face cache.
+    #[command(after_help = "Examples:\n  mrun rm gpt-oss\n  mrun rm org/name@abc1234 --yes")]
+    Rm(RmArgs),
+    /// Re-hash every file of a pulled model against its manifest.
+    #[command(after_help = "Examples:\n  mrun verify qwen3.6")]
+    Verify(VerifyArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -126,6 +148,11 @@ fn main() -> ExitCode {
             clap_complete::generate(shell, &mut Cli::command(), "mrun", &mut std::io::stdout());
             ExitCode::SUCCESS
         }
+        Command::Pull(args) => ExitCode::from(pull::run(args)),
+        Command::Ls(args) => ExitCode::from(ls::run(args)),
+        Command::Show(args) => ExitCode::from(show::run(args)),
+        Command::Rm(args) => ExitCode::from(rm::run(args)),
+        Command::Verify(args) => ExitCode::from(verify::run(args)),
     }
 }
 

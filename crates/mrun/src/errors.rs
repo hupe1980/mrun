@@ -31,6 +31,8 @@ pub enum Exit {
 pub enum Code {
     /// E001 unexpected internal error.
     Internal,
+    /// E002 a destructive or risky step needs confirmation and stdin is not a terminal.
+    NeedsConfirmation,
     /// E010 the server is not running or not reachable.
     ServerUnreachable,
     /// E011 the port is taken by another program.
@@ -61,6 +63,7 @@ impl Code {
     pub fn id(self) -> &'static str {
         match self {
             Self::Internal => "E001",
+            Self::NeedsConfirmation => "E002",
             Self::ServerUnreachable => "E010",
             Self::PortInUse => "E011",
             Self::ClientMissing => "E020",
@@ -79,6 +82,7 @@ impl Code {
     pub fn exit(self) -> Exit {
         match self {
             Self::Internal => Exit::Unexpected,
+            Self::NeedsConfirmation => Exit::Usage,
             Self::ServerUnreachable => Exit::ServerUnreachable,
             Self::PortInUse | Self::ClientMissing | Self::ClientTooOld => Exit::Unexpected,
             Self::ModelNotFound
@@ -91,8 +95,9 @@ impl Code {
     }
 
     /// Every code, for the catalog snapshot.
-    pub const ALL: [Code; 13] = [
+    pub const ALL: [Code; 14] = [
         Self::Internal,
+        Self::NeedsConfirmation,
         Self::ServerUnreachable,
         Self::PortInUse,
         Self::ClientMissing,

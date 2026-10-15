@@ -166,11 +166,9 @@ fn codex_conflict(args: &[String]) -> Option<String> {
 /// Starts `mrun serve --detach` after confirmation and waits for it.
 fn start_server(args: &LaunchArgs) -> Result<(), CliError> {
     let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL);
-    if !args.yes
-        && !crate::cli::confirm(&format!(
-            "No mrun server is running. Start one with {model}?"
-        ))
-    {
+    let question = format!("No mrun server is running. Start one with {model}?");
+    // Without a terminal and without --yes: report the missing server, not the prompt.
+    if !crate::cli::confirm(&question, args.yes).unwrap_or(false) {
         return Err(CliError::new(
             Code::ServerUnreachable,
             format!("no mrun server is running on 127.0.0.1:{}", args.port),
