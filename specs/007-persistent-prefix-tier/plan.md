@@ -9,7 +9,7 @@
 An opt-in disk tier below 003's memory store. Branch segments and hybrid checkpoints are written
 once, as exact bytes with their token ids, by a background writer reading immutable host views
 handed over by the engine thread; the live path is written after 2 s of idleness. Entries are
-self-describing files bound to the full cache key, format and mrun version; startup rebuilds an
+self-describing files bound to the full cache key, format and MLX version; startup rebuilds an
 in-memory index from headers. Lookup confirms by full token comparison, read-ahead starts at queue
 admission, and restore reads straight into budgeted arrays with per-block checksums when that beats
 recompute. LRU, a size cap, a free-space floor and max age bound the footprint; `mrun cache` shows
@@ -38,7 +38,7 @@ budget; no request fails because of disk errors
 | Principle | Gate | Status |
 | --- | --- | --- |
 | I Agent latency | Restart/eviction misses become ≈ 1 s restores; no warm-path regression (SC-003); numbers from `mrun bench` | Pass |
-| II Exactness | Exact bytes; full cache key + format + mrun version; token comparison before use; checksums; mutation suite (SC-002) | Pass |
+| II Exactness | Exact bytes; full cache key + format + MLX version; token comparison before use; checksums; mutation suite (SC-002) | Pass |
 | III Memory budget | Restores allocate inside the budget via 003 admission; read-ahead uses only the OS file cache | Pass |
 | IV Local, private | Opt-in only (v3.1.0 "persistence of inference state requires an explicit opt-in and is bound to the model identity"); 0700/0600; no request text stored; no network | Pass |
 | V Own runtime | Own format, no third-party cache layer; MLX touched only on the engine thread | Pass |
@@ -62,7 +62,7 @@ specs/007-persistent-prefix-tier/
 
 ```text
 crates/mrun-engine/src/
-├── engine.rs            # + export_views(), quiesce generation, import_alloc()/import_commit() (contract)
+├── engine.rs            # + export_views(), quiesce generation, import_alloc()/import_seal() (contract)
 └── state_io.rs          # [mlx] host views of evaluated arrays; budgeted destination arrays
 crates/mrun/src/cache/persist/
 ├── mod.rs               # Tier: open (lock, perms, sweep temp files), lookup, restore decision
@@ -84,7 +84,7 @@ Linux with the scripted engine.
 
 ## Cross-spec changes (to fold into the owning specs)
 
-- 001 engine contract: `export_views`, `import_alloc`, `import_commit` (see contract).
+- 001 engine contract: `export_views`, `import_alloc`, `import_seal` (see contract).
 - 002: FR-021 recordings add a `server-start` marker line per serve process (FR-001 attribution);
   metadata `source` field and new causes; `POST /mrun/cache/clear?tier=memory|disk|all`.
 - 003: FR-010 becomes "memory only unless 007 persistence is enabled"; miss causes add

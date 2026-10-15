@@ -24,7 +24,7 @@ launchd.log, server.pid}`
 metrics` when available, power-assertion state machine with a fake clock, service command dry-run
 on Linux); release workflow dry run on a fork with test credentials; manual SC-001/002/004 on the
 target Mac
-**Target Platform**: macOS 14+ arm64 (release); Linux for portable tests and CI
+**Target Platform**: macOS 15+ arm64 (release); Linux for portable tests and CI
 **Project Type**: Packaging, CI, and small runtime additions to the `mrun` binary
 **Performance Goals**: `/metrics` render < 1 ms; metric updates lock-free on the hot path; no
 measurable decode impact (bench delta < 0.5%)

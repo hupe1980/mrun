@@ -14,7 +14,7 @@
 
 `{weights_identity (001 R10, incl. MTP sidecar component), tokenizer_hash, template_hash,
 state_format {attention dtype, layer layout hash, checkpoint format version}, format_version: 1,
-mrun_version}`. Directory: `prefix/<hex(sha256(EntryKey))[0..16]>/`; the full key is in every
+mlx_version}`. Directory: `prefix/<hex(sha256(EntryKey))[0..16]>/`; the full key is in every
 header and compared field by field.
 
 ## TierEntry (file `<entry_id>.mrps`, entry_id = 128-bit random hex)

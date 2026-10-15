@@ -5,9 +5,9 @@
 | Command | Behavior |
 | --- | --- |
 | `mrun --version` | `mrun X.Y.Z (<commit7>, <date>) mlx <v> mlx-c <v> macos-arm64` |
-| `mrun service install` | Write `~/Library/LaunchAgents/io.github.hupe1980.mrun.plist`, `launchctl bootout` (if loaded) then `bootstrap gui/<uid>`; wait for `/health` up to model load time; print label, plist, binary, log path, model, resident memory |
+| `mrun service install [--preload]` | Write `~/Library/LaunchAgents/io.github.hupe1980.mrun.plist`, `launchctl bootout` (if loaded) then `bootstrap gui/<uid>`; wait for `/health` (model load only with `--preload`); print label, plist, binary, log path, model, resident memory |
 | `mrun service uninstall` | `launchctl bootout gui/<uid>/io.github.hupe1980.mrun`, delete the plist; keep `~/.mrun` and models |
-| `mrun serve --service` | Used by launchd only: no detach, rotating `~/.mrun/server.log`, pid file, exit 0 on SIGTERM |
+| `mrun serve --service` | Used by launchd only: lazy model load on the first request (unless `--preload`), no detach, rotating `~/.mrun/server.log`, pid file, exit 0 on SIGTERM |
 | `mrun stop` | Unchanged (004); with a service installed, also prints "the service restarts at next login; `mrun service uninstall` removes it" |
 | `mrun doctor` | Adds: install source and version, service state, stale plist, power-assertion support |
 

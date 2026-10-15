@@ -11,7 +11,7 @@
 | Field | Type | Rule |
 | --- | --- | --- |
 | mode | SpecMode | effective mode |
-| reason_off | Option<`off` \| `grammar` \| `seed` \| `limit` \| `no-drafter` \| `logprobs`> | set when no drafting can happen |
+| reason_off | Option<`off` \| `grammar` \| `seed` \| `logprobs` \| `limit` \| `no-drafter`> | set when no drafting can happen |
 | drafters | {ngram: bool, mtp: bool} | mtp only when the sidecar is loaded |
 
 ## DraftIndex (per request, helper thread builds, engine thread queries)

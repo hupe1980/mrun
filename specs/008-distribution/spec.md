@@ -13,10 +13,10 @@
 ### Session 2026-10-15
 
 - Q: Which install channels? → A: A Homebrew tap (`hupe1980/homebrew-tap`, `brew install hupe1980/tap/mrun`) installing the release tarball, and the same tarball on GitHub Releases. homebrew-core is later (it requires building MLX from source in Homebrew's CI).
-- Q: Which platforms are released? → A: macOS 14 or later on Apple Silicon (arm64) only. Linux builds stay test-only.
+- Q: Which platforms are released? → A: macOS 15 or later on Apple Silicon (arm64) only (matching 001; the M0 spike may lower it). Linux builds stay test-only.
 - Q: Does mrun update itself? → A: No. There is no update check and no network use beyond `mrun pull`; `brew upgrade mrun` is documented, and `mrun doctor` prints the installed version only.
 - Q: How do service and Homebrew relate? → A: `mrun service install` is the only service mechanism; the formula defines no `brew services` block, and its caveats point to `mrun service install`.
-- Q: Does the service load the model at login? → A: Yes; the model stays resident (D020) and the install output states the memory it will hold. A lazy mode that loads on the first request is not part of this feature. (Maintainer decision pending.)
+- Q: Does the service load the model at login? → A: No. The service starts the server at login and loads the model on the first request, so logging in does not claim ≈20 GB; once loaded the model stays resident (D020). `mrun service install --preload` loads at login instead. (Maintainer decision 2026-10-15.)
 - Q: Is `/metrics` on by default? → A: Yes. It is local, pull-only, contains no prompt data, and follows the same bind and authentication rules as every other endpoint.
 - Q: SBOM? → A: Each release attaches a CycloneDX SBOM for the Rust dependency graph plus a hand-maintained component entry for vendored MLX and mlx-c (SHOULD; a missing SBOM does not block a release).
 
@@ -170,7 +170,9 @@ artifacts, signatures, notarization status, checksums and the tap pull request.
   with `RunAtLoad`, `KeepAlive {SuccessfulExit: false}`, `ThrottleInterval 10`, stdout/stderr to
   `~/.mrun/launchd.log`; it MUST be idempotent (re-running replaces and reloads it) and print label,
   paths, model and expected resident memory. Server settings come from `~/.mrun/config.toml`, not
-  from the plist.
+  from the plist. `serve --service` starts without loading the model; the first request loads it
+  (queued requests receive keepalives meanwhile) and it then stays resident. `--preload` makes the
+  agent load the model at login.
 - **FR-006**: `mrun service uninstall` MUST unload (`launchctl bootout`) and delete the agent and
   keep logs, config and models; both commands MUST refuse to run as root.
 - **FR-007**: In service mode the server MUST log to `~/.mrun/server.log` (rotated at 16 MiB, 3
@@ -209,7 +211,7 @@ artifacts, signatures, notarization status, checksums and the tap pull request.
 
 ### Measurable Outcomes
 
-- **SC-001**: On a clean macOS 14+ user account on the target Mac with Homebrew and Claude Code
+- **SC-001**: On a clean macOS 15+ user account on the target Mac with Homebrew and Claude Code
   installed, `brew install hupe1980/tap/mrun` followed by `mrun launch claude-code` (accepting the
   offered pull) completes the scripted read-edit-test task with no other command and no Gatekeeper
   prompt, in 3 of 3 runs.

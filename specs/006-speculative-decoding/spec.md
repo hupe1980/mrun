@@ -14,7 +14,7 @@
 
 - Q: Where do MTP weights come from, given mlx-community conversions drop `mtp.*`? → A: `mrun pull` fetches only the `mtp.*` tensors of the pinned original-precision repository (`Qwen/Qwen3.6-35B-A3B`) by HTTP range requests against its safetensors index, verifies each tensor against a SHA-256 pinned in the alias table, quantizes the head locally with the base model's scheme, and stores it as a sidecar next to the manifest. The base weights stay the pinned mlx-community repository. (Verified in mlx-lm `ba8a08f`: `qwen3_5.py:354` drops every key containing `mtp.`, and `convert` loads through `sanitize`.) See research R1.
 - Q: Is speculation on by default? → A: Yes, as `auto`, once the measure-first gate (FR-001) and SC-001/SC-002 pass; until then the default is `off`. Under `auto` the controller decides per round and falls back to plain decode (depth 0) where drafts do not pay. `--speculation off`, the config key and a per-request header turn it off.
-- Q: Which requests never speculate? → A: Requests with a grammar mask (strict tools, JSON response formats), requests with an explicit `seed` (seeded output stays reproducible as in 001), and requests whose remaining output limit is 1 token.
+- Q: Which requests never speculate? → A: Requests with a grammar mask (strict tools, JSON response formats), requests with an explicit `seed` (seeded output stays reproducible as in 001), requests asking for `logprobs`, and requests whose remaining output limit is 1 token.
 - Q: Does the MTP head attend to the whole context? → A: No. Its attention covers a window of the most recent 4,096 positions, kept with the live path only. Drafts are always verified, so the window affects acceptance, never output. See research R4.
 - Q: Does speculation keep anything on disk? → A: No. Controller statistics live in memory; per-depth verify costs are calibrated with the 001 scratch probe and cached with it.
 
@@ -115,15 +115,15 @@ speculation when diagnosing output differences.
   and committed tokens equal the non-speculative path.
 - A draft is longer than the remaining output limit or reservation: it is capped at
   `remaining − 1` tokens; the reservation from admission is never exceeded.
-- A verify forward would cross a 4,096-token growth step of the active cache: the cache grows (with
-  eviction first, as for decode) before the verify.
+- A verify forward needs more state memory (growth step or in-round snapshots): the engine reports
+  the shortfall before any work and the worker evicts cache first, as for decode.
 - Cancellation during a verify round: the round's tokens are discarded, the state is rolled back to
   the last emitted token, and the request finishes as cancelled within one round.
 - Hybrid model with partial acceptance: recurrent state is restored from the in-round snapshot at
   or below the accepted length and the gap is re-forwarded (research R5).
 - Memory pressure during speculation: in-round snapshots belong to the scratch envelope and are
   freed at round end; pressure handling is unchanged.
-- Request with `logprobs` (if a later feature adds them): speculation off, reason `logprobs`.
+- Request with `logprobs`: speculation off, reason `logprobs`.
 - The MTP sidecar is missing, corrupt or from another base revision: MTP is unavailable (reason
   shown), the model still loads, n-gram drafting still works.
 - Very long prompts (≥ 200K tokens): the drafter index is built off the engine thread during
@@ -167,8 +167,9 @@ speculation when diagnosing output differences.
   requests in memory for the server's lifetime.
 - **FR-008**: Per-depth verify costs MUST be calibrated during 001's scratch probe (widths 1–64 at a
   short and the deepest admissible position) and cached with it; online measurements refine them.
-- **FR-009**: Speculation MUST NOT run for requests with a grammar mask, an explicit `seed`, or a
-  remaining output limit of 1; the metadata names the reason (`grammar`, `seed`, `limit`).
+- **FR-009**: Speculation MUST NOT run for requests with a grammar mask, an explicit `seed`,
+  `logprobs`, or a remaining output limit of 1; the metadata names the reason (`grammar`, `seed`,
+  `logprobs`, `limit`).
 - **FR-010**: Speculation mode MUST be configurable: `--speculation auto|off|ngram|mtp`,
   `[speculation] mode` in `config.toml`, `MRUN_SPECULATION_MODE`; per request, header
   `x-mrun-speculation: off` on all three APIs. `auto` is the default once FR-001's gate passes.
@@ -217,7 +218,7 @@ speculation when diagnosing output differences.
   a position whose `off` top-2 logit margin is below the chunked-prefill tolerance (log-probability
   difference ≤ 1e-2, as in 003 SC-002).
 - **SC-004**: In a mutation suite of at least 100 cases on the scripted engine (partial, full and
-  zero acceptance, stops inside drafts, cancellation mid-round, growth steps, hybrid rollback), zero
+  zero acceptance, stops inside drafts, cancellation mid-round, memory shortfalls, hybrid rollback), zero
   rejected tokens are ever observed in the active state after a round, in the prefix store or in
   the client stream.
 - **SC-005**: With temperature 0.7, the empirical distribution of 10,000 sampled tokens per test

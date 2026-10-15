@@ -36,6 +36,12 @@ All commands accept `--help` (with examples) and `-q/--quiet`; tabular commands 
 | `mrun config` | 004 | Effective configuration with sources |
 | `mrun bench ...` | 005 | See [005 contract](../../005-bench/contracts/result-schema.md) |
 | `mrun completions <bash\|zsh\|fish>` | 004 | Completion script |
+| `mrun service install [--preload]` / `uninstall` | 008 | launchd user agent (lazy model load unless `--preload`); see [008 contract](../../008-distribution/contracts/service-and-release.md) |
+| `mrun --version` | 008 | Version, commit, MLX and mlx-c versions |
+
+Added by post-0.1 features (listed here so the CLI stays one surface): `serve --speculation
+auto\|on\|off` and `pull --no-mtp` (006); `serve --persist` and `mrun cache [clear --disk\|--all]`
+(007).
 
 ## Configuration sources
 

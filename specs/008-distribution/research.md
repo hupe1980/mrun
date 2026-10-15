@@ -15,9 +15,8 @@
 
 ## R2: Platform floor
 
-- **Decision**: macOS 14.0 deployment target, arm64 only. MLX v0.32.4 supports macOS ≥ 14 for the
-  kernels mrun uses [U; confirmed in the M0 binding spike]; `syspolicy_check` (used in SC-005)
-  ships with macOS 14.
+- **Decision**: macOS 15.0 deployment target, arm64 only, matching 001's build and test platform.
+  MLX itself may run on macOS 14 [U]; the M0 binding spike decides whether to lower the floor.
 - **Alternatives**: Universal binary (no Metal MLX on Intel; doubles size for nothing); macOS 13
   (older Metal and toolchain combinations, untested).
 
@@ -62,8 +61,8 @@
 - **Measure**: quickstart compares decode tok/s under the service with a foreground server; if
   launchd's default QoS lowers it by > 2%, set `ProcessType Interactive`.
 - **Alternatives**: `brew services` (Homebrew-only, plist owned by Homebrew, `doctor` cannot rely
-  on it); `SMAppService` (needs an app bundle); socket activation for lazy load (Maintainer decision
-  pending, spec clarification).
+  on it); `SMAppService` (needs an app bundle); socket activation (lazy model loading inside `serve --service` achieves the same without launchd
+  sockets; decided 2026-10-15).
 
 ## R6: Sleep prevention
 

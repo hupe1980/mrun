@@ -6,7 +6,8 @@ lists what mrun serves and where it intentionally differs.
 
 | Method & path | Purpose | Notes |
 | --- | --- | --- |
-| `GET /health` | Liveness + readiness | `{"status":"ok","model":...}`; 503 while loading |
+| `GET /health` | Liveness + readiness | `{"status":"ok","model":...,"loaded":bool}`; 503 while loading; 200 with `loaded:false` before a lazy first load (008) |
+| `GET /metrics` | Prometheus metrics (008) | names and labels per [008 metrics contract](../../008-distribution/contracts/metrics.md) |
 | `HEAD /api/hello` | Claude Code probe | 200, empty |
 | `GET /v1/models` | Served models | `context_window` and `max_model_len` = this machine's KV capacity (vLLM-style field read by OpenCode's local discovery); `max_output_tokens` = server default |
 | `POST /v1/chat/completions` | OpenAI Chat Completions | stream + non-stream, tools, `response_format`, `reasoning_content` |
@@ -88,4 +89,6 @@ codes above.
 `{schema_version, version, model: {id, identity, architecture, quantization}, budget: {budget,
 weights, scratch, kv_capacity_tokens, kv_bytes_per_token}, active: {id, api, prompt_tokens,
 cached, phase, progress} | null, queued: n, cache: CacheStats (003), recording: bool,
-last: {cached, processed, cause, divergence, max_tokens, warnings[]} | null}`
+power: {assertion: bool, since?} (008), last: {cached, processed, cause, divergence, gap,
+max_tokens, warnings[]} | null}`. Post-0.1 features add `spec` (006) and `cache.disk` (007) as
+additive fields.

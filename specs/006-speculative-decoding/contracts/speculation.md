@@ -17,33 +17,40 @@ pub struct VerifyOutcome {
 }
 
 pub trait Engine {
-    // … existing methods (001) …
+    // … existing methods (001: forward/sample split, trim, checkpoints, split_off/append) …
     fn spec_caps(&self) -> SpecCaps;
-    /// Forward `last` followed by `draft` (N+1 positions), accept on device (greedy compare, or
-    /// rejection sampling with `proposal` = None for point drafts, Some for MTP drafts), roll back
-    /// rejected positions, and leave the active state at `before + accepted + 1` tokens.
-    /// Precondition: reserve() covers before + draft.len() + 1. Cancel is checked per layer; on
-    /// cancel the state is restored to `before` and Err(Cancelled) is returned.
-    fn verify(&mut self, last: u32, draft: &[u32], proposal: Option<ProposalId>,
-              sampling: &Sampling, cancel: &CancelToken) -> Result<VerifyOutcome, EngineError>;
+    /// Feed `last` followed by `draft` (N+1 positions) at active_len(), with no pending
+    /// pipelined step (a pending one is rolled back first, as in `forward`). Memory for growth and
+    /// in-round snapshots is checked first: Err(NeedsMemory{bytes}) before any work, state
+    /// unchanged. Cancel is checked after every layer; on cancel the state returns to `before`
+    /// and Err(Cancelled) is returned.
+    fn forward_draft(&mut self, last: u32, draft: &[u32], cancel: &CancelToken)
+        -> Result<DraftStep, EngineError>;
+    /// Accept on device (greedy compare; rejection sampling with `proposal` = None for point
+    /// drafts, Some for MTP drafts), roll back rejected positions (attention: trim; recurrent:
+    /// restore the in-round snapshot ≤ accepted + 1 and replay), free in-round snapshots, and
+    /// leave active_len() == before + accepted + 1. One host sync.
+    fn accept(&mut self, step: DraftStep, proposal: Option<ProposalId>, sampling: &Sampling)
+        -> Result<VerifyOutcome, EngineError>;
     /// Draft up to `n` tokens with the MTP head from the current position; returns tokens and a
-    /// device-side proposal handle used by the next verify. Err(Unsupported) without a head.
+    /// device-side proposal handle consumed by the next `accept`. Err(Unsupported) without a head.
     fn draft_mtp(&mut self, n: u32, sampling: &Sampling) -> Result<(Vec<u32>, ProposalId), EngineError>;
 }
 ```
 
 Guarantees:
-- After `verify` returns, no state for rejected positions remains (attention trimmed; recurrent
-  state restored from an in-round snapshot and replayed). `ScriptedEngine` records the token at
-  every state position so tests can assert this (SC-004).
-- In-round snapshots and verify activations are freed before `verify` returns.
-- `verify` with an empty draft equals one `decode` step (used to keep one code path).
+- After `accept` returns, no state for rejected positions remains. `ScriptedEngine` records the
+  token at every state position so tests can assert this (SC-004).
+- The forward/accept split mirrors 001's forward/sample split, leaving room for per-position grammar
+  masks later (not in this feature).
+- `forward_draft` with an empty draft followed by `accept` equals `forward` + `sample(pipeline:
+  false)`; depth 0 uses the ordinary pipelined `forward`/`sample` path.
 
 ## Runtime loop (`crates/mrun/src/runtime/generate.rs`)
 
-Per round: `controller.choose()` → depth 0: pipelined `decode` → else build draft (index lookup or
-`draft_mtp`), cap at `min(depth, remaining − 1, caps.max_draft)`, grow the active cache if the
-round crosses a growth step (evicting first), `verify`, then feed `accepted` draft tokens and
+Per round: `controller.choose()` → depth 0: pipelined `forward`/`sample` → else build draft (index
+lookup or `draft_mtp`), cap at `min(depth, remaining − 1, caps.max_draft)`, `forward_draft` (on
+`NeedsMemory`, evict and retry, as for decode), `accept`, then feed `accepted` draft tokens and
 `next` one at a time through stop detection, UTF-8 hold-back and tool parsers; on a stop inside
 the round, `trim` to the stop and finish. `controller.observe(round)`.
 

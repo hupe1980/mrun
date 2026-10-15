@@ -22,7 +22,7 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
 - **Decision**: Own container `*.mrps`, one file per entry:
   `magic "MRPS" | u32 format_version | u32 header_len | header JSON | token ids (u32 LE) |
   tensor blocks (16 KiB aligned) | footer {xxh3-64 per 4 MiB block, header xxh3}`. Header: cache
-  key fields, mrun version, parent entry id and its `end`, `start`, `end`, `checkpoint: bool`, tensor
+  key fields, MLX version, parent entry id and its `end`, `start`, `end`, `checkpoint: bool`, tensor
   table (layer, kind `k|v|conv|delta`, dtype, shape, offset, length). Load allocates destination
   arrays through the engine (inside the budget), then `pread`s directly into their host pointers
   (unified memory, no staging copy) and verifies each block's checksum as it lands.
@@ -74,12 +74,11 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
 
 - **Decision**: Eligibility requires equality of: weights identity (001 R10, including any MTP
   sidecar component from 006), tokenizer hash, template hash, state format (attention dtype, layer
-  layout, checkpoint format version), on-disk format version, and the full mrun version string
-  (which pins vendored MLX/mlx-c). Directory layout `prefix/<sha256(key)[0..16]>/` groups files
+  layout, checkpoint format version), on-disk format version, and the vendored MLX/mlx-c version.
+  mrun patch releases that keep these keep their entries. Directory layout `prefix/<sha256(key)[0..16]>/` groups files
   per key; the key itself is in every header and compared in full.
 - **Rationale**: Stored bytes are exact for their tokens, but a version change alters recompute
-  bits and possibly layouts; tying to the mrun version is the simple, safe rule (re-warming after an
-  upgrade costs one prefill per conversation).
+  bits and possibly layouts, so the MLX version is part of the key; tying to the full mrun version would discard every entry on each patch release for no exactness gain.
 - **Alternatives**: Bind only to MLX version and format (allows reuse across patch releases);
   revisit if upgrades prove costly.
 

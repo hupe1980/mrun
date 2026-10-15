@@ -4,7 +4,7 @@ Validation scenarios for feature 008 (after implementation), on the target Mac.
 
 ## Prerequisites
 
-A clean macOS 14+ user account with Homebrew and Claude Code installed; a published release.
+A clean macOS 15+ user account with Homebrew and Claude Code installed; a published release.
 
 ## Scenarios
 

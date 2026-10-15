@@ -6,7 +6,7 @@
 
 **Status**: Draft (after 0.1; gated by the measure-first check in FR-001)
 
-**Input**: User description: "Opt-in SSD tier for branches and checkpoints (`--persist` / config), exact bytes (no quantization), bound to full model identity + state format + mrun version, token-verified on load, files in ~/Library/Caches/mrun mode 0600, size cap with LRU, survives restarts, write-behind off the engine thread's critical path, read-ahead on lookup, crash safety (atomic files, checksums); requires constitution IV opt-in (already amended); `mrun cache` commands for size/clear; measure-first: share of misses due to restart/eviction in traces, SSD read GB/s. SC: 30K-token prefix restored from SSD ≥ 20× faster than re-prefill on the target Mac; zero stale reuse after model change."
+**Input**: User description: "Opt-in SSD tier for branches and checkpoints (`--persist` / config), exact bytes (no quantization), bound to full model identity + state format + MLX version, token-verified on load, files in ~/Library/Caches/mrun mode 0600, size cap with LRU, survives restarts, write-behind off the engine thread's critical path, read-ahead on lookup, crash safety (atomic files, checksums); requires constitution IV opt-in (already amended); `mrun cache` commands for size/clear; measure-first: share of misses due to restart/eviction in traces, SSD read GB/s. SC: 30K-token prefix restored from SSD ≥ 20× faster than re-prefill on the target Mac; zero stale reuse after model change."
 
 ## Clarifications
 
@@ -14,7 +14,7 @@
 
 - Q: Is the tier on by default? → A: No. Constitution IV (v3.1.0) requires an explicit opt-in: `mrun serve --persist`, `[cache] persist = true` or `MRUN_CACHE_PERSIST=1`. `mrun launch` does not enable it.
 - Q: What is written, and when? → A: Exact sequence-state bytes of branches (attention state for a token range) and hybrid checkpoints, written by a background writer: when a branch is moved out of the live path, and for the live path's committed tokens once the server is idle for 2 s after a turn. Eviction from memory never waits for a write.
-- Q: What binds an entry to a model? → A: The full cache key of 003 (weights, tokenizer, template, state format) plus the on-disk format version and the mrun version (which pins the MLX version). Any difference means the entry is invisible; it is never converted.
+- Q: What binds an entry to a model? → A: The full cache key of 003 (weights, tokenizer, template, state format) plus the on-disk format version and the MLX version (decided 2026-10-15: mrun patch releases keep entries). Any difference means the entry is invisible; it is never converted.
 - Q: Default size cap? → A: 32 GiB, capped further so the volume keeps at least 10% free; LRU by last use; entries unused for 30 days are deleted. All three are configurable.
 - Q: Encryption at rest? → A: No application-level encryption; files are user-only (0700 directory, 0600 files) under `~/Library/Caches`, and `mrun doctor` warns when FileVault is off and persistence is on.
 - Q: Two servers on one machine (different ports)? → A: The first server to start holds an exclusive lock on the tier directory; a second server runs with persistence off and says so.
@@ -50,7 +50,7 @@ persistence.
 ### User Story 2 - Never reuse the wrong state (Priority: P1)
 
 Persistence never feeds a request state computed for other tokens, another model, tokenizer,
-template, state format or mrun version, and a damaged file is never used.
+template, state format or MLX version, and a damaged file is never used.
 
 **Why this priority**: Stale or corrupted reuse silently corrupts answers; exactness is a
 constitutional rule.
@@ -124,7 +124,7 @@ sizes and files.
   ranges and hybrid checkpoints) with their token ids; no conversion, quantization or compression
   of state bytes.
 - **FR-004**: Every entry MUST record the cache key (weights, tokenizer, template, state format),
-  the on-disk format version and the mrun version; an entry is eligible only when all match the
+  the on-disk format version and the MLX version; an entry is eligible only when all match the
   running server exactly.
 - **FR-005**: Before any state byte of an entry is used, the stored token ids for the whole prefix
   `[0, end)` MUST be compared with the request's tokens; hashes are used only to find candidates.
@@ -160,7 +160,7 @@ sizes and files.
 
 ### Key Entities
 
-- **Tier Entry**: One file: cache key, format and mrun versions, parent entry, token ids `[0, end)`,
+- **Tier Entry**: One file: cache key, format and MLX versions, parent entry, token ids `[0, end)`,
   state range `[start, end)`, optional checkpoint at `end`, per-block checksums, size, last use.
 - **Tier Index**: In-memory view built at startup from entry headers: candidate lookup by token
   hash, parent chains, LRU order, sizes.

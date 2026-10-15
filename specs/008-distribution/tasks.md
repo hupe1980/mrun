@@ -6,7 +6,7 @@ description: "Tasks for 008 Distribution"
 
 **Input**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/metrics.md](contracts/metrics.md), [contracts/service-and-release.md](contracts/service-and-release.md)
 
-**Prerequisites**: 001 M0 spike (confirms macOS 14 floor and Metal library lookup), 002 router and
+**Prerequisites**: 001 M0 spike (confirms macOS 15 floor and Metal library lookup), 002 router and
 `/mrun/status`, 004 `launch`/`serve --detach`/`stop`/`doctor`. US1's SC-001 needs 001–004 complete.
 
 ## Phase 1: Setup

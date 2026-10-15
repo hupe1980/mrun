@@ -61,7 +61,7 @@ specs/006-speculative-decoding/
 
 ```text
 crates/mrun-engine/src/
-├── engine.rs              # + verify(), draft_mtp(), SpecCaps, VerifyOutcome (contract)
+├── engine.rs              # + forward_draft(), accept(), draft_mtp(), SpecCaps, VerifyOutcome (contract)
 ├── models/qwen3_5_moe.rs  # + optional MtpHead (fc, norms, one attention+MoE layer, window ring)
 ├── models/mtp.rs          # MTP head forward, window ring buffer
 ├── state.rs               # + in-round recurrent snapshots at split offsets, restore + replay
@@ -95,7 +95,7 @@ reached only through the `Engine` trait.
 
 ## Cross-spec changes (to fold into the owning specs)
 
-- 001 engine contract: `verify`, `draft_mtp`, `spec_caps` (see [contract](contracts/speculation.md)).
+- 001 engine contract: `forward_draft`, `accept`, `draft_mtp`, `spec_caps` (see [contract](contracts/speculation.md)).
 - 002 metadata: `spec` object; request header `x-mrun-speculation`.
 - 004 CLI contract: `serve --speculation`, `pull --no-mtp`; `show` lists the sidecar; config key.
 - 005: suite `spec`, edit-heavy trace classification, result fields (additive, schema v1).

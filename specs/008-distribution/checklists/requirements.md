@@ -14,7 +14,7 @@
 ## Requirement Completeness
 
 - [x] No [NEEDS CLARIFICATION] markers remain
-- [ ] Requirements are testable and unambiguous
+- [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
 - [x] All acceptance scenarios are defined
@@ -31,8 +31,7 @@
 
 ## Notes
 
-- Validation pass 1. Open: whether the service loads the model at login or lazily on first
-  request is marked "(Maintainer decision pending)"; the spec assumes eager load (D020) until
-  decided.
+- Validation pass 1. Resolved 2026-10-15: the service loads the model on the first request
+  (`--preload` for login-time loading); resident afterwards (D020).
 - Platform names (Homebrew, launchd, Gatekeeper, Prometheus format) appear because they are the
   user-facing distribution channels named in the feature request, as in 004.

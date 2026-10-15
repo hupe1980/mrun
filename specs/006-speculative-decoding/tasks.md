@@ -20,9 +20,9 @@ description: "Tasks for 006 Speculative Decoding"
 
 ## Phase 2: Foundational (engine)
 
-- [ ] T005 `crates/mrun-engine/src/engine.rs`: `SpecCaps`, `VerifyOutcome`, `ProposalId`, `verify`, `draft_mtp`, `spec_caps` per contract; `ScriptedEngine` implementation with per-position token provenance and scripted acceptance (`crates/mrun/src/runtime/scripted.rs`)
+- [ ] T005 `crates/mrun-engine/src/engine.rs`: `SpecCaps`, `DraftStep`, `VerifyOutcome`, `ProposalId`, `forward_draft`, `accept`, `draft_mtp`, `spec_caps` per contract; `ScriptedEngine` implementation with per-position token provenance and scripted acceptance (`crates/mrun/src/runtime/scripted.rs`)
 - [ ] T006 `crates/mrun-engine/src/sample.rs`: on-device greedy acceptance, point-proposal and ratio rejection sampling, residual sampling with the request RNG stream; `crates/mrun-engine/tests/spec_sampling.rs` chi-square test (SC-005)
-- [ ] T007 `crates/mrun-engine/src/mlx_engine.rs`: N+1-position verify forward for `qwen3`, `qwen3_moe`, `qwen3_5_moe`; attention rollback by trim; cancel per layer
+- [ ] T007 `crates/mrun-engine/src/mlx_engine.rs`: `forward_draft` (N+1 positions) and `accept` for `qwen3`, `qwen3_moe`, `qwen3_5_moe`; attention rollback by trim; cancel per layer
 - [ ] T008 `crates/mrun-engine/src/state.rs`: in-round recurrent snapshots at ≤ 8 split offsets (segmented GDN kernel calls), restore + replay (R5); tests against a non-speculative run on a tiny random hybrid model (CPU)
 - [ ] T009 `crates/mrun-engine/src/budget.rs`: verify widths 1–64 at short and deepest positions in the scratch probe; snapshot bytes in the envelope; `max_draft` lowered until it fits (FR-013); cost table cached in `~/.mrun/probe.toml` (FR-008)
 
@@ -31,9 +31,9 @@ description: "Tasks for 006 Speculative Decoding"
 ## Phase 3: US1 + US2 — copy-aware drafting with a controller (P1) 🎯 MVP
 
 - [ ] T010 [US2] `crates/mrun/src/spec/controller.rs`: Beta acceptance per match bucket, cost curves per depth bucket (probe prior + EWMA), argmax committed/cost over {0} ∪ [N_min, N_max], probing with back-off, server-lifetime state; `crates/mrun/tests/spec_controller.rs` (depth 0 on non-repetitive text, collapse → 0, deep-context bucket used)
-- [ ] T011 [US1] `crates/mrun/src/spec/mod.rs`: SpecPolicy (mode sources; `grammar`, `seed`, `limit` → off); index built on a helper thread during prefill
-- [ ] T012 [US1] `crates/mrun/src/runtime/generate.rs`: round loop per contract (cap by remaining/reservation, growth before verify, one-at-a-time emission through stop, UTF-8 hold-back and tool parsers, trim on stop, cancel per round) (depends on T005, T010, T011)
-- [ ] T013 [US1] `crates/mrun/tests/spec_mutations.rs`: ≥ 100 cases (partial/full/zero acceptance, stop/EOS inside drafts, limit, cancel mid-round, growth step, hybrid rollback) asserting zero rejected tokens in state, store and stream (SC-004)
+- [ ] T011 [US1] `crates/mrun/src/spec/mod.rs`: SpecPolicy (mode sources; `grammar`, `seed`, `logprobs`, `limit` → off); index built on a helper thread during prefill
+- [ ] T012 [US1] `crates/mrun/src/runtime/generate.rs`: round loop per contract (cap by remaining/reservation, `NeedsMemory` → evict and retry, one-at-a-time emission through stop, UTF-8 hold-back and tool parsers, trim on stop, cancel per round) (depends on T005, T010, T011)
+- [ ] T013 [US1] `crates/mrun/tests/spec_mutations.rs`: ≥ 100 cases (partial/full/zero acceptance, stop/EOS inside drafts, limit, cancel mid-round, `NeedsMemory` retry, hybrid rollback) asserting zero rejected tokens in state, store and stream (SC-004)
 - [ ] T014 [US1] `crates/mrun-engine/tests/spec_conformance.rs` (macOS): greedy `auto` vs `off` on 001 conformance prompts and teacher-forced traces; report divergences with margins (SC-003)
 
 **Checkpoint**: n-gram speculation works end to end on both models.
@@ -48,7 +48,7 @@ description: "Tasks for 006 Speculative Decoding"
 - [ ] T017 [US3] `crates/mrun/src/hub/aliases.rs` + `scripts/refresh_aliases.py`: MTP source for `qwen3.6` (repo, revision, per-tensor SHA-256 from a full download)
 - [ ] T018 [US3] `crates/mrun/src/hub/mtp.rs`: safetensors index + header range reads, `mtp.*` range fetch, per-tensor verify, shard fallback, 4-bit quantization (gate 8-bit), atomic sidecar write, manifest + identity component, `--no-mtp`; wiremock tests (range refused, hash mismatch, resume)
 - [ ] T019 [US3] `crates/mrun-engine/src/models/mtp.rs` + `load.rs`: head forward (fc fusion, one attention+MoE layer, shared output head), 4,096-position window ring, prefill fill of the last 1,024 positions when MTP depth > 0; budget accounting (FR-016); test against a reference forward on saved tensors
-- [ ] T020 [US3] Controller: MTP acceptance per position, drafter choice per round, N_max 4; `draft_mtp` proposal handles in verify
+- [ ] T020 [US3] Controller: MTP acceptance per position, drafter choice per round, N_max 4; `draft_mtp` proposal handles consumed by `accept`
 
 ## Phase 6: Gates and polish
 

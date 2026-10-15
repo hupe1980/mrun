@@ -21,7 +21,7 @@ CLI) implemented; 002 `--record` with server-start markers.
 ## Phase 2: Foundational
 
 - [ ] T005 `crates/mrun/src/cache/persist/format.rs`: MRPS encode/decode, 16 KiB-aligned tensor blocks, xxh3 per 4 MiB block, header hash; round-trip and fuzzed-header tests in `crates/mrun/tests/persist_format.rs`
-- [ ] T006 `crates/mrun-engine/src/engine.rs` + `state_io.rs`: `export_views`, `import_alloc`, `import_commit`, generation counter; `ScriptedEngine` versions with structural bytes per token
+- [ ] T006 `crates/mrun-engine/src/engine.rs` + `state_io.rs`: `export_views`, `import_alloc`, `import_seal`, generation counter; `ScriptedEngine` versions with structural bytes per token
 - [ ] T007 `crates/mrun/src/cache/persist/mod.rs`: open (directory create 0700, ownership/permission refusal, backup/Spotlight exclusion, `flock`, temp-file sweep), EntryKey from the loaded model (FR-004, FR-010, FR-014)
 - [ ] T008 [P] `crates/mrun/src/cache/persist/index.rs`: rebuild from headers, boundary-hash map, parent chains, LRU by mtime; rebuild-time test for 10,000 entries
 
@@ -30,14 +30,14 @@ CLI) implemented; 002 `--record` with server-start markers.
 ## Phase 3: US2 — never reuse the wrong state (P1)
 
 - [ ] T009 [US2] `crates/mrun/src/cache/persist/reader.rs`: full token comparison before use, parent-chain token checks, per-block checksum verification while reading, corrupt → delete + `disk-corrupt` (FR-005, FR-006)
-- [ ] T010 [US2] `crates/mrun/tests/persist_identity.rs`: ≥ 100 mutation cases across restarts (weights, tokenizer, template, state format, format version, mrun version, edited tokens, truncated/bit-flipped/foreign files) — zero stale or corrupt loads (SC-002)
+- [ ] T010 [US2] `crates/mrun/tests/persist_identity.rs`: ≥ 100 mutation cases across restarts (weights, tokenizer, template, state format, format version, MLX version, edited tokens, truncated/bit-flipped/foreign files) — zero stale or corrupt loads (SC-002)
 - [ ] T011 [US2] `crates/mrun/tests/persist_crash.rs`: crash hook at every write step (before/after fsync, rename, dir sync) × 50 points; restart sees only complete entries (SC-005)
 
 ## Phase 4: US1 — resume fast after a restart (P1) 🎯 MVP
 
 - [ ] T012 [US1] `crates/mrun/src/cache/persist/writer.rs`: background writer, jobs from branch move-out and idle live path (2 s), per-block cancel, `quiesce(range)` ≤ one block, atomic publish (temp, fsync, rename, dir fsync) (FR-007)
 - [ ] T013 [US1] Engine-thread integration: `quiesce` before trim, growth, move-out, eviction, shutdown; test that the engine never waits more than one block (scripted timing hook)
-- [ ] T014 [US1] `crates/mrun/src/cache/mod.rs`: disk candidates in lookup, restore-or-recompute decision (measured read GB/s vs prefill rate), `import_alloc` → read → `import_commit`, hybrid checkpoint resume, fallback on any error; MissReport `source` and `disk-slower` (FR-008, FR-013)
+- [ ] T014 [US1] `crates/mrun/src/cache/mod.rs`: disk candidates in lookup, restore-or-recompute decision (measured read GB/s vs prefill rate), `import_alloc` → read → `import_seal` → 003 `append`/`restore_checkpoint`, hybrid checkpoint resume, fallback on any error; MissReport `source` and `disk-slower` (FR-008, FR-013)
 - [ ] T015 [US1] Read-ahead at queue admission: index candidates → `F_RDADVISE` (Linux `posix_fadvise`) (FR-009)
 - [ ] T016 [US1] macOS: `persist/restore-30k` for both models; ≥ 20× (SC-001); warm-path TTFT with persistence on vs off within 1% (SC-003)
 

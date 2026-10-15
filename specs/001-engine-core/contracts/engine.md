@@ -123,6 +123,14 @@ clamping, chunk splits and per-chunk cancel, pipelining (pending step, rollback)
 non-trimmability (configurable hybrid mode), checkpoints and segments with the token ranges they
 hold.
 
+## Extensions by later features
+
+Post-0.1 features extend this trait additively, each in its own contract: 006 speculative
+decoding (`forward_draft`, `accept`, `draft_mtp`, `spec_caps`;
+[contract](../../006-speculative-decoding/contracts/speculation.md)) and 007 persistent tier
+(`export_views`, `import_alloc`, `import_seal`;
+[contract](../../007-persistent-prefix-tier/contracts/persist.md)). Nothing in 0.1 depends on them.
+
 ## Generation loop (`crates/mrun/src/runtime/generate.rs`)
 
 Generic over `Engine`:

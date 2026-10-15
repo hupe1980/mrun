@@ -7,31 +7,35 @@
 pub struct HostView { pub ptr: *const u8, pub len: usize, pub layer: u32, pub kind: StateKind,
                       pub dtype: DType, pub shape: Vec<u32> }
 pub struct ExportedState { pub generation: u64, pub views: Vec<HostView> }
+pub enum ExportSource { Segment(SegmentId), Checkpoint(CheckpointId), Live { start: u32, end: u32 } }
+pub enum ImportKind { Segment { start: u32, end: u32 }, Checkpoint { position: u32 } }
 
 pub trait Engine {
-    // … existing methods (001, 003) …
-    /// Views of a branch segment or of live-path tokens [start, end) (+ checkpoint at end).
+    // … existing methods (001: split_off/append, checkpoint/restore_checkpoint, …) …
+    /// Views of a stored segment, a stored checkpoint, or live positions [start, end).
     fn export_views(&mut self, what: ExportSource) -> Result<ExportedState, EngineError>;
-    /// Allocate (inside the budget) destination buffers for an entry chain; returns writable
-    /// views. Caller fills them, then commits. Dropping without commit frees them.
-    fn import_alloc(&mut self, layout: &ImportLayout) -> Result<ImportBuffers, EngineError>;
-    /// Make the filled buffers the active state for tokens [0, end) (and checkpoint at end).
-    fn import_commit(&mut self, buffers: ImportBuffers, end: u32) -> Result<(), EngineError>;
+    /// Allocate owned buffers for a segment or checkpoint, counted in allocated() like any other
+    /// segment: Err(NeedsMemory{bytes}) before allocating. Returns writable host views.
+    fn import_alloc(&mut self, kind: ImportKind) -> Result<ImportBuffers, EngineError>;
+    /// Turn filled buffers into an ordinary Segment or Checkpoint; dropping ImportBuffers
+    /// without sealing frees them.
+    fn import_seal(&mut self, buffers: ImportBuffers) -> Result<Imported, EngineError>;
 }
+pub enum Imported { Segment(Segment), Checkpoint(Checkpoint) }
 ```
 
-Rules: `HostView`s are handed to the writer thread only inside `cache::persist`, which is the only
-module allowed `unsafe` reads of them (`#[allow(unsafe_code)]`, documented). The engine bumps the
-generation and calls `Tier::quiesce(range)` before trimming, growing, moving or freeing any array a
-live view covers.
+Imported segments and checkpoints are indistinguishable from ones made by `split_off` and
+`checkpoint`, so 003 restores them with its existing `append(segment, consume: true)` and
+`restore_checkpoint` path; no new restore logic exists in the engine.
 
 ## Prefix store integration (`crates/mrun/src/cache/mod.rs`)
 
 Worker order per request (extends 003): `lookup` (memory + disk candidates) → admission → if
-`choice == disk`: `import_alloc` → reader fills buffers (verify checksums per block) →
-`import_commit` → prefill the gap (hybrids: from the checkpoint) → decode → `finish` (memory) →
+`choice == disk`: for each entry in the chain `import_alloc` (on `NeedsMemory`, evict first) →
+reader fills buffers (checksums per block) → `import_seal` → 003 `append(consume: true)` /
+`restore_checkpoint` → prefill the gap → decode → `finish` (memory) →
 after 2 s idle: writer job for the live path. Branch move-out (003) enqueues a writer job for the
-moved segment. Any reader error before commit drops the buffers and falls back to recompute; the
+moved segment. Any reader error before sealing drops the buffers and falls back to recompute; the
 miss report says why.
 
 ## HTTP (extends 002)
