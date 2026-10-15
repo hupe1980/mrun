@@ -256,13 +256,94 @@ pub fn default_factory() -> EngineFactory {
     })
 }
 
+/// `mrun serve --detach`: runs the server as a background process with its log in
+/// `MRUN_HOME/server.log`, returns once it serves a loaded model (exit 0), or with the server's
+/// own exit code when loading fails (004 FR-009).
+fn detach(args: &ServeArgs) -> u8 {
+    use crate::cli::stop::{log_file, pid_file};
+    use std::time::Duration;
+    let home = crate::cli::mrun_home();
+    let opened = std::fs::create_dir_all(&home).and_then(|()| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file())
+    });
+    let log = match opened {
+        Ok(log) => log,
+        Err(error) => {
+            eprintln!("error: cannot open {}: {error}", log_file().display());
+            return 1;
+        }
+    };
+    if crate::cli::server::request(args.port, "GET", "/health").is_ok() {
+        eprintln!(
+            "error: a server already runs on 127.0.0.1:{}\n  hint: 'mrun ps' shows it; 'mrun stop' stops a detached one",
+            args.port
+        );
+        return 1;
+    }
+    let child_args: Vec<std::ffi::OsString> = std::env::args_os()
+        .skip(1)
+        .filter(|a| a != "--detach")
+        .collect();
+    let mut command = match std::env::current_exe() {
+        Ok(exe) => std::process::Command::new(exe),
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
+    };
+    command
+        .args(&child_args)
+        .env_remove("MRUN_DETACH")
+        .stdin(std::process::Stdio::null())
+        .stdout(
+            log.try_clone()
+                .map_or_else(|_| std::process::Stdio::null(), Into::into),
+        )
+        .stderr(log);
+    #[cfg(unix)]
+    {
+        // Its own process group: Ctrl-C in this terminal does not reach the server.
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("error: cannot start the server: {error}");
+            return 1;
+        }
+    };
+    let _ = std::fs::write(pid_file(), child.id().to_string());
+    loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            let _ = std::fs::remove_file(pid_file());
+            let tail = std::fs::read_to_string(log_file()).unwrap_or_default();
+            let lines: Vec<&str> = tail.lines().collect();
+            for line in &lines[lines.len().saturating_sub(5)..] {
+                eprintln!("{line}");
+            }
+            return status.code().unwrap_or(1).clamp(1, 255) as u8;
+        }
+        if let Ok((200, _)) = crate::cli::server::request(args.port, "GET", "/health") {
+            eprintln!(
+                "mrun serving at http://127.0.0.1:{} (pid {}, log {})\n  next: mrun launch claude-code   (or codex, opencode); 'mrun stop' stops it",
+                args.port,
+                child.id(),
+                log_file().display()
+            );
+            return 0;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 /// `mrun serve`: runs until SIGTERM or Ctrl-C. Returns the process exit code.
 pub fn run(args: ServeArgs, factory: EngineFactory) -> u8 {
     if args.detach {
-        eprintln!(
-            "error: --detach is not available yet\n  hint: run 'mrun serve' in its own terminal"
-        );
-        return 1;
+        return detach(&args);
     }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()

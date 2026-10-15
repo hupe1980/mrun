@@ -1,6 +1,11 @@
 use clap::{Parser, Subcommand};
 use mrun::chat::limits::MAX_PROMPT_BYTES;
+use mrun::cli::connect::{self, ConnectArgs};
+use mrun::cli::doctor::{self, DoctorArgs};
+use mrun::cli::launch::{self, LaunchArgs};
+use mrun::cli::ps::{self, PsArgs};
 use mrun::cli::serve::{self, ServeArgs};
+use mrun::cli::stop::{self, StopArgs};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -24,6 +29,28 @@ enum Command {
         after_help = "Examples:\n  mrun serve --model qwen3.6\n  MRUN_PORT=9000 mrun serve --model qwen3-coder"
     )]
     Serve(ServeArgs),
+    /// Start a coding agent configured for the local server (this process only).
+    #[command(
+        after_help = "Examples:\n  mrun launch claude-code\n  mrun launch codex --dry-run\n  mrun launch opencode -- --continue"
+    )]
+    Launch(LaunchArgs),
+    /// Print the persistent configuration for a client; writes nothing.
+    #[command(after_help = "Examples:\n  mrun connect claude-code\n  mrun connect codex")]
+    Connect(ConnectArgs),
+    /// Show the running server: model, budget, requests, cache and the last miss.
+    #[command(after_help = "Examples:\n  mrun ps\n  mrun ps --json")]
+    Ps(PsArgs),
+    /// Check this Mac, the server and the clients; prints a fix for each problem.
+    #[command(after_help = "Examples:\n  mrun doctor")]
+    Doctor(DoctorArgs),
+    /// Stop a server started with `mrun serve --detach`.
+    #[command(after_help = "Examples:\n  mrun stop")]
+    Stop(StopArgs),
+    /// Print a shell completion script.
+    #[command(
+        after_help = "Examples:\n  mrun completions zsh > ~/.zfunc/_mrun\n  mrun completions bash > /etc/bash_completion.d/mrun"
+    )]
+    Completions { shell: clap_complete::Shell },
 }
 
 #[derive(Debug, clap::Args)]
@@ -73,10 +100,23 @@ struct RunArgs {
 }
 
 fn main() -> ExitCode {
+    for warning in mrun::config::unknown_variables(std::env::vars().map(|(name, _)| name)) {
+        eprintln!("{warning}");
+    }
     let cli = Cli::parse();
     match cli.command {
         Command::Run(args) => run(args),
         Command::Serve(args) => ExitCode::from(serve::run(args, serve::default_factory())),
+        Command::Launch(args) => ExitCode::from(launch::run(args)),
+        Command::Connect(args) => ExitCode::from(connect::run(args)),
+        Command::Ps(args) => ExitCode::from(ps::run(args)),
+        Command::Doctor(args) => ExitCode::from(doctor::run(args)),
+        Command::Stop(args) => ExitCode::from(stop::run(args)),
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            clap_complete::generate(shell, &mut Cli::command(), "mrun", &mut std::io::stdout());
+            ExitCode::SUCCESS
+        }
     }
 }
 

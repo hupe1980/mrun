@@ -4,5 +4,6 @@ pub mod api;
 pub mod cache;
 pub mod chat;
 pub mod cli;
+pub mod config;
 pub mod errors;
 pub mod runtime;

@@ -33,6 +33,7 @@ tokio = { version = "1.53", features = ["rt-multi-thread", "net", "signal", "mac
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 llguidance = { version = "1.9.1", default-features = false, features = ["lark"] }
 toktrie = "1.9.1"
+clap_complete = "4.6"
 
 [dev-dependencies]
 # Integration tests are built against the library with `test-support`.
