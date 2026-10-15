@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Prefix Store
+# Specification Quality Checklist: Prefix Cache
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-10-14 · **Revised**: 2026-10-15

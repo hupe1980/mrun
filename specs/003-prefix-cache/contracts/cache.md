@@ -1,4 +1,4 @@
-# Contract: Prefix Store
+# Contract: Prefix Cache
 
 ## Internal API (`crates/mrun/src/cache/mod.rs`, engine worker thread only)
 

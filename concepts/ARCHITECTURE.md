@@ -14,7 +14,7 @@ crates/
 │                # model graphs (qwen3, qwen3_moe, qwen3_5_moe hybrid), sequence state, sampler,
 │                # loader, scratch probe
 └── mrun/        # the binary: cli, config, hub, chat (tokenizer, template, tool parsing,
-                 # constraints), runtime (worker, queue, admission), cache (prefix store),
+                 # constraints), runtime (worker, queue, admission), cache (prefix cache),
                  # api (chat completions, messages, responses), bench
 ```
 
@@ -53,7 +53,7 @@ client ──HTTP──▶ api (Chat | Messages | Responses ─▶ ChatRequest; 
                  ▼                                           count_tokens answers here
           runtime::queue (FIFO, keepalives: SSE comments, Anthropic ping, Responses in_progress)
                  ▼  one request at a time
-          engine worker thread (owns MLX, the sequence state and the prefix store)
+          engine worker thread (owns MLX, the sequence state and the prefix cache)
              1. lookup: longest exact token match against the live path and stored branches
              2. admit: the prompt must fit; the output limit is clamped to what remains
              3. switch: keep the shared prefix in place, move the old tail out, move the
@@ -70,7 +70,7 @@ client ──HTTP──▶ api (Chat | Messages | Responses ─▶ ChatRequest; 
 
 ## Engine thread and memory
 
-- One engine thread owns the device, weights, sequence state, prefix store and one GPU stream.
+- One engine thread owns the device, weights, sequence state, prefix cache and one GPU stream.
   Competing servers that drive MLX from several threads have hit stream errors and kernel panics.
 - **Budget by construction**: `budget = min(fraction × physical, recommended working set) −
   reserve`, with the reserve defaulting to `clamp(physical ÷ 6, 2 GiB, 8 GiB)`. Weights are
@@ -84,7 +84,7 @@ client ──HTTP──▶ api (Chat | Messages | Responses ─▶ ChatRequest; 
   2048)` tokens so a layer stays near 100 ms at any depth. A cancelled prefill keeps every whole
   chunk.
 
-## Prefix store
+## Prefix cache
 
 One tree of token sequences per model identity (weights, tokenizer, template, state format). The
 **live path** is the active sequence state itself; every other stored conversation is a **branch**

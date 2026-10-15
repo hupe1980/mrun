@@ -19,7 +19,7 @@
 - [x] Success criteria are technology-agnostic where the product allows
 - [x] All acceptance scenarios are defined
 - [x] Edge cases are identified
-- [x] Scope is clearly bounded (store and checkpoint planning across conversations are 003)
+- [x] Scope is clearly bounded (prefix cache and checkpoint planning across conversations are 003)
 - [x] Dependencies and assumptions identified
 
 ## Feature Readiness

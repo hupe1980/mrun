@@ -1,6 +1,6 @@
-# Research: Prefix Store
+# Research: Prefix Cache
 
-Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix store; Engine thread and memory),
+Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine thread and memory),
 [DECISIONS](../../concepts/DECISIONS.md) D004, D017–D019, [competitors-2026-10](../../concepts/research/competitors-2026-10.md),
 [arxiv-sota-2026-10](../../concepts/research/arxiv-sota-2026-10.md), [literature-study](../../concepts/research/literature-study.md).
 

@@ -1,4 +1,4 @@
-# Implementation Plan: Prefix Store
+# Implementation Plan: Prefix Cache
 
 **Branch**: `003-prefix-cache` | **Date**: 2026-10-15 | **Spec**: [spec.md](spec.md)
 

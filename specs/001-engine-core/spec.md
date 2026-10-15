@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Input**: User description: "Engine core: run a pulled local coding model on an Apple Silicon Mac from the mrun binary. `mrun run <model>` streams generated text in the terminal; the engine owns the model's sequence state with chunked prefill so a long prompt can be cancelled within one layer; a startup memory budget sizes weights + sequence state + measured scratch and rejects prompts that cannot fit with the numbers; greedy output must match the reference implementation token-for-token; decode speed within 10% of the reference on the same weights. Models: Qwen3-8B (dense reference), Qwen3-Coder-30B-A3B (attention MoE) and Qwen3.6-35B-A3B (hybrid Gated DeltaNet + attention MoE, intended default). The engine exposes the primitives the prefix store (003) needs: lazy reservation, reported growth, checkpoints of recurrent state, and moving state tails out and back in. Engine runs on a dedicated thread; async callers stream tokens through a bounded channel."
+**Input**: User description: "Engine core: run a pulled local coding model on an Apple Silicon Mac from the mrun binary. `mrun run <model>` streams generated text in the terminal; the engine owns the model's sequence state with chunked prefill so a long prompt can be cancelled within one layer; a startup memory budget sizes weights + sequence state + measured scratch and rejects prompts that cannot fit with the numbers; greedy output must match the reference implementation token-for-token; decode speed within 10% of the reference on the same weights. Models: Qwen3-8B (dense reference), Qwen3-Coder-30B-A3B (attention MoE) and Qwen3.6-35B-A3B (hybrid Gated DeltaNet + attention MoE, intended default). The engine exposes the primitives the prefix cache (003) needs: lazy reservation, reported growth, checkpoints of recurrent state, and moving state tails out and back in. Engine runs on a dedicated thread; async callers stream tokens through a bounded channel."
 
 ## Clarifications
 
@@ -126,12 +126,12 @@ does, and that sampling controls behave as documented.
 
 ### User Story 5 - State primitives for branching (Priority: P2)
 
-A maintainer of the prefix store (003) can move the tail of the conversation state out, restore
+A maintainer of the prefix cache (003) can move the tail of the conversation state out, restore
 recurrent state from a checkpoint, and move a stored tail back in, without ever holding the same
 state twice and without changing results.
 
 **Why this priority**: Subagents and retries must not destroy the main conversation (D017); the
-store can only be exact if the engine primitives are.
+prefix cache can only be exact if the engine primitives are.
 
 **Independent Test**: On each model, prefill a conversation with planned checkpoints, split the
 tail off, run another prompt, move the tail back, and compare the next-token logits with an

@@ -1,8 +1,8 @@
 ---
-description: "Tasks for 003 Prefix Store"
+description: "Tasks for 003 Prefix Cache"
 ---
 
-# Tasks: Prefix Store
+# Tasks: Prefix Cache
 
 **Input**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md),
 [data-model.md](data-model.md), [contracts/cache.md](contracts/cache.md)

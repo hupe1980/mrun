@@ -1,4 +1,4 @@
-# Feature Specification: Prefix Store
+# Feature Specification: Prefix Cache
 
 **Feature Branch**: `003-prefix-cache`
 
@@ -154,7 +154,7 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 
 ### Edge Cases
 
-- Prompt does not fit capacity: rejected by admission (001) before the store changes anything.
+- Prompt does not fit capacity: rejected by admission (001) before the cache changes anything.
 - Identical requests queued back to back: the second reuses the first's committed state.
 - A queued request's matched branch is evicted last (soft pin) but stays evictable.
 - Retry of an identical request: the output may retrace a stored branch; the overlap is merged at
@@ -196,7 +196,7 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 - **FR-006**: Usage MUST report `cached = min(resume, P − 1)` and `processed = P − cached`, where
   resume is the match (attention) or the restored checkpoint position (hybrid).
 - **FR-007**: Admission (001) checks statically that prompt plus clamped output fits capacity. The
-  store MUST evict only for the initial allocation (`P − resume + min(output limit, 4K)` tokens of
+  cache MUST evict only for the initial allocation (`P − resume + min(output limit, 4K)` tokens of
   attention state, the move transient and planned checkpoints), then on demand before each growth
   step the engine reports. After the switch no state is pinned, so decode-time eviction always
   succeeds. Matched prefixes of queued requests MUST be evicted last.
@@ -211,7 +211,7 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   It is delivered through 002's mrun metadata (headers or `: mrun` SSE comments) and in
   `/mrun/status` and `mrun ps`.
 - **FR-011**: `--debug-cache` (refused on non-loopback binds) MAY print ±40-character excerpts
-  around a divergence on the server terminal only. mrun MUST document that the shared store lets one
+  around a divergence on the server terminal only. mrun MUST document that the shared cache lets one
   client infer from cached counts whether a prefix was seen.
 - **FR-012**: Controls: `--no-cache` (global), header `x-mrun-cache: off` (per request, all APIs;
   stored conversations survive), `mrun cache clear` / `POST /mrun/cache/clear` (drops branches and
@@ -219,7 +219,7 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 - **FR-013**: State MUST stay in memory only; nothing is written to disk.
 - **FR-014**: A changed model identity (including a changed template file) MUST use a separate
   cache key; state under the old key is discarded.
-- **FR-015**: On finish or cancel, the store MUST record exactly the committed tokens (prompt and
+- **FR-015**: On finish or cancel, the cache MUST record exactly the committed tokens (prompt and
   emitted output) with message boundaries and content hashes; where the live path retraces a stored
   branch, the overlap is merged.
 

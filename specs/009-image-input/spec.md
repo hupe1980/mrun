@@ -246,3 +246,21 @@ number of maximum-size images under memory pressure; peak memory stays within th
   003 the prefix store; 004 `pull`, manifests and `launch`; 005 trace recording and replay; 006's
   range-request sidecar mechanism is reused for FR-015 if needed.
 - Clients send images inline (verified for Codex and OpenCode; Claude Code per its API usage).
+
+## Open Questions
+
+Decisions above are defaults; these need data or a maintainer call before `/speckit-plan` is
+final (research references in brackets).
+
+- **OQ-1**: Does the pinned `mlx-community/Qwen3.6-35B-A3B-4bit` revision contain the vision tower,
+  and in which precision? Decides whether FR-015 needs the sidecar path [R2]. Checked by plan T001.
+- **OQ-2**: Does the pinned Claude Code version send Read-tool images to a custom
+  `ANTHROPIC_BASE_URL`? Issue reports say some versions do not. If not, SC-001 covers pasted
+  screenshots only [R4].
+- **OQ-3**: Is a 5% session share the right gate threshold [R10]?
+- **OQ-4**: Can mrun's resize reproduce the reference (PIL bicubic) bit for bit, or does SC-005
+  compare on identical pixel tensors only, as written [R3]?
+- **OQ-5**: 002 FR-009's 8 MiB body cap rejects image-carrying sessions even on the placeholder
+  path. Should 002 count image bytes separately now, before this feature [R9]?
+- **OQ-6**: Is 2,560 tokens per image enough for screenshots with small text, and is 1.5 s
+  (SC-003) achievable for the encoder on an M4 Pro? Both are measured in the gate phase.

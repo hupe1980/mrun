@@ -23,10 +23,11 @@ the target Mac (M4 Pro, 48 GB) before it counts as done.
 
 Each comes after the first release, once measurements on recorded agent sessions justify it:
 
-- **Speculative decoding.** Qwen3.6 ships multi-token prediction heads, and agents copy large parts
-  of their context when editing files. Both can speed up generation without changing output. On
-  mixture-of-experts models checking a draft costs more, so a controller turns speculation off
-  where it does not pay.
+- **Speculative decoding for code edits.** Agents copy large parts of their context when editing
+  files; drafting those tokens from the prompt itself and checking them in one pass can speed up
+  generation without changing output. On mixture-of-experts models checking a draft costs more, so
+  a controller turns speculation off where it does not pay. Qwen3.6's multi-token prediction heads
+  follow only if measurements show they help on this model.
 - **Persistent cache on SSD**, opt-in, so long sessions survive server restarts.
 
 ## Later

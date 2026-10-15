@@ -1,4 +1,4 @@
-# Data Model: Prefix Store
+# Data Model: Prefix Cache
 
 ## CacheKey
 

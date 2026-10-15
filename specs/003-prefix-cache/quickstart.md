@@ -1,4 +1,4 @@
-# Quickstart: Prefix Store
+# Quickstart: Prefix Cache
 
 ## Automated
 
