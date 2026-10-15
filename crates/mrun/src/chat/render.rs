@@ -811,8 +811,83 @@ You are Qwen.<|im_end|>
         );
     }
 
+    /// Qwen3.5/3.6-style history: reasoning is rendered only after the last user query unless
+    /// `preserve_thinking` is set.
+    const QWEN36: &str = r#"{%- set ns = namespace(last_user=-1) %}
+{%- for m in messages %}{% if m.role == 'user' %}{% set ns.last_user = loop.index0 %}{% endif %}{% endfor %}
+{%- for m in messages %}
+{%- if m.role == 'assistant' %}<|im_start|>assistant
+{% if m.reasoning_content and (preserve_thinking or loop.index0 > ns.last_user) %}<think>
+{{ m.reasoning_content }}
+</think>
+
+{% endif %}{{ m.content }}{% for c in m.tool_calls or [] %}
+<tool_call>
+<function={{ c.function.name }}>
+{% for k, v in c.function.arguments | items %}<parameter={{ k }}>
+{{ v }}
+</parameter>
+{% endfor %}</function>
+</tool_call>{% endfor %}<|im_end|>
+{% elif m.role == 'tool' %}<|im_start|>user{{ '\n' }}<tool_response>
+{{ m.content }}
+</tool_response><|im_end|>
+{% else %}<|im_start|>{{ m.role }}
+{{ m.content }}<|im_end|>
+{% endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}<|im_start|>assistant
+<think>
+{% endif %}"#;
+
     #[test]
-    fn harmony_effort_mapping() {
+    fn qwen36_preserve_thinking_keeps_the_tool_loop_prefix() {
+        let tokenizer = byte_tokenizer();
+        let template = ChatTemplate::new(QWEN36.into()).unwrap();
+        let loop_turns = vec![
+            Message::user_text("fix it"),
+            Message::Assistant(vec![
+                AssistantPart::Reasoning("Look at a.rs first.".into()),
+                call("c1", r#"{"path":"a.rs"}"#),
+            ]),
+            result("c1", "fn main() {}"),
+            Message::Assistant(vec![
+                AssistantPart::Reasoning("It is fine.".into()),
+                AssistantPart::Text("Done.".into()),
+            ]),
+        ];
+        let mut first = ChatRequest::new(ApiKind::Messages);
+        first.messages = loop_turns[..3].to_vec();
+        let mut second = ChatRequest::new(ApiKind::Messages);
+        second.messages = loop_turns.clone();
+        second.messages.push(Message::user_text("thanks, now b.rs"));
+        for (preserve, extends) in [(true, true), (false, false)] {
+            let context = RenderContext {
+                supports_thinking: preserve,
+                ..ctx(&template, &tokenizer, SyntaxId::QwenXml)
+            };
+            let a = render(&first, &context).unwrap().prompt;
+            let b = render(&second, &context).unwrap().prompt;
+            let head = &a.tokens[..a.generation_start as usize];
+            assert_eq!(b.tokens.starts_with(head), extends, "preserve={preserve}");
+        }
+    }
+
+    #[test]
+    fn syn_harmony_effort_mapping_openai() {
+        use crate::api::chat_completions::openai_effort;
+        let effort = |e: Option<&str>| harmony_effort(openai_effort(e));
+        assert_eq!(effort(None), "low");
+        assert_eq!(effort(Some("none")), "low");
+        assert_eq!(effort(Some("minimal")), "low");
+        assert_eq!(effort(Some("low")), "low");
+        assert_eq!(effort(Some("medium")), "medium");
+        assert_eq!(effort(Some("high")), "high");
+        assert_eq!(effort(Some("xhigh")), "high");
+    }
+
+    #[test]
+    fn syn_harmony_effort_mapping_anthropic_budget_and_adaptive() {
         let on = |budget, effort| ReasoningCtl::On { budget, effort };
         assert_eq!(harmony_effort(ReasoningCtl::Off), "low");
         assert_eq!(harmony_effort(on(None, Some(Effort::High))), "high");

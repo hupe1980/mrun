@@ -346,3 +346,15 @@ async fn msg_diagnostics_and_context_management_ignored() {
     let reply = server.post("/v1/messages", &body).await;
     assert_eq!(reply.status, 200, "{}", reply.text);
 }
+
+#[tokio::test]
+async fn msg_thinking_budget_closes_the_block() {
+    // Budget 5: after five reasoning tokens the block is closed by forced tokens and the rest of
+    // the reply is the answer.
+    let server = common::start(&["abcdefghij"]).await;
+    let mut body = user("think briefly");
+    body["thinking"] = json!({"type": "enabled", "budget_tokens": 5});
+    let reply = server.post("/v1/messages", &body).await.json();
+    assert_eq!(reply["content"][0]["thinking"], "abcde", "{reply}");
+    assert_eq!(reply["content"][1]["text"], "fghij");
+}

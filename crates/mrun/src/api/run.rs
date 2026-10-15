@@ -6,18 +6,18 @@
 //! queued, prefilling or generating.
 
 use crate::api::model::{
-    ApiError, ApiKind, ChatRequest, ErrorKind, Finish, GenEvent, Usage, Warning,
+    ApiError, ApiKind, ChatRequest, ErrorKind, Finish, GenEvent, ReasoningCtl, Usage, Warning,
 };
 use crate::api::status::{Active, Tracker};
 use crate::chat::constrain;
-use crate::chat::hook::{Constraint, RequestHook};
+use crate::chat::hook::{Constraint, HarmonyIds, RequestHook, ThinkBudget};
 use crate::chat::render::{self, RenderContext, RenderLog};
 use crate::chat::syntax::registry::ChatSyntax;
 use crate::chat::syntax::{ParseEnd, ParseLog, ParseOut, ParserConfig};
 use crate::cli::serve::{Loaded, ServeArgs};
 use crate::runtime::generate::{Event, FinishReason, GenerateRequest};
 use crate::runtime::handle::SubmitError;
-use mrun_engine::CancelToken;
+use mrun_engine::{CancelToken, SyntaxId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -104,6 +104,7 @@ pub async fn start(
     generate.hook = RequestHook::new(
         request.ignore_eos,
         constraint(&loaded, &request, rendering.reasoning_open),
+        think_budget(&loaded, &request, rendering.reasoning_open),
     )
     .boxed();
     let cancel = generate.cancel.clone();
@@ -195,6 +196,48 @@ fn constraint(loaded: &Loaded, request: &ChatRequest, reasoning_open: bool) -> O
         reasoning_end,
         ban,
     })
+}
+
+/// Anthropic `budget_tokens` closes the reasoning block when reached (FR-013, FR-035).
+fn think_budget(
+    loaded: &Loaded,
+    request: &ChatRequest,
+    reasoning_open: bool,
+) -> Option<ThinkBudget> {
+    let ReasoningCtl::On {
+        budget: Some(budget),
+        ..
+    } = request.reasoning
+    else {
+        return None;
+    };
+    let tokenizer = &loaded.tokenizer;
+    let id = |token: &str| tokenizer.token_id(token);
+    let encode = |text: &str| tokenizer.encode(text).ok();
+    match loaded.syntax {
+        SyntaxId::Hermes | SyntaxId::QwenXml => Some(ThinkBudget {
+            budget,
+            used: 0,
+            inside: reasoning_open,
+            start: id("<think>"),
+            end: id("</think>")?,
+            closer: encode("\n</think>\n\n")?,
+            harmony: None,
+        }),
+        SyntaxId::Harmony => Some(ThinkBudget {
+            budget,
+            used: 0,
+            inside: false,
+            start: None,
+            end: id("<|end|>")?,
+            closer: encode("<|end|><|start|>assistant<|channel|>final<|message|>")?,
+            harmony: Some(HarmonyIds {
+                channel: id("<|channel|>")?,
+                message: id("<|message|>")?,
+                analysis: encode("analysis")?,
+            }),
+        }),
+    }
 }
 
 pub fn prompt_too_long(prompt: u32, capacity: u32) -> ApiError {
