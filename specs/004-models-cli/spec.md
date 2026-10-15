@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-14
 
-**Status**: Draft
+**Status**: Draft (revised 2026-10-15: open model architecture, D015)
 
 **Input**: User description: "Best-in-class developer experience: `mrun pull/ls/rm` with content-hash verified models and short aliases, `mrun connect <client>` that configures Claude Code, Codex and OpenCode, `mrun doctor` that diagnoses the machine and setup, `mrun ps` that shows the loaded model, memory and cache, one config file with sane defaults, shell completions; fresh Mac to working agent session in under 5 minutes."
 
@@ -15,6 +15,12 @@
 - Q: Where are models stored? → A: In the shared Hugging Face hub cache (`HF_HOME` / `HF_HUB_CACHE`), so models downloaded by other MLX tools are reused; mrun keeps aliases, manifests and config in `~/.mrun` (`MRUN_HOME` overrides). (Maintainer decision.)
 - Q: Where is the config file? → A: `~/.mrun/config.toml`; environment variables `MRUN_*` override it; flags override both.
 - Q: How do clients get configured? → A: Primary: `mrun launch <client>` sets everything for one process (Ollama-style), leaving global configs untouched. Secondary: `mrun connect` prints or (with `--write`, diff, backup, `--undo`) writes persistent config: Claude Code `~/.claude/settings.json` env (or `--project` for `.claude/settings.local.json`), Codex a separate profile `~/.codex/mrun.config.toml` with a model catalog file (root config untouched), OpenCode `~/.config/opencode/opencode.json`. Revised 2026-10-15 after the competitor study.
+
+### Session 2026-10-15 (open model architecture, D015)
+
+- Q: Which models get aliases? → A: One per release-0.1 family: `qwen3.6` (Qwen3.6-35B-A3B, default candidate), `qwen3-coder` (Qwen3-Coder-30B-A3B), `gpt-oss` (gpt-oss-20b), `devstral` (Devstral Small 2 24B), `qwen3-8b` (Qwen3-8B). Any other repo of a supported family can be pulled by repo id.
+- Q: Which is the default? → A: Whichever 0.1 model wins the agent suite of `mrun bench` on the M4 Pro (005 T012a); `qwen3.6` until then.
+- Q: What if a repo's architecture is unsupported? → A: `pull` reads `config.json` first and refuses before downloading weights, listing the supported families (001 FR-002).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -63,6 +69,9 @@ usage and listings.
    removed after confirmation and no other model is affected.
 3. **Given** a corrupted or partially downloaded model, **When** any command uses it, **Then** mrun
    detects the hash mismatch and offers `mrun pull` to repair it.
+4. **Given** a Hugging Face repo whose `model_type` no family supports, **When** the developer runs
+   `mrun pull <repo>`, **Then** mrun refuses before downloading any weights, naming the
+   architecture and listing the supported families and their aliases.
 
 ---
 
@@ -99,6 +108,9 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
 - A model file edited in place with its size and modification time preserved: detected by
   `mrun verify`, not by fast checks.
 - Offline machine: every command except `pull` works without network.
+- A repo whose `config.json` is missing or unreadable: `pull` refuses before downloading weights.
+- An unpinned repo in the HF cache with an unsupported architecture: `ls` shows it with status
+  `unsupported` and its `model_type`, never as runnable.
 
 ## Requirements *(mandatory)*
 
@@ -108,13 +120,19 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
   `HF_ENDPOINT` for mirrors, `HF_TOKEN` or else `$HF_HOME/token` for gated models, and
   `HF_HUB_OFFLINE=1` by failing fast with exit 6), show size, license and memory fit
   before downloading, resume interrupted downloads, and verify every file's content hash.
-- **FR-002**: mrun MUST ship a curated alias list with pinned revisions and hashes: `qwen3.6` →
-  Qwen3.6-35B-A3B 4-bit (default, hybrid), `qwen3-coder` → Qwen3-Coder-30B-A3B-Instruct 4-bit,
-  `qwen3-8b` → Qwen3-8B 4-bit. Each alias records the agent-usable context on the user's Mac.
+- **FR-002**: mrun MUST ship a curated alias list with pinned revisions and hashes, one per
+  release-0.1 family: `qwen3.6` → Qwen3.6-35B-A3B 4-bit (`qwen3_5_moe`, default candidate),
+  `qwen3-coder` → Qwen3-Coder-30B-A3B-Instruct 4-bit (`qwen3_moe`), `gpt-oss` → gpt-oss-20b MXFP4
+  (`gpt_oss`), `devstral` → Devstral Small 2 24B 4-bit (`mistral`), `qwen3-8b` → Qwen3-8B 4-bit
+  (`qwen3`). The default alias (used by `launch` when nothing is pulled) is the winner of 005's
+  agent-suite decision (005 T012a), `qwen3.6` until then. Each alias records its family and the
+  agent-usable context on the user's Mac.
 - **FR-003**: `mrun ls`, `mrun rm`, `mrun show <model>` MUST manage and describe local models,
   including disk size, fit in the current memory budget and context capacity (computed with the
-  same budget function as feature 001). `ls` also lists compatible MLX repositories already in the
-  HF cache (status `unpinned`; `mrun pull <repo>` pins them without downloading). `rm` deletes the
+  same budget function as feature 001, with the family's bytes per token). `ls` shows each model's
+  family. `ls` also lists MLX repositories of supported families already in the HF cache (status
+  `unpinned`; `mrun pull <repo>` pins them without downloading) and repositories of other
+  architectures as `unsupported`. `rm` deletes the
   pinned revision's snapshot and the blobs no other revision of that repository links to, removes
   `refs/*` only when they point to that revision, and warns that other tools using that revision
   lose it.
@@ -177,11 +195,16 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
   every command; this CLI contract is the single source for all commands and flags.
 - **FR-013**: Only `pull` (or a pull the user confirms inside `launch`) may use the network; all
   other commands MUST work offline.
+- **FR-014**: `mrun pull` MUST fetch `config.json` (and `text_config` for wrapped configs) before
+  any weight file and resolve its family with 001's family registry; an unsupported `model_type`
+  or quantization mode MUST be refused before downloading weights (exit 3), naming it and listing
+  the supported families with their aliases. The size/fit preview uses the family's bytes per
+  token and position-bound bytes.
 
 ### Key Entities
 
-- **Model Manifest**: Alias, repository, revision, files with hashes and sizes, license, architecture,
-  quantization.
+- **Model Manifest**: Alias, repository, revision, files with hashes and sizes, license, family,
+  architecture (`model_type`), quantization.
 - **Client Profile**: Client name, configuration location, settings to write, cache-stability hints.
 - **Diagnostic**: Check, status, severity, fix.
 
@@ -199,6 +222,9 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
   supported client version (pinned): the scripted read-edit-test task completes 5 of 5 runs per
   client through each mechanism.
 - **SC-005**: Every CLI error in the error catalog includes a next step (review checklist, 100%).
+- **SC-006**: For 100% of unsupported-architecture fixtures (mock hub), `pull` exits 3 having
+  downloaded no weight bytes, and the message lists every supported family; every curated alias
+  resolves to a repo whose family loads (one pull per alias on the target Mac).
 
 ## Assumptions
 

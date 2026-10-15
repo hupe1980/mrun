@@ -9,14 +9,17 @@
 | revision | string | 40-hex commit sha (pinned) |
 | files | list of {path, size, sha256} | every file needed to load; sha256 64-hex |
 | license | string | SPDX id or "other" with URL |
-| architecture | string | from `config.json` `model_type` (e.g. `qwen3`, `qwen3_moe`, `qwen3_5_moe`) |
-| quantization | {bits, group_size, mode} | from `config.json` |
+| family | string | 001 family registry: `qwen3_5_moe` \| `qwen3_moe` \| `gpt_oss` \| `mistral` \| `qwen3` (0.1) |
+| architecture | string | from `config.json` `model_type` (e.g. `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`, `mistral3`; wrapped `text_config.model_type` recorded too) |
+| quantization | {bits, group_size, mode: affine \| mxfp4, overrides} | from `config.json` |
 | identity | string | 001 identity function: sha256 over sorted (path, sha256); used by 001/003 |
 | fast_check | list of {path, size, mtime} | compared on every use |
 
 States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (hash mismatch) → (pull) →
 `ready`. A compatible MLX repo found in the HF cache without a manifest is listed as `unpinned`;
-`mrun pull <repo>` hashes it and writes the manifest without downloading.
+`mrun pull <repo>` hashes it and writes the manifest without downloading. A repo of an
+unsupported architecture is `unsupported` (listed, never loaded); `pull` of one stops after
+`config.json` with no manifest written.
 
 ## ClientProfile (compiled in)
 

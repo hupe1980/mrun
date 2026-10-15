@@ -23,6 +23,8 @@ In `bench/tasks/smoke-fix-test/` (a tiny repo with a failing test), once with
 `M=mlx-community/Qwen3.6-35B-A3B-4bit` and once with
 `M=mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit` served. `CAP` and `OUT` are the values from
 `/v1/models`; `mrun launch` (004) sets the same variables automatically.
+Repeat steps 1–3 with gpt-oss-20b (Harmony syntax) and Devstral Small 2 (Mistral syntax) for
+SC-007: protocol errors are gated, task completion is recorded. Repo ids: 004 research R4.
 
 1. **Claude Code**:
 

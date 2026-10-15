@@ -36,8 +36,12 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine th
 - **Alternative rejected**: moving only the matched views while the remainder keeps the shared
   buffer: on an edit at 60K into a 65K-token branch it would hold ~45K tokens (≈ 4 GB) twice.
 
-## R3: Hybrid checkpoints
+## R3: Checkpoints for position-bound state
 
+- **Scope**: only families with position-bound state (linear attention; 0.1: Qwen3.6). The planner
+  reads `ModelInfo.recurrent_bytes > 0`, never a family name. gpt-oss sliding-window layers keep
+  full KV (001 FR-024), so they are positional: a rotating window cache would make every earlier
+  position position-bound and force checkpoints on every branch; keeping 24 KiB/token avoids that.
 - **Decision**: Planned positions: end of system+tools, start of the last user or tool message,
   and `generation_start` (the start of the generation header, where the next turn's re-rendered
   reply diverges). A moved-out tail's end state stays inside its 001 segment and is restored by
@@ -63,8 +67,8 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine th
   `s + chunk(s)`, where `chunk(depth) = clamp(2048 × 16K / depth, 128, 2048)` (001). The plan is a
   pure function of tokens, boundaries, checkpoints and s; the 001 `PrefillPlan.boundaries` it
   produces holds only these selected chunk ends.
-- **Rationale**: Chunk ends at message boundaries cost nothing for attention models and are required
-  for hybrid checkpoints (llama.cpp span-aware chunking; Ollama's fixed 8K grid misses). A pure plan
+- **Rationale**: Chunk ends at message boundaries cost nothing for positional state and are required
+  for checkpoints of position-bound state (llama.cpp span-aware chunking; Ollama's fixed 8K grid misses). A pure plan
   makes cache-on vs cache-off comparisons reproducible (R9).
 
 ## R5: Admission and eviction timing

@@ -4,7 +4,7 @@
 
 ```sh
 cargo test -p mrun --test prefix_tree_props --test prefix_mutations --test prefix_branches   # any OS
-MRUN_TEST_MODELS=qwen3-8b,qwen3.6 cargo test -p mrun-engine --test prefix_equality -- --ignored  # macOS
+MRUN_TEST_MODELS=qwen3-8b,qwen3.6,gpt-oss cargo test -p mrun-engine --test prefix_equality -- --ignored  # macOS
 ```
 
 ## Manual (target Mac)

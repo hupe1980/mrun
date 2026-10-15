@@ -75,7 +75,7 @@ crates/mrun/src/
 ├── config.rs            # defaults < config.toml < MRUN_* env < flags
 ├── hub/
 │   ├── mod.rs           # resolve(alias|repo|path) -> LocalModel
-│   ├── aliases.rs       # curated alias table (pinned repo, revision, file hashes)
+│   ├── aliases.rs       # curated alias table, one per 0.1 family (pinned repo, revision, file hashes, family)
 │   ├── download.rs      # hf-hub driven, resumable, progress, disk-space check
 │   └── verify.rs        # sha256 verification with size+mtime cache
 └── errors.rs            # user-facing error catalog (code, message, next step)

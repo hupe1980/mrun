@@ -16,6 +16,7 @@ description: "Tasks for 004 Models and CLI Experience"
 
 - [ ] T004 `crates/mrun/src/hub/mod.rs`: resolve path → alias → repo id; HF cache resolution (`HF_HUB_CACHE`, `HF_HOME`, `HF_ENDPOINT`); identity via `mrun_engine::identity` (001)
 - [ ] T005 [P] `hub/aliases.rs`: curated table (`qwen3.6` default, `qwen3-coder`, `qwen3-8b`) with pinned revisions and file hashes; `cargo xtask refresh-aliases`
+- [ ] T005a [P] Aliases `gpt-oss` and `devstral` (research R4): resolve the `[U]` repos (Devstral plain `-4bit` vs OptiQ; gpt-oss `-MXFP4-Q8` quantization block), pin revisions and hashes, record family per alias; default alias field set from 005 T012a
 - [ ] T006 [P] `hub/verify.rs` + `cli/verify.rs`: fast checks (size, mtime, inode) and full re-hash; test flipping a byte with preserved mtime is caught by `verify` only
 
 ## Phase 3: US1 — Zero to working agent (P1) 🎯 MVP
@@ -30,6 +31,7 @@ description: "Tasks for 004 Models and CLI Experience"
 - [ ] T011 [P] [US2] `cli/ls.rs` table/JSON with size, fit, max context (001 budget function), status (fast checks), plus compatible `unpinned` MLX repos found in the HF cache; `pull <repo>` pins them without downloading
 - [ ] T012 [P] [US2] `cli/rm.rs` per FR-003/R10 (pinned revision's snapshot, blobs no other revision of the repo links to, refs only when they point to it; warning that other tools lose that revision), `cli/show.rs`; tests with a shared cache where another tool uses the same and a different revision
 - [ ] T013 [US2] Corruption handling on load and in `ls`; repair via `pull`
+- [ ] T013a [US2] Architecture gate (FR-014, SC-006): `pull` fetches `config.json` (and wrapped `text_config`) first and resolves the family via 001's registry (001 T040); unsupported → exit 3 (E034) listing families and aliases, no weight bytes downloaded (wiremock asserts); `ls` FAMILY column and `unsupported` status for cached repos; `show` family
 
 ## Phase 5: US3 — Diagnose (P2)
 
@@ -45,6 +47,6 @@ description: "Tasks for 004 Models and CLI Experience"
 
 ## Dependencies
 
-T001 → T002/T003 → T004 → T005/T006 → T007 → T008/T009/T010 → T018 (also needs 002's MVP). US2/US3 after T004–T006. `launch`,
+T001 → T002/T003 → T004 → T005/T006 → T007 → T008/T009/T010 → T018 (also needs 002's MVP). T005a after T005 (default after 005 T012a); T013a after T007 and 001 T040. US2/US3 after T004–T006. `launch`,
 `connect` and `ps` need 002's `/v1/models` and `/mrun/status`; fit numbers need 001's budget
 function. The serve banner itself is owned by 002 (T012).

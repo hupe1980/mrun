@@ -17,7 +17,7 @@ Detailed field mapping per API is in [research §1, §5](research.md); this is t
 | sampling | {temperature, top_p, top_k, min_p, seed} | defaults from model generation_config |
 | max_output_tokens | u32 | `max_completion_tokens` > `max_tokens`; `max_tokens`; `max_output_tokens`; absent → server default 16,384; clamped to capacity at admission (001 FR-009), reported as `x-mrun-max-tokens` / `: mrun` comment |
 | stop | Vec<String> (≤ 4 × 256 B) | `stop` / `stop_sequences` |
-| reasoning | Off \| On{budget} | Anthropic thinking enabled/adaptive; `reasoning_effort` / `reasoning.effort` not in {none, minimal}; a bare `reasoning` object does not enable; overridden by `--thinking` |
+| reasoning | Off \| On{budget, effort: Option<Low \| Medium \| High>} | Anthropic thinking enabled/adaptive; `reasoning_effort` / `reasoning.effort` not in {none, minimal}; a bare `reasoning` object does not enable; overridden by `--thinking`. Applied per family (FR-035): `enable_thinking` (Qwen3, Qwen3.6), effort `low\|medium\|high` with Off = `low` (gpt-oss, research §3b mapping), none (Qwen3-Coder, Devstral Small 2 → `thinking-unsupported`) |
 | prefill | bool | Anthropic trailing assistant message |
 | stream, include_usage | bool | |
 
@@ -33,9 +33,24 @@ re-rendered history depends on the template:
 | --- | --- | --- |
 | Qwen3 (Hermes JSON) | string rendered verbatim | byte-identical |
 | Qwen3-Coder, Qwen3.6 (XML) | parsed to an object, rendered via `\|items` and `tojson` | may differ → 003 cause `template` at the reply |
+| gpt-oss (Harmony) | parsed to an object, rendered via `tojson`; one call per message (multi-call history split, `history-calls-split`); analysis rendered only inside the current tool loop | may differ → `template` at the reply; a new user turn drops the loop's analysis → `template` at its first analysis |
+| Devstral Small 2 (Mistral) | string rendered verbatim (`''` → `{}`) | byte-identical |
 
-On XML templates, `raw_args` that does not parse as a JSON object is rendered verbatim in place of
-the parameter list, with a `history-args-raw` warning (FR-004).
+On re-serializing templates (XML, Harmony), `raw_args` that does not parse as a JSON object is
+rendered verbatim in place of the parameter list or JSON, with a `history-args-raw` warning
+(FR-004).
+
+## Syntax (registry entry, FR-032)
+
+| Field | Hermes JSON | Qwen XML | Harmony | Mistral |
+| --- | --- | --- | --- | --- |
+| families | `qwen3` | `qwen3_moe`, `qwen3_5_moe` | `gpt_oss` | `mistral` |
+| template probe | `<tool_call>` + `"arguments"` | `<function=` | `<\|channel\|>` | `[TOOL_CALLS]` + `[ARGS]` |
+| reasoning | `<think>…</think>` (prompt-tail aware) | same (Qwen3.6); none (Qwen3-Coder) | `analysis` channel | none (`[THINK]` recognized) |
+| call opener (`none` bias) | `<tool_call>` | `<tool_call>` | recipient ` to` inside a header | `[TOOL_CALLS]` |
+| arguments | raw JSON, streamed | synthesized, buffered | raw JSON to `<\|call\|>`, streamed | raw JSON, streamed |
+| parallel calls | yes | yes | no (stops at `<\|call\|>`) | yes |
+| thinking control | `enable_thinking` | `enable_thinking` (Qwen3.6) | `reasoning_effort` | none |
 
 Validation (before queuing), configurable: body ≤ 64 MiB (base64 screenshots in agent history; images are dropped before rendering); messages ≤ 4,096; tools ≤ 256; each schema
 ≤ 64 KiB and depth ≤ 16; tool result call ids must match a prior tool call; images/audio/files in

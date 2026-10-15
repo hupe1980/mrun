@@ -31,11 +31,24 @@
 
 ## R4: Curated aliases
 
-- **Decision**: Compile-time table in `hub/aliases.rs`: `qwen3.6` →
-  `mlx-community/Qwen3.6-35B-A3B-4bit` (default; ≈4.5 bits per weight, ≈20 GB; third-party tables
-  report ≈20.7 GB peak [U], repo verified at pin time), `qwen3-coder` →
-  `mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit`, `qwen3-8b` → `mlx-community/Qwen3-8B-4bit`,
-  each with pinned revision and file hashes, refreshed by a maintainer script. Unknown names are
+- **Decision**: Compile-time table in `hub/aliases.rs`, one alias per 0.1 family (D015), each with
+  family, pinned revision and file hashes, refreshed by a maintainer script:
+
+  | Alias | Repo | Family | Notes |
+  | --- | --- | --- | --- |
+  | `qwen3.6` | `mlx-community/Qwen3.6-35B-A3B-4bit` | `qwen3_5_moe` | default candidate; ≈4.5 bits per weight, ≈20 GB; third-party tables report ≈20.7 GB peak [U]; repo verified at pin time |
+  | `qwen3-coder` | `mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit` | `qwen3_moe` | 17.2 GB |
+  | `gpt-oss` | `mlx-community/gpt-oss-20b-MXFP4-Q8` | `gpt_oss` | repo listed by third parties (created 2025-08-29) [V exists, U contents]: MXFP4 experts, 8-bit elsewhere and `quantization.mode` in `config.json` assumed [U]; sibling `-MXFP4-Q4` exists; ≈12–13 GB [U] |
+  | `devstral` | `mlx-community/Devstral-Small-2-24B-Instruct-2512-4bit` [U: not found by search] | `mistral` | fallback `mlx-community/Devstral-Small-2-24B-Instruct-2512-OptiQ-4bit` (mixed 4/8-bit, `mistral3`) [V exists]; base `mistralai/Devstral-Small-2-24B-Instruct-2512` (Apache-2.0; context 256K vs 128K reported inconsistently [U]); must ship `tokenizer.json` and a Jinja template (001 R17) [U]; ≈14 GB |
+  | `qwen3-8b` | `mlx-community/Qwen3-8B-4bit` | `qwen3` | 4.6 GB, correctness reference |
+
+  The hub API was unreachable from the research environment (2026-10-15), so `[U]` rows are
+  resolved when `cargo xtask refresh-aliases` pins them (004 T005).
+- **Default**: the alias marked default is set from 005 T012a (agent suite on the M4 Pro among the
+  0.1 models, D015); `qwen3.6` is the expected winner and the default until then.
+- **Architecture gate**: `pull` downloads `config.json` first and resolves the family with 001's
+  registry; unsupported architectures are refused before weights (FR-014). `ls` reads the family
+  from each cached repo's `config.json` (offline). Unknown names are
   treated as HF repo ids (`org/name[@revision]`), pinned on first pull.
 - **Rationale**: Short names are the top DX feature of Ollama; pinning keeps identity exact.
 

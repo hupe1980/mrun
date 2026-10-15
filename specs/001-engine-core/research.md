@@ -178,7 +178,7 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
 - **EOS**: union of `config.json` `eos_token_id`, `generation_config.json` `eos_token_id` (int or
   list) and the tokenizer's EOS token (`tokenizer_config.json` / `special_tokens_map.json`). mlx-lm
   lets generation_config replace config before adding the tokenizer EOS; the union is a superset,
-  and a test checks it equals mlx-lm's set for the three models.
+  and a test checks it equals mlx-lm's set for every 0.1 model.
 
 ## R11: Engine benchmark (until 005)
 

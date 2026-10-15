@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-14
 
-**Status**: Draft (revised 2026-10-15 after the third audit)
+**Status**: Draft (revised 2026-10-15 after the third audit; open model architecture, D015)
 
 **Input**: User description: "`mrun serve` exposes OpenAI Chat Completions, Anthropic Messages (with count_tokens) and stateless OpenAI Responses on loopback, with streaming, tool calls and structured output, so Claude Code, Codex and OpenCode complete real tool loops against a local model. One internal request model; truthful usage and finish reasons; bounded queue; cancellation on disconnect."
 
@@ -25,6 +25,12 @@
 - Client cache hints are gone (003 dropped session and breakpoint hints): `cache_control`, `prompt_cache_key` and client session headers do not affect the cache.
 - A strict schema llguidance cannot compile runs unconstrained with a `strict-unsupported` warning instead of failing.
 - `tool_choice: none` uses a fixed logit bias, not a grammar mask, so decode stays pipelined.
+
+### Session 2026-10-15 (open model architecture, D015)
+
+- Q: How are tool calls and reasoning parsed across model families? → A: Through a syntax registry: one streaming parser per syntax (Hermes JSON, Qwen XML, Harmony, Mistral `[TOOL_CALLS]`; GLM XML with 010). The family names its syntax; a template probe at load confirms it. Every FR-004 rule applies to every syntax.
+- Q: How is thinking controlled on gpt-oss, which always reasons? → A: By reasoning effort (low/medium/high) mapped from Anthropic `thinking` and OpenAI `reasoning_effort` (research §3b); "off" means `low`. Its reasoning is always returned in the API's reasoning field.
+- Q: Models without a thinking mode (Qwen3-Coder, Devstral Small 2)? → A: Served without thinking, with a `thinking-unsupported` warning when the request asked for it.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -116,8 +122,12 @@ timeouts and that the next request runs normally.
   request, never mixed into the answer text.
 - `max_tokens` above capacity or absent: clamped / defaulted per FR-019; rejected only when the
   prompt itself does not fit.
-- History tool-call arguments that are not a JSON object, sent to a Qwen3-Coder or Qwen3.6
-  template: rendered as raw text with a warning (FR-004).
+- History tool-call arguments that are not a JSON object, sent to a template that re-serializes
+  arguments (Qwen3-Coder, Qwen3.6, gpt-oss): rendered as raw text with a warning (FR-004).
+- gpt-oss emitting a call to a built-in tool (`browser.*`, `python`): not reported as a call;
+  `tool-unknown` warning.
+- A history assistant message with several tool calls sent to gpt-oss (whose template renders one
+  call per message): split into single-call messages with a `history-calls-split` warning.
 - A streaming request queued for more than 300 s: the stream stays alive for every client.
 - Images inside tool results (Claude Code reading a PNG, Codex `view_image`): replaced per FR-020.
 - A browser page on the same machine calling the server: rejected by the Host/Origin policy.
@@ -137,7 +147,8 @@ timeouts and that the next request runs normally.
 - **FR-003**: All three APIs MUST support tool definitions, tool calls (including parallel calls)
   and tool results, translated through one internal request model so behavior is identical.
   `tool_choice: none` keeps tools rendered (prefix stability) and applies a fixed −inf logit bias
-  to the tool-call opener tokens, so decoding stays pipelined; `required` and named choices are
+  to the syntax's tool-call opener tokens (Harmony: the recipient token, only inside an assistant
+  message header), so decoding stays pipelined; `required` and named choices are
   enforced by grammar.
 - **FR-004**: Tool-call arguments MUST be valid JSON matching the declared schema when the client
   requests strict tools (`strict: true` or equivalent), using constrained decoding. A strict schema
@@ -147,19 +158,21 @@ timeouts and that the next request runs normally.
   strings are accepted unvalidated in later history; Anthropic Messages (whose `input` must be an
   object) returns the model's raw call text as a text block instead of a tool call. Either way a
   `tool-args-invalid` warning is reported. When streaming, argument text is forwarded as it arrives
-  only where it is the model's raw JSON (Qwen3 Hermes syntax on Chat/Responses); arguments
-  synthesized from other syntaxes (Qwen3-Coder and Qwen3.6 XML) and all Anthropic `tool_use` input
+  only where it is the model's raw JSON (Hermes, Harmony and Mistral syntaxes on Chat/Responses);
+  arguments synthesized from other syntaxes (Qwen3-Coder and Qwen3.6 XML) and all Anthropic
+  `tool_use` input
   are buffered per call and emitted when the call closes, so the fallback above is always
   possible. The tool-call envelope (for example a missing `<tool_call>` opener before a declared
   function) MAY be recognized, because it does not change argument content. Values are never
   coerced or evaluated (research §3); argument text that contains the syntax's own closing tags (a
   file edit of a parser) MUST round-trip unchanged; a call to an undeclared tool is passed through
   with a `tool-unknown` warning.
-  **History re-rendering is byte-stable per template**: Qwen3 renders string arguments verbatim,
-  so the previous reply re-renders exactly. Qwen3-Coder and Qwen3.6 re-serialize arguments
-  (`|items`, `tojson`), so the next turn may miss at the previous reply with cause `template`
-  (003). On those templates, history arguments that do not parse as a JSON object are rendered
-  verbatim in place of the parameter list, with a `history-args-raw` warning.
+  These rules apply to every syntax in the registry (FR-032).
+  **History re-rendering is byte-stable per template**: Qwen3 and Mistral render string arguments
+  verbatim, so the previous reply re-renders exactly. Qwen3-Coder, Qwen3.6 (`|items`, `tojson`) and
+  gpt-oss (`tojson`) re-serialize arguments, so the next turn may miss at the previous reply with
+  cause `template` (003). On those templates, history arguments that do not parse as a JSON object
+  are rendered verbatim in place of the parameter list or JSON, with a `history-args-raw` warning.
 - **FR-005**: Structured output (JSON schema response format) MUST be supported with the same
   constrained decoding and the same `strict-unsupported` fallback.
 - **FR-006**: The Responses API MUST be stateless: `previous_response_id` and item references MUST
@@ -196,7 +209,7 @@ timeouts and that the next request runs normally.
   explicit flag and an API key read from `MRUN_API_KEY` or `--api-key-file` (never a command-line
   value), compared in constant time.
 - **FR-013**: Reasoning/thinking output MUST be separated from answer text per each API's
-  conventions. Thinking is on only when the request asks for it (Anthropic `thinking` enabled or
+  conventions. Thinking control is per family (FR-035). Thinking is on only when the request asks for it (Anthropic `thinking` enabled or
   adaptive; OpenAI `reasoning_effort` / Responses `reasoning.effort` not in {none, minimal}; a bare
   `reasoning` object does not count). A server setting `--thinking client|off|on` (default
   `client`) overrides clients. Anthropic `budget_tokens` is honored by closing the thinking block
@@ -236,7 +249,7 @@ timeouts and that the next request runs normally.
 - **FR-022**: Every response MUST report mrun metadata (cached and processed tokens, miss cause and
   divergence and checkpoint gap from feature 003, effective output limit, warnings such as `tool-args-invalid`,
   `tool-unknown`, `image-omitted`, `max-tokens-clamped`, `strict-unsupported`,
-  `history-args-raw`). Non-streaming responses carry it in `x-mrun-*` headers; streaming responses
+  `history-args-raw`, `history-calls-split`, `thinking-unsupported`). Non-streaming responses carry it in `x-mrun-*` headers; streaming responses
   carry it in SSE comment lines (`: mrun {json}`) emitted before the first content event and before
   the final event, because headers are sent before the result is known. Bodies stay strictly
   standard. The last request's metadata is also in `/mrun/status`.
@@ -280,11 +293,35 @@ timeouts and that the next request runs normally.
   and ignored, and `prompt_cache_key` and client session headers are ignored by the cache (003).
   Session headers are used only for recording (FR-021).
 
+- **FR-032**: Tool-call and reasoning parsing MUST go through a syntax registry
+  (`chat/syntax/`): one streaming parser per syntax, named by the model's family (001 FR-023) and
+  confirmed at load by a template probe; a mismatch MUST refuse the load naming the family and the
+  template's detected syntax. 0.1 syntaxes: Hermes JSON (Qwen3), Qwen XML (Qwen3-Coder, Qwen3.6),
+  Harmony (gpt-oss), Mistral `[TOOL_CALLS]` (Devstral Small 2). No syntax-specific logic outside
+  its parser and its registry entry (constitution V).
+- **FR-033**: Harmony MUST map `analysis` to reasoning, `final` and recipient-less `commentary` to
+  text, and messages addressed `to=functions.NAME` (in the role header or after the channel, with
+  any `<|constrain|>` suffix stripped) to tool calls whose arguments are the message body up to
+  `<|call|>`; `<|call|>` and `<|return|>` end generation. Other recipients are not reported as
+  calls (`tool-unknown`). History arguments are passed to the template as objects.
+- **FR-034**: Mistral syntax MUST parse `[TOOL_CALLS]NAME[ARGS]{json}` (repeated for parallel
+  calls) on token ids, with content allowed before the first call; argument text containing the
+  marker strings round-trips unchanged.
+- **FR-035**: Thinking control MUST be per family: Qwen3 and Qwen3.6 via `enable_thinking`;
+  gpt-oss via reasoning effort (`low|medium|high` in the template's `Reasoning:` line), mapped from
+  OpenAI `reasoning_effort`/`reasoning.effort` and Anthropic `thinking` (budget bands, adaptive
+  effort) as in research §3b, with "off" = `low`, its reasoning always returned in the API's
+  reasoning field, and Anthropic `budget_tokens` enforced by closing the analysis message;
+  Qwen3-Coder and Devstral Small 2 have none and report `thinking-unsupported` when asked.
+  `--thinking off|on` maps to the same per-family settings.
+
 ### Key Entities
 
 - **Chat Request**: The internal, API-neutral form: messages (system, user, assistant, tool),
   tools, tool choice, response format, sampling settings, limits, stream flag, reasoning control.
 - **Tool Call**: Call id, tool name, arguments, completion status.
+- **Syntax**: A registered streaming parser for one tool-call/reasoning format, with its opener
+  tokens, argument kind (raw JSON or synthesized), history rendering rule and thinking control.
 - **Usage**: Input tokens, cached input tokens, output tokens, reasoning tokens.
 - **Queue Entry**: Request, arrival time, deadline, cancellation signal (fired by a connection
   close watcher).
@@ -312,6 +349,10 @@ timeouts and that the next request runs normally.
 - **SC-006**: Default configuration exposes nothing beyond loopback, rejects non-loopback `Host`
   and foreign `Origin` headers, and writes no prompt content to disk or logs; `--record` cannot be
   enabled by config or environment (verified by an audit test).
+- **SC-007**: The syntax conformance cases (research §3b; ≥ 8 per syntax for Harmony and Mistral,
+  plus the shared FR-004 cases for every syntax) pass 100%, and gpt-oss-20b and Devstral Small 2
+  each run the scripted read-edit-test task with each of the three clients 5 times with zero
+  client-side protocol errors (task completion is recorded, not gated).
 
 ## Assumptions
 

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `003-prefix-cache`
 
-**Created**: 2026-10-14 · **Revised**: 2026-10-15 (design sprint 3: live path plus moved branches)
+**Created**: 2026-10-14 · **Revised**: 2026-10-15 (design sprint 3: live path plus moved branches; open model architecture, D015)
 
 **Status**: Draft
 
@@ -36,6 +36,14 @@ tokens, the divergence position and a miss cause."
   single long sessions); no priority tiers.
 - Q: Per-request opt-out? → A: Header `x-mrun-cache: off` only; no request-body field.
 - Q: Disk persistence? → A: Not in this feature; opt-in SSD tier is spec 007.
+
+### Session 2026-10-15 (open model architecture, D015)
+
+- Q: Which state needs checkpoints? → A: Only position-bound state, i.e. linear-attention layers
+  (0.1: Qwen3.6). Attention KV is positional on every family, including gpt-oss sliding-window
+  layers, which keep full KV and apply the window when attending (001 FR-024); trims and moves are
+  exact at any position there. Checkpoint planning applies only to families with position-bound
+  state; the cache sees state kinds and byte costs from `ModelInfo`, never family names.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -89,10 +97,10 @@ parent.
 
 ---
 
-### User Story 3 - Hybrid models reuse exactly (Priority: P1)
+### User Story 3 - Models with position-bound state reuse exactly (Priority: P1)
 
-On Qwen3.6 (recurrent layers plus attention), recurrent state exists only at the position it was
-computed for. Next turns, edits, retries and switches resume from the nearest checkpoint instead
+On Qwen3.6 (linear-attention layers plus attention), position-bound state exists only at the
+position it was computed for. Next turns, edits, retries and switches resume from the nearest checkpoint instead
 of from zero.
 
 **Why this priority**: Qwen3.6 is the default model.
@@ -103,7 +111,7 @@ and that outputs equal cache-off runs with the same chunk split.
 
 **Acceptance Scenarios**:
 
-1. **Given** a hybrid prefill, **When** it runs, **Then** checkpoints are captured at the end of
+1. **Given** a prefill on a model with position-bound state, **When** it runs, **Then** checkpoints are captured at the end of
    system+tools, the start of the last user or tool message and `generation_start` (the start of
    the generation header).
 2. **Given** a divergence at position d, **When** the request resumes, **Then** it restores the
@@ -111,6 +119,10 @@ and that outputs equal cache-off runs with the same chunk split.
 3. **Given** a conversation with 8 checkpoints, **When** another is captured, **Then** the first,
    the two deepest and the newest checkpoint at a user (non-tool) message start are kept, and the
    one nearest the path's midpoint among the rest is dropped.
+4. **Given** a gpt-oss conversation (sliding-window layers, no position-bound state), **When** a
+   request diverges or a branch is moved out and back at any position, inside or beyond the last
+   window, **Then** it resumes exactly at the match, no checkpoint is planned or restored, and the
+   gap is 0.
 
 ---
 
@@ -167,7 +179,8 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 - Divergence inside a stored branch: the whole buffer is moved in and the unmatched part is split
   out again, so nothing is held twice.
 - Cancel during a move: the move finishes (bounded by one memory pass), then the cancel applies.
-- Hybrid with no checkpoint at or below the match: resume from 0, cause `checkpoint`, gap = match.
+- Position-bound state with no checkpoint at or below the match: resume from 0, cause
+  `checkpoint`, gap = match.
 - `x-mrun-cache: off` while a main conversation is live: the main state is moved out and kept; the
   uncached request's own state is discarded afterwards.
 - `mrun cache clear` during a request: the request is unaffected; branches go now, the live path
@@ -184,23 +197,27 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   tokenizer, chat template, state format). Matching walks tokens over the live path and stored
   branches; hashes never decide reuse.
 - **FR-002**: The live path MUST be the active sequence state. A request extending it MUST append
-  without copying or moving state. For attention models a divergence inside it MUST trim exactly.
+  without copying or moving state. For positional state (every attention layer, sliding-window
+  layers included) a divergence inside it MUST trim exactly at any position.
 - **FR-003**: On a switch the shared prefix MUST stay in place; the old tail MUST be moved out into
   a branch (or discarded if under 256 tokens) and the matched branch moved in, one layer at a time.
   No token's state is ever held twice by a move; the transient is at most one layer.
-- **FR-004**: For hybrid models, prefill MUST capture recurrent-state checkpoints at the end of
+- **FR-004**: For models with position-bound state (linear-attention layers; 0.1: Qwen3.6),
+  prefill MUST capture checkpoints of that state at the end of
   system+tools, the start of the last user or tool message, and `generation_start` (the start of
   the generation header). A moved-out tail's end state stays inside its 001 segment and is
   restored by `append`; it is not a checkpoint and does not count toward the cap. At most 8
   checkpoints per conversation (root-to-leaf path): the first, the two deepest and the newest
   checkpoint at a user (non-tool) message start are kept; among the rest the one nearest the
   path's midpoint is dropped first. A request MUST resume from the deepest checkpoint at or below
-  its match and re-prefill the gap.
+  its match and re-prefill the gap. Families without position-bound state (all other 0.1
+  families, gpt-oss sliding-window layers included) plan no checkpoints and resume at the match.
 - **FR-005**: Prefill MUST be planned in chunks that end at message boundaries and at checkpoint
   positions (within 001's chunk-size limit), and only whole chunks are committed. A cancelled
   request MUST keep every whole committed chunk.
 - **FR-006**: Usage MUST report `cached = min(resume, P − 1)` and `processed = P − cached`, where
-  resume is the match (attention) or the restored checkpoint position (hybrid).
+  resume is the match (positional state only) or the restored checkpoint position (position-bound
+  state).
 - **FR-007**: Admission (001) checks statically that prompt plus clamped output fits capacity. The
   cache MUST evict only for the initial allocation (`P − resume + min(output limit, 4K)` tokens of
   attention state and planned checkpoints; the one-layer move transient lies in 001's scratch
@@ -236,7 +253,8 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 - **Live path**: the tree path held by the sequence state.
 - **Branch**: a stored subtree hanging off the live path; nodes hold segments (refcounted views of
   per-layer buffers) and checkpoints.
-- **Checkpoint**: recurrent state at one position (hybrids only).
+- **Checkpoint**: position-bound state at one position (families with linear-attention layers
+  only).
 - **Miss report**: cached, processed, divergence, gap, cause.
 
 ## Success Criteria *(mandatory)*
@@ -253,15 +271,21 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   cached tokens ≥ the parent's committed length (100% kept); Qwen3.6 likewise, with gap ≤ the
   previous reply's length.
 - **SC-003**: In a mutation suite of ≥ 100 cases (append, edit, rewind, interleaved branches, tiny
-  tails, cancel, eviction, pressure, model and template change, attention and hybrid), zero stale
+  tails, cancel, eviction, pressure, model and template change; positional-only, sliding-window
+  and position-bound profiles), zero stale
   reuses occur and every case reports the expected cause and divergence.
 - **SC-004**: During a switch moving an 80K-token tail out and back in, peak memory exceeds steady
   state by at most one layer's state.
 - **SC-005**: Cache-on output equals cache-off output bit for bit (token ids and logits) when the
-  cache-off run uses the same chunk split, on Qwen3-8B and Qwen3.6 for ≥ 30 cases.
+  cache-off run uses the same chunk split, on Qwen3-8B, Qwen3.6 and gpt-oss-20b for ≥ 30 cases
+  each.
 - **SC-006**: On Qwen3.6, a divergence inside the previous reply or the last user or tool message
   resumes at or after the start of the message containing the divergence or the message before it,
   including for a new user turn after ≥ 10 tool turns (more planned positions than the cap of 8).
+- **SC-007**: On gpt-oss-20b, restores at arbitrary positions (divergences and branch switches at
+  ≥ 20 positions before, at and beyond the 128-token window, including positions inside the last
+  window of a chunk) resume exactly at the match with gap 0 and no checkpoint, and produce
+  bit-identical next-token logits to the cache-off run at the same chunk split.
 
 ## Assumptions
 

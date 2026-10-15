@@ -9,8 +9,10 @@
 A token radix tree per cache key whose live path is the engine's sequence state. Continuing a
 conversation appends; switching moves the old tail out and the matched branch in, one layer at a
 time, through 001's `split_off` and `append(consume)`. Segments are refcounted buffer views, so
-edge splits are metadata; buffers move whole. Hybrid models capture up to 8 checkpoints per path at
-planned chunk ends and resume from the deepest one at or below the match. Eviction is LRU over
+edge splits are metadata; buffers move whole. Models with position-bound state (linear attention;
+0.1: Qwen3.6) capture up to 8 checkpoints per path at planned chunk ends and resume from the deepest
+one at or below the match; all other families, gpt-oss sliding-window layers included (full KV
+kept), are positional only and resume exactly at the match. Eviction is LRU over
 branch units, lazily at the initial allocation and on every `NeedsMemory{bytes}` (evict, retry);
 memory pressure is read at every per-layer check point and acted on at the next whole-chunk end
 (001 prefill yield). The per-request loop stays in 001's `runtime/generate.rs`, which takes the
@@ -23,7 +25,7 @@ memory pressure is read at every per-layer check point and acted on at the next 
 macOS `dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE)` via a small FFI shim
 **Storage**: In memory only (FR-013)
 **Testing**: proptest for tree invariants; mutation suite (≥ 100 cases) on `ScriptedEngine` with
-attention and hybrid profiles and buffer/peak tracking; macOS equality and timing tests on real
+positional-only, sliding-window and position-bound profiles and buffer/peak tracking; macOS equality and timing tests on real
 weights
 **Target Platform**: macOS (Metal); tree, policy and suites run on Linux
 **Project Type**: Module of the `mrun` crate
@@ -33,7 +35,8 @@ trip ≈ 0.15–0.2 s); pressure response < 1 s
 **Constraints**: one copy per unique token; transient ≤ one layer; no hard pins after `prepare`;
 no hash-only matches; equality tests at a fixed chunk split
 **Scale/Scope**: Qwen3-Coder ≈ 105K tokens of attention state (96 KiB/token); Qwen3.6 ≈ 8 GiB for
-attention (≈ 20 KiB/token) plus checkpoints of ≈ 61 MiB each (8 per path ≈ 0.5 GiB)
+attention (≈ 20 KiB/token) plus checkpoints of ≈ 61 MiB each (8 per path ≈ 0.5 GiB); gpt-oss-20b
+48 KiB/token, Devstral Small 2 160 KiB/token, no checkpoints (001 data model)
 
 ## Constitution Check
 
@@ -72,7 +75,7 @@ crates/mrun/src/cache/
 crates/mrun/src/runtime/pressure.rs   # macOS memory-pressure source; injectable no-op on Linux
 crates/mrun/tests/
 ├── prefix_tree_props.rs
-├── prefix_mutations.rs               # ≥ 100 cases, attention + hybrid ScriptedEngine
+├── prefix_mutations.rs               # ≥ 100 cases, positional, sliding-window, position-bound profiles
 └── prefix_branches.rs                # SC-002 round trips at Qwen3-Coder capacity
 crates/mrun-engine/tests/prefix_equality.rs   # macOS: SC-005
 ```

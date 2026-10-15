@@ -12,7 +12,7 @@ key; a new key discards the old tree (FR-014).
 | tokens | Vec<u32> | P = len |
 | messages | Vec<MessageMark{start: u32, role, content_hash: u64}> | content hash: role, visible text, tool calls (canonical JSON); reasoning excluded |
 | system_tools_end | u32 | end of system + tools region |
-| generation_start | u32 | start of the generation header (≤ P − 1); hybrid checkpoint position |
+| generation_start | u32 | start of the generation header (≤ P − 1); checkpoint position for position-bound state |
 | mode | Cached \| Off | `x-mrun-cache: off` or `--no-cache` → Off |
 
 ## Node
@@ -50,7 +50,7 @@ user (non-tool) message start; drop the one nearest the path's midpoint among th
 | move_out | Option<at: u32> (= fork, or divergence inside the live path) and whether the tail is ≥ 256 |
 | move_in | nodes from fork to the node containing m; whole buffers |
 | split_back | Option<m> when m ends inside a moved-in buffer |
-| resume | m (attention) or deepest checkpoint ≤ m (hybrid) |
+| resume | m (positional state only, sliding-window layers included) or deepest checkpoint ≤ m (position-bound state) |
 | checkpoint | Option<CheckpointId> to restore |
 | miss | MissReport |
 
@@ -75,7 +75,7 @@ user (non-tool) message start; drop the one nearest the path's midpoint among th
 | `system` | the divergence lies inside the stored conversation's system+tools region: the system prompt or tool list changed (for example an MCP server connected) |
 | `edit` | at least one conversation message matched before the divergence: a message was changed, removed or replaced (includes an edited or retried last turn) |
 | `new` | the request shares at most the system+tools region (a new conversation), or nothing is stored |
-| `checkpoint` | hybrid; no divergence cause, but resume < match (gap re-prefilled) |
+| `checkpoint` | position-bound state only; no divergence cause, but resume < match (gap re-prefilled) |
 
 Precedence: `disabled` > `model` > `evicted`/`capacity` > `template` > `system` > `edit` > `new` >
 `checkpoint`; `gap` is reported whatever the cause.
