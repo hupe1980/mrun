@@ -4,10 +4,10 @@
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| suite | `agent` \| `synthetic` \| `cancel` \| `memory` \| `quality` | |
-| cell | string | e.g. `agent/opencode-refactor`, `synthetic/prefill-16k` |
-| inputs | trace file, prompt length, output length, task id | |
-| repetitions | u32 | synthetic/cancel ≥ 5, agent 3, quality 3 seeds (FR-004) |
+| suite | `agent` \| `synthetic` \| `cancel` | `cancel` runs for mrun only |
+| cell | string | e.g. `agent/opencode-refactor`, `synthetic/prefill-32k`, `synthetic/prefill-max` |
+| inputs | trace file, prompt length, output length | |
+| repetitions | u32 | synthetic ≥ 5 (+ 1 warm-up), cancel 50 points, agent 3 (FR-004) |
 
 ## SystemUnderTest
 
@@ -16,16 +16,19 @@
 | name | `mrun` \| `llama.cpp` \| `ollama` \| `omlx` \| `mlx-lm` \| custom |
 | version | string (reported by the system or given by the user) |
 | endpoint | URL + supported API styles (`chat` \| `messages` \| `responses`) |
+| profile | {start?, stop?, health?, reset, pid?: command} (no start/stop → manual pause) |
+| context_length | u32 (= mrun's capacity, FR-015) |
 | flags | string list (from profile, editable) |
-| model | {name sent to the system, format (`mlx` \| `gguf`), quantization {bits, group_size, scheme}, file hashes when local} |
-| pid | optional, for memory sampling |
+| model | {name sent to the system, format (`mlx` \| `gguf`), quantization {bits_per_weight, group_size, scheme}, file hashes when local} |
 
 ## Trace
 
-JSONL, one record per request: `{api, body, assistant_reply, gap_ms}`, where `gap_ms` is the time
-from the previous response's end to this request's arrival (tool execution and think time).
-Converted from `mrun serve --record` output: `assistant_reply` of turn n is taken from turn n+1's
-history (the final recorded turn has none and is used only as a timed turn).
+JSONL built by `cargo xtask bench-trace` from `mrun serve --record` output, one record per
+request in arrival order: `{api, conversation, body, prompt_tokens, reply_tokens}`. `body` is the
+request exactly as the client sent it (redacted with the trace's single mapping); `conversation`
+groups requests (session hint or longest shared prefix); `prompt_tokens` is the expected count for
+the truncation check; `reply_tokens` is the recorded reply length used as `max_tokens`. Recorded
+timestamps are used only for ordering and are not stored.
 
 ## RunResult (JSON, `schema_version: 1`)
 
@@ -34,15 +37,18 @@ history (the final recorded turn has none and is used only as a timed turn).
 | schema_version | 1 |
 | started_at, finished_at | RFC 3339 |
 | mrun_version | string |
-| machine | {chip, memory_bytes, macos, power_source, low_power, thermal_start, thermal_end, per_system: [{system, free_memory, swap}]} |
+| machine | {chip, memory_bytes, macos, power_source, low_power, thermal_start, thermal_end, per_system: [{system, free_memory_before, free_memory_after_stop, swap, peak_rss, peak_footprint, swap_delta}]} |
 | systems | SystemUnderTest[] |
-| cells | [{system, cell, api, samples: number[], median, p95, iqr, unit, early_eos: bool, malformed_tool_calls: n, gaps: recorded\|none, failures: [{rep, error}], turns?: [{n, ttft_ms, tfut_ms, input, cached, output}], session_compute_s?}] |
-| quality | [{system, task, seed, passed, duration_s}] |
-| comparability | [{cell, kind: `same-weights` \| `quality-matched` \| `n/a`}] |
-| method | {replay: `teacher-forced`, gaps: `recorded` \| `none`, reps: {synthetic, cancel, agent, quality_seeds}} |
-| warnings | string[] (battery, throttling, load) |
+| resets | [{system, rep, step, ok}] |
+| cells | [{system, cell, api, status: `ok` \| `failed` \| `not-run` \| `n/a`, samples: number[], min, median, max, p95?, iqr?, unit, early_eos: n, malformed_tool_calls: n, failures: [{rep, error}], turns?: [{n, conversation, ttft_ms, tfut_ms, input, cached, output}], session_s?}] |
+| comparability | [{cell, kind: `same-weights` \| `different-quantization` \| `n/a`}] |
+| method | {replay: `in-order`, reps: {synthetic, cancel, agent}} |
+| warnings | string[] (battery, throttling, load, memory not recovered) |
+
+`p95` and `iqr` are present only when n ≥ 20. `failures[].error` includes `truncated input`.
 
 ## Baseline (regression mode)
 
-A stored RunResult plus thresholds: `max_speed_regression_pct` (default 10), `max_quality_drop`
-(default 1 task of the suite). Greedy-output conformance is checked by 001's `mrun run --check`.
+A stored RunResult plus thresholds: `max_speed_regression_pct` (default 10, on medians),
+`max_malformed_tool_calls` and `max_early_eos` (default: baseline counts). Greedy-output
+conformance is checked by 001's `mrun run --check`.

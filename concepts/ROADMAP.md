@@ -1,56 +1,53 @@
 # Roadmap
 
-The canonical feature order lives in the [spec index](../specs/README.md). This page explains the
-route and the gates between milestones.
+**Updated**: 2026-10-15 (design sprint 3). The spec index ([specs/README](../specs/README.md)) owns
+feature order; this page explains the direction, the route and the gates.
 
-## Milestones
+## Direction
 
-| Milestone | Outcome | Specs | Gate to move on |
+mrun competes on what an agent user waits for on a Mac, not on chat tok/s. The research of this
+sprint ([competitors](research/competitors-2026-10.md), [arxiv-sota](research/arxiv-sota-2026-10.md),
+[next-features](research/next-features-2026-10.md)) changes three things:
+
+1. **The best model that fits a 48 GB Mac is now a hybrid** (Qwen3.6-35B-A3B). Hybrid support moves
+   from "later" into the first release; it also removes the context squeeze that 8-bit KV would
+   have addressed, so 8-bit KV is dropped.
+2. **Branching is the real cache problem**, not single-conversation reuse. Subagents, title
+   requests and retries must not destroy the main conversation; state moves instead of being
+   copied or discarded.
+3. **Client fidelity is where competitors break**: wire-format changes, namespaces, deferred tools,
+   keepalives, context windows. A nightly client matrix and `mrun launch` that sets everything are
+   first-release features.
+
+## First release (0.1)
+
+| Milestone | Outcome | Specs | Gate |
 | --- | --- | --- | --- |
-| **M0 Foundation** | Hard cut done; MLX binding spike on a Mac (load, matmul, SDPA, quantized matmul, memory APIs) | 001 (phase 1) | Go/no-go on the binding layer within one week |
-| **M1 Engine** | `mrun run` streams Qwen3-8B and Qwen3-Coder-30B-A3B (4-bit) with owned KV cache, chunked prefill, per-layer cancellation and a startup memory budget | 001 | Greedy output matches mlx-lm token-for-token; prefill and decode ≥ 90% of mlx-lm; cancel ≤ 300 ms p95 |
-| **M2 Agent APIs** | Claude Code, Codex and OpenCode complete a real tool loop against `mrun serve` (cache off) | 002 | ~95-case conformance suite green; 5/5 real-client runs per client |
-| **M3 Prefix store** | Exact radix reuse across turns, branches and tool loops, with miss diagnostics | 003 | Repeated-turn TTFT ≥ 5× faster than cache-off at 30K context; zero stale reuse in the mutation suite |
-| **M4 Models & DX** | `mrun pull/ls/rm/launch/connect/doctor/ps`; Qwen3-Coder-30B-A3B as the default model | 004 | Fresh Mac to working Claude Code session in under 5 minutes |
-| **M5 Bench** | `mrun bench` with agent-trace replay against llama.cpp, Ollama, oMLX, mlx-lm | 005 | First dated public comparison published, losing cells included |
+| **M0 Foundation** | MLX binding spike on a Mac: load, quantized matmul, gather-qmm, SDPA, RoPE, a custom Metal kernel, memory APIs | 001 phase 1 | Go/no-go within one week |
+| **M1 Engine** | `mrun run` streams Qwen3-8B, Qwen3-Coder-30B-A3B and Qwen3.6-35B-A3B with the memory budget, checkpoints and per-layer cancellation | 001 | 001 SC-001…SC-007 |
+| **M2 Agent APIs** | Claude Code, Codex and OpenCode complete real tool loops, including MCP tools | 002 | 002 SC-001…SC-006; client matrix green |
+| **M3 Prefix store** | Exact reuse across turns and branches for attention and hybrid models, with miss reports | 003 | 003 SC-001…SC-006 |
+| **M4 Models & DX** | `pull`, `launch`, `connect`, `doctor`, `ps`; default model confirmed | 004 | 004 SC-001…SC-005 |
+| **M5 Bench** | `mrun bench` with in-order trace replay against llama.cpp, Ollama, oMLX, mlx-lm and SGLang-MLX | 005 | First dated public comparison, losing cells included |
+| **M6 Distribution** | Homebrew formula, signed and notarized binary, launchd service, `/metrics` | 008 | Fresh Mac: `brew install` → `mrun launch claude-code` works |
 
-M4 and M5 can start in parallel with M3. M1's gates use 001's in-repo engine benchmark; 005's HTTP
-harness becomes useful once M2 lands.
+M4, M5 and M6 can run in parallel with M3. The binding spike gates everything.
 
-## After M5: ordered candidates
+## After 0.1 (each needs its measure-first check)
 
-Sources: [next-features-2026-10](research/next-features-2026-10.md) and
-[arxiv-sota-2026-10](research/arxiv-sota-2026-10.md). Each becomes a numbered spec only after its
-**measure-first** check, run with 005 on recorded traces, comes back positive.
-
-| Order | Candidate | Measure first | Notes |
+| Order | Spec | Measure first | Notes |
 | --- | --- | --- | --- |
-| 006 | **Hybrid models with state checkpoints** (Qwen3.6-35B-A3B first) | Checkpoint bytes against prefill seconds saved per boundary | Exact checkpoint placement (Sparse Prefix Caching); reject approximate replay schemes. Prerequisite for MTP |
-| 007 | **Persistent SSD prefix tier** (opt-in, identity-bound, token-verified, exact bf16) | SSD read GB/s on the target Mac | About 0.5 s reload against tens of seconds of prefill; replaces 003 FR-010 (memory only) |
-| 008 | **Copy-aware speculative decoding**: suffix/n-gram drafts that also index rendered tool calls, with a batch-1 MoE controller that can choose no speculation | n-gram acceptance length on Claude Code and OpenCode traces | Realistic gains 1.5–2.3×; MoE verification cost makes the controller mandatory; MTP after 006 |
-| 009 | **8-bit attention state** (opt-in) | Long-context coding quality check | About 2× context; per-layer dequantize for prefill; 4-bit stays out |
-| — | Small items | — | `/metrics`, keep completed prefill chunks on cancel, tool-call early stop, sleep assertion while busy, launchd service and Homebrew |
+| 1 | **006 Speculative decoding**: MTP heads (Qwen3.6 ships them) and copy-aware n-gram drafts for code edits, with a controller that turns speculation off where it loses | n-gram acceptance and MTP acceptance on recorded traces | On the MoE default, gains come from verbatim-copy stretches and long context; elsewhere expect ≈1.0×. Needs weights with `mtp.*` tensors (mlx-community conversions drop them) |
+| 2 | **007 Persistent prefix tier** (opt-in SSD, exact bytes, model-bound, token-verified) | Share of turns missing because of restart or eviction; SSD read speed | Requires a constitution IV amendment for opt-in persistence |
+| 3 | Parallel sessions (batched decode) | Share of wall time queued behind other requests in traces | Only if queueing is significant |
+| 4 | Linux / CUDA evaluation | — | Linux already builds and runs portable tests; no performance commitments |
 
-Already folded into the M2/M3 specs: Anthropic `diagnostics.cache_miss_reason` (002 FR-023),
-accepting and ignoring server-side context management (002 FR-024), cache hints (003 FR-014), recorded tool gaps
-in replay (005 FR-003a). Eviction stays plain LRU with turn-type order: two 2026 studies found LRU
-near-optimal for single long sessions, so cost-aware scoring waits for hybrid models.
+## Dropped in this sprint
 
-## Later
+8-bit KV (hybrid default removes the need), idle warm-up prefill, session and compaction hints for
+eviction, `cache_control` boundaries, Anthropic `diagnostics` (no client sends it), quality suite
+and gap replay in bench, priming in bench replay, cost-aware eviction for attention models.
 
-- **Parallel sessions**: batched decode, only if traces show agents queued behind each other;
-  verify-and-rollback determinism then.
-- **logprobs**, EAGLE-3 or DFlash drafters (none exists for the default model).
-- **Linux / CUDA**: Linux builds compile and pass portable tests from day one (CI). Running models
-  on Linux (MLX CPU, MLX CUDA backend) is evaluated only after the Mac release; no performance
-  commitments there. Competing with vLLM/SGLang on CUDA servers is not a goal.
-
-## Rejected after research
-
-Non-prefix (position-independent) KV reuse and approximate prefill: not exact. 4-bit KV by
-default: no evidence on long-context code. MoE expert offload: the default model fits 48 GB.
-Server-side compaction and a menu-bar app before 1.0.
-
-## Explicitly not planned
+## Not planned
 
 See the [vision non-goals](VISION.md#non-goals).

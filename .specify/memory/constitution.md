@@ -13,16 +13,18 @@ label.
 ### II. Exactness Before Speed
 
 Reused inference state MUST be exact: same model, tokenizer, template, KV format and token prefix.
-Hash lookups MUST be confirmed by token comparison. Approximate techniques (KV eviction, KV
-quantization, speculative decoding, approximate prefix matching) MUST be opt-in, separately
-identified in cache keys, and gated by a measured quality check. Silent context truncation,
+Hash lookups MUST be confirmed by token comparison. Lossy techniques (KV eviction or compression,
+KV quantization, lossy speculation, approximate or position-independent prefix reuse) MUST be
+opt-in, separately identified in cache keys, and gated by a measured quality check. Lossless
+speculative decoding (target-verified) is exact within the same tolerance as chunked prefill. Silent context truncation,
 stale-state reuse and invented usage counts are prohibited.
 
 ### III. Memory Is Budgeted by Construction
 
 Large memory (weights, KV arena, prefix cache) MUST be allocated or reserved by mrun against an
-explicit budget computed at startup, and admission MUST reserve a request's full prompt plus output
-KV before execution. Transient scratch MUST be bounded by measured envelopes from a worst-case
+explicit budget computed at startup, and admission MUST reserve a request's prompt plus its output
+limit, clamped to the remaining capacity and reported, before execution. No allocation may exceed
+the request's reservation. Transient scratch MUST be bounded by measured envelopes from a worst-case
 startup profile plus fixed input caps, not by per-allocation hooks into third-party code. Unified
 memory MUST NOT be double-counted as CPU plus GPU. Memory pressure MUST shed cache before failing
 requests, and failures MUST be explicit.
@@ -30,7 +32,8 @@ requests, and failures MUST be explicit.
 ### IV. Local, Private, Least Authority
 
 Inference MUST work offline after an explicit `mrun pull`. Serving MUST bind to loopback by
-default. No telemetry, prompt logging, remote code, or persisted conversation state by default.
+default. No telemetry, prompt logging, remote code, or persisted conversation state by default;
+persistence of inference state requires an explicit opt-in and is bound to the model identity.
 Tools run in the client, never in mrun. Models are identified by content hash, never by path or
 name alone.
 
@@ -51,7 +54,7 @@ do not serve a current requirement. No speculative plugin frameworks or multi-ba
 ## Target and Constraints
 
 - Primary target: Apple Silicon Macs with Metal, qualified first on an M4 Pro with 48 GB unified
-  memory. Linux/CPU builds MUST compile and run portable tests; they are not performance targets.
+  memory; 16–36 GB Macs supported with smaller models or less context. Linux/CPU builds MUST compile and run portable tests; they are not performance targets.
 - Rust stable (pinned in `rust-toolchain.toml`), Tokio + Axum for serving, MLX for tensors.
 - API compatibility is a product feature: OpenAI Chat Completions, Anthropic Messages and
   stateless OpenAI Responses.
@@ -75,4 +78,4 @@ removed or redefined; minor: principle added; patch: wording) and reconcile affe
 Numerical targets in specs are acceptance gates; changing one after a failed run requires a note
 in the spec explaining why.
 
-**Version**: 3.0.0 | **Ratified**: 2026-10-13 | **Last Amended**: 2026-10-14
+**Version**: 3.1.0 | **Ratified**: 2026-10-13 | **Last Amended**: 2026-10-15

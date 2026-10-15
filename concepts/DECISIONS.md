@@ -1,81 +1,86 @@
 # Decisions
 
-Architecture decision records. IDs are stable; superseded entries name their replacement.
+Architecture decision records. IDs are stable. Superseded early records (D002 llama.cpp shim,
+D003 Candle, D005 local-only planning, D016 evidence gating) are history: see git and
+[candle-capabilities](research/archive/candle-capabilities.md).
 
 | ID | Decision | Status |
 | --- | --- | --- |
-| D001 | Optimize agent latency (TTFT on repeated turns, tool-loop turnaround), not chat tok/s | Accepted |
-| D002 | ~~llama.cpp/Metal behind a C++ shim~~ | Superseded by D003, then D010 |
-| D003 | ~~Candle as the tensor core~~ | Superseded by D010 (2026-10-14) |
-| D004 | Exact prefix reuse only; approximate methods opt-in and quality-gated | Accepted |
-| D005 | ~~Planning stays local (gitignored)~~ | Superseded by D013 |
-| D010 | Engine: Apple MLX, called from Rust | Accepted 2026-10-14 |
-| D011 | mrun owns the runtime: scheduler, KV state, prefix store, memory budget, APIs | Accepted |
+| D001 | Optimize agent latency (TTFT on repeated and branching turns, tool-loop turnaround), not chat tok/s | Accepted |
+| D004 | Exact reuse only; lossy techniques opt-in, separately keyed and quality-gated | Accepted |
+| D010 | Engine: Apple MLX through own `mlx-sys` over mlx-c, called from Rust | Accepted 2026-10-14 |
+| D011 | mrun owns the runtime: scheduler, sequence state, prefix store, memory budget, APIs | Accepted |
 | D012 | Memory budgeted by construction, not per-allocation hooks | Accepted |
 | D013 | Specs, concepts and Spec Kit tooling are tracked in git | Accepted |
-| D014 | Ship OpenAI Chat Completions, Anthropic Messages and stateless Responses together | Accepted 2026-10-14 |
-| D015 | Model format: MLX safetensors (mlx-community layout); Qwen3 family first | Accepted |
-| D016 | Drop the qualification-report/evidence-gating machinery; use `mrun bench` results | Accepted |
-| D017 | Prefix store is a radix tree of KV snapshots, designed for hybrid-model state too | Accepted |
+| D014 | Ship Anthropic Messages, OpenAI Chat Completions and stateless Responses together | Accepted 2026-10-14 |
+| D015 | Models: MLX safetensors; default Qwen3.6-35B-A3B (hybrid), Qwen3-Coder-30B-A3B, Qwen3-8B reference | Revised 2026-10-15 |
+| D017 | Prefix store: live path plus moved-out branches; checkpoints for hybrids; plain LRU | Revised 2026-10-15 |
+| D018 | One active sequence; FIFO queue; batching only if traces show agents waiting on each other | Accepted 2026-10-15 |
+| D019 | Contiguous per-layer attention arrays, no paging; state moves between live path and branches | Accepted 2026-10-15 |
+| D020 | Resident model, never unloaded on an idle timer | Accepted 2026-10-15 |
+| D021 | Fix client-side cache breakers on the server only when narrow and named (attribution nonce) | Accepted 2026-10-15 |
 
 ## D010: Engine is MLX
 
-**Context.** The Candle audit ([candle-capabilities](research/candle-capabilities.md)) found no
-Metal quantized MoE path, an open Metal corruption bug past 8,192 KV tokens (#3705), F16 RoPE
-tables, and no published Metal performance data. The landscape ([landscape](research/landscape-2026-10.md))
-shows the strongest local competitors moving to MLX (Ollama's MLX engine, oMLX, LM Studio).
+**Context.** Candle had no Metal quantized MoE path and an open Metal corruption bug past 8,192 KV
+tokens. The strongest local competitors run on MLX.
 
-**Decision.** Build on MLX through Rust bindings (pin and binding layer chosen in the 001 plan
-after [mlx-rust](research/mlx-rust.md)). mrun ports model graphs (Qwen3 dense, Qwen3 MoE) to Rust
-on MLX ops, owns KV state, and reuses MLX kernels (quantized matmul, gather-qmm, SDPA, RoPE).
-
-**Consequences.** MoE models (Qwen3-Coder-30B-A3B) are reachable without new kernels. Build needs
-MLX's C/C++ library; Linux CI runs MLX's CPU backend if the bindings support it, otherwise CI
-covers everything except the engine crate. The engine sits behind one internal module boundary,
-not a plugin system.
-
-## D011: Own the runtime
-
-The differentiator is the runtime around the engine: exact reuse, explainable misses, memory
-admission, cancellation and API fidelity. These are written in Rust in mrun; model graphs are thin
-ports of mlx-lm reference implementations, tested against them.
+**Decision.** Own `mlx-sys` (bindgen over vendored mlx-c v0.7.0, MLX v0.32.4, which fixes
+deadlocks and a missing stream in `gather_qmm`) plus a thin safe layer. Model graphs are ports of
+mlx-lm reference implementations, tested against them. Every mlx-c function the plan uses has been
+checked to exist in v0.7.0.
 
 ## D012: Budget by construction
 
-The 2026-10-14 Candle experiment ([results](research/candle-budget/results.md)) showed that
-per-allocation enforcement inside third-party code is not achievable: op scratch, template
-intermediates and grammar construction allocate before any limit trips. mrun instead (1) computes a
-budget at startup from physical memory and the GPU working-set recommendation, (2) loads weights,
-(3) measures peak scratch with a worst-case prefill chunk, (4) sizes the KV arena and prefix store
-from the remainder, (5) admits requests by exact KV bytes, and (6) caps inputs (body, schema,
-template) so host-side work stays inside a measured envelope. MLX memory limits and cache limits
-back this up at runtime.
-
-## D014: Three APIs at once
-
-Codex CLI only speaks Responses; Claude Code only speaks Anthropic Messages; OpenCode and most
-others speak Chat Completions. All three map onto one internal request model (messages, tools,
-sampling, stream). Responses is stateless (`store=false` semantics); no server-side conversation
-storage (Principle IV).
+Per-allocation enforcement inside third-party code is not achievable
+([experiment](research/archive/candle-budget/results.md)). mrun computes a budget at startup, measures
+weights and scratch, sizes attention-state capacity from the remainder, admits requests by their
+prompt, clamps output limits to what remains, keeps every allocation within the request's
+reservation, and caps inputs so host-side work stays bounded. The reserve for other applications
+defaults to 15% of physical memory, between 2 and 8 GiB.
 
 ## D015: Models
 
-- Reference: Qwen3-8B (dense, full attention) for correctness and engineering.
-- Primary: Qwen3-Coder-30B-A3B-Instruct, 4-bit (MoE, full attention, ~17–19 GB).
-- Next: hybrid-attention coders (Qwen3.6/3.8-27B class) once the prefix store supports state
-  checkpoints. Models are pulled explicitly and identified by content hash.
+- **Default: Qwen3.6-35B-A3B** (released 2026-04-14, Apache-2.0): 40 layers, 30 Gated DeltaNet and
+  10 gated attention, MoE with 256 experts; vendor-reported 73.4% SWE-bench Verified against about
+  51.6% for Qwen3-Coder-30B-A3B. Only 10 attention layers, so ≈20 KiB of attention state per token:
+  its full 262K window fits a 48 GB Mac, five times Qwen3-Coder's usable context. The default is
+  confirmed by `mrun bench` before release, and newer releases are re-checked then.
+- **Qwen3-Coder-30B-A3B**: attention-only MoE; simpler cache behaviour; kept as an alternative.
+- **Qwen3-8B**: dense reference for correctness tests and 16–24 GB Macs.
 
-## D016: Drop evidence-gating machinery
+## D017: Prefix store
 
-The previous design gated serving on hashed qualification reports, staged candidate binaries and
-100-case fixture catalogs. That machinery delivered no user value and blocked progress. Correctness
-lives in tests; performance lives in reproducible `mrun bench` runs with recorded settings.
+The live path is the active sequence state. Other conversations are branches whose state was moved
+out when the live path switched; switching back moves it in again. Moves go one layer at a time, so
+state is never held twice and long conversations survive subagents. Hybrid models resume from
+checkpoints captured during prefill at message boundaries. Eviction is plain LRU over branch
+leaves: two 2026 studies found LRU near-optimal for single long sessions, and turn-type or
+session-priority tiers did not pay for themselves. Earlier ideas dropped in the third audit:
+copy-based restore (capped conversations at about half of capacity), idle warm-up, session and
+compaction hints, `cache_control` boundaries.
 
-## D017: Prefix store design
+## D018: One active sequence
 
-A radix tree keyed by token IDs, rooted per model identity. Nodes own immutable KV snapshots of
-token ranges (segments). Restoring a prefix copies matched segments into the active cache; the hot
-path (same conversation continuing) reuses the active cache with zero copy. Every lookup confirms
-tokens, not just hashes. For hybrid models, nodes additionally hold recurrent-state checkpoints at
-chosen boundaries. Eviction starts as LRU by turn type (assistant, then user/tool, then system);
-cost-aware eviction is a later optimization if benchmarks show it matters.
+On a single Mac GPU decode is bandwidth-bound, so serial execution loses little and keeps latency
+predictable and reuse exact. Parallel subagents queue (default 16 waiting). Batching returns as a
+spec only if recorded traces show significant queueing.
+
+## D019: Contiguous attention arrays
+
+Per-layer contiguous arrays keep MLX's fused attention kernels on their fast path and make trims
+free. The cost is that branches cannot share pages; moving tails instead of copying them keeps
+memory at one copy per unique token.
+
+## D020: Resident model
+
+Unloading after idle (Ollama's default of 5 minutes) throws away the cache; an agent user who steps
+away pays a cold reload and a full prefill. mrun keeps the model loaded and gives cache back under
+memory pressure instead. Only weights and the active state are wired.
+
+## D021: Narrow server-side fixes for client cache breakers
+
+Claude Code adds a per-request nonce (`cch=`) to an attribution line at the top of the system
+prompt; it defeats all reuse for users who start Claude Code without `mrun launch`. mrun replaces
+only that value with a fixed one of the same length (as llama.cpp does). Broader prompt rewriting
+is rejected: an unanchored version elsewhere truncated users' system prompts.

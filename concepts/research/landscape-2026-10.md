@@ -3,7 +3,7 @@
 **Date**: 2026-10-14. **Scope**: This document verifies, corrects and extends
 the former MARKET_LANDSCAPE.md (removed in the 2026-10-14 redesign) and the
 [mistral.rs study](mistralrs-study.md). It does not repeat them.
-Candle model coverage is in [candle-capabilities.md](candle-capabilities.md).
+Candle model coverage is in [candle-capabilities.md](archive/candle-capabilities.md).
 
 **Method**: Each project was shallow-cloned at its default branch on 2026-10-14, and its README, docs
 and selected sources were read. Release tags and dates come from `git ls-remote` and the tag commit
@@ -45,7 +45,7 @@ noted. Nothing was built or run, and no number in this file was measured by mrun
 | shimmy (Rust, llama.cpp/MLX) | v2.6.4 (2026-08-30) | yes | yes | yes | `cargo install shimmy` [V README] |
 | uzu (Rust, Apple-first) | 0.6.7 (2026-10-14) | SDK-first, no server documented | – | – | Rust/Swift/TS/Python bindings [V README] |
 | Crane (Rust, Candle) | no tags; main 2026-10-14 | `crane-serve` | – | – | GGUF Qwen3.5 GDN [V README] |
-| Candle | 0.11.0 (2026-06-26); main 12bb5d1 (10-14) | library only | – | – | see [candle-capabilities](candle-capabilities.md) |
+| Candle | 0.11.0 (2026-06-26); main 12bb5d1 (10-14) | library only | – | – | see [candle-capabilities](archive/candle-capabilities.md) |
 
 **Finding**: In late 2026, OpenAI Chat Completions, Anthropic Messages and stateless Responses
 together are **table stakes**. Every serious server except mlx-lm ships all three [V]. Nearly all
@@ -105,7 +105,7 @@ it further. Weights plus KV plus about 2 GB of activations must fit, so practica
 
 | Model (release) | Type | Q4 size | Attention for prefix reuse | Tool format | Notes |
 |---|---|---|---|---|---|
-| **Qwen3-Coder-30B-A3B-Instruct** (2025-07-31 [U]) | MoE 30.5B / 3.3B active | ≈18.5 GB | **full GQA** (48 layers, 4 KV heads × 128 [U config]) → ≈96 KiB/token BF16, 1.5 GiB at 16k | Qwen3-Coder XML (`<function=…>`) [V parser] | Fast. Truncatable KV. Candle has `quantized_qwen3_moe`, but its MoE GEMM is CUDA-only, so Metal needs work ([candle-capabilities](candle-capabilities.md)). |
+| **Qwen3-Coder-30B-A3B-Instruct** (2025-07-31 [U]) | MoE 30.5B / 3.3B active | ≈18.5 GB | **full GQA** (48 layers, 4 KV heads × 128 [U config]) → ≈96 KiB/token BF16, 1.5 GiB at 16k | Qwen3-Coder XML (`<function=…>`) [V parser] | Fast. Truncatable KV. Candle has `quantized_qwen3_moe`, but its MoE GEMM is CUDA-only, so Metal needs work ([candle-capabilities](archive/candle-capabilities.md)). |
 | **Qwen3.6-27B** (2026-04-22 [V Qwen README]) | dense 27B, hybrid | ≈16.4 GB (Q8 ≈29 GB) | **3:1 Gated DeltaNet : gated attention** (64 layers, 16 full; 4 KV heads × 256) [U card mirror; V `qwen3_5.py` `full_attention_interval=4`] → ≈64 KiB/token, plus fixed recurrent state per snapshot | Qwen3-Coder XML [V] | SWE-bench Verified 77.2 (vendor) [U]. Dense, so decode ≈ 11–14 tok/s on M4 Pro [U: bandwidth estimate]. Checkpoints carry MTP weights (`mtp.*`) [V]. |
 | **Qwen3.6-35B-A3B** (2026-04-16 [V]) | MoE hybrid (qwen3_5_moe) | ≈21 GB | hybrid GDN, same as above | Qwen3-Coder XML | SWE-bench Verified 73.4 (vendor) [U]. M4 Pro MLX ≈85 tok/s TG at 1k (oMLX community runs) [U]. |
 | **Qwen3.8-27B** (2026-08-14 [V Qwen README]) | dense hybrid, VL | ≈16.4 GB | same 3:1 hybrid (vLLM docs: 16 of 64 layers full) [U] | Qwen3-Coder XML [U] | Newest Qwen dense model; `reasoning_effort`, `preserve_thinking` [V README]. |

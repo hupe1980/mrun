@@ -3,16 +3,18 @@
 ## One sentence
 
 mrun is the local inference server built for coding agents on Apple Silicon: your agent's context
-is computed once, reused exactly, and never pushes your Mac into swap.
+is computed once, reused exactly, and stays inside a memory budget fixed at startup.
 
 ## The problem
 
-Coding agents (Claude Code, OpenCode, Codex, Aider, Cline, Zed) send the same 10–60K tokens of
-system prompt, tool schemas and history on every turn, then append a little. On a laptop, prefill
-dominates: a 30K-token re-prefill can cost tens of seconds before the first useful token. Agents
-also branch (subagents, retries, edited history) and cancel constantly. General local servers
-optimize single-prompt chat; agent loops expose their weak spots: cache misses nobody can explain,
-memory blowups at long context, and slow interruption.
+Coding agents (Claude Code, Codex, OpenCode, Aider, Cline, Zed) resend 15–60K tokens of system
+prompt, tool schemas and history on every turn and append a little. On a laptop, reading that
+prompt dominates: an M4 Pro processes a few hundred to about a thousand tokens per second at depth,
+so a 30K-token re-prefill takes about a minute and a 100K one close to ten. Agents also branch
+(subagents, title and background requests, retries, edited history) and cancel constantly. General
+local servers optimize single-prompt chat; agent loops expose their weak spots: cache misses
+nobody can explain, conversations lost when a subagent runs, memory blowups at long context,
+clients that time out during long prefills, and slow interruption.
 
 ## Users
 
@@ -23,29 +25,34 @@ memory blowups at long context, and slow interruption.
 
 ## What makes mrun best-in-class
 
-Competitors already ship prefix caching (llama.cpp server, Ollama's MLX engine, oMLX, mlx-lm).
-mrun has to be better on the dimensions agents feel, and prove it with a published benchmark:
+Competitors ship prefix caching too: llama.cpp server, Ollama's MLX engine, oMLX, mlx-lm, LM
+Studio, and SGLang's MLX backend with a radix cache. oMLX even reports divergence points. mrun has
+to win on what agents feel, and prove it with a published, fair benchmark:
 
-1. **Time to first useful token on repeated agent turns.** Exact radix-tree prefix reuse across
-   turns, branches and tool loops; restore is a memory copy, never a recompute.
-2. **Explainable caching.** Every response reports cached vs processed tokens; every miss says
-   where and why the prefix diverged (template drift, volatile header, model change). Users can
-   fix their setup instead of guessing.
-3. **Predictable memory.** Weights, KV and cache are budgeted at startup. Requests that cannot fit
-   are rejected up front with the numbers. Pressure sheds cache, never swaps.
-4. **Instant interruption.** Cancellation is checked after every model layer during prompt
-   processing and after every generated token: well under 300 ms.
-5. **All three agent APIs, natively.** OpenAI Chat Completions, Anthropic Messages and stateless
-   OpenAI Responses from one binary, so Claude Code, Codex and OpenCode all work.
-6. **Delightful DX.** `mrun pull`, `mrun serve`, `mrun launch claude-code`, `mrun doctor`. One
-   binary, zero config, clear errors.
-7. **Fast engine.** MLX: the fastest Apple Silicon kernels, including MoE and quantized models.
+1. **Time to first token on repeated and branching turns.** Exact reuse across turns, subagents
+   and tool loops, for attention and hybrid (linear-attention) models. Switching between a main
+   conversation and a subagent moves state instead of discarding or duplicating it.
+2. **Explainable caching.** Every response reports cached and processed tokens; every miss names
+   the cause and the divergence point, in-band (headers or SSE comments) and in `mrun ps`.
+3. **Predictable memory.** Weights, attention state and cache live inside a budget fixed at
+   startup. Prompts that cannot fit are refused with the numbers; output limits are clamped, never
+   silently truncated; memory pressure sheds cache first.
+4. **Interruption that keeps progress.** Cancellation takes effect within a few hundred
+   milliseconds at any context length, and work already done is kept for the retry.
+5. **All three agent APIs, faithfully.** Anthropic Messages, OpenAI Chat Completions and stateless
+   Responses, including MCP tools, Codex namespaces and deferred tool loading, from one binary.
+6. **Delightful DX.** `mrun launch claude-code` takes a fresh install to a working agent: it pulls
+   the model, starts the server and configures the client for that process.
+7. **The best model that fits.** Default: Qwen3.6-35B-A3B (hybrid MoE, about 20 KiB of attention
+   state per token, so its full 262K context fits a 48 GB Mac); Qwen3-Coder-30B-A3B as the
+   attention-only alternative.
 
 ## Non-goals
 
 Web UI, server-side tool execution (MCP, shell, search), multi-model routing, distributed or
 multi-GPU serving, training or fine-tuning, a custom quantization format, Ollama's `/api` surface,
-stateful Responses (`previous_response_id` storage), Linux/CUDA performance work.
+stateful Responses (`previous_response_id` storage), approximate or lossy context reuse,
+Linux/CUDA performance work.
 
 ## Principles in practice
 

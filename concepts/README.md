@@ -14,16 +14,12 @@ Design notes behind mrun. Specs own requirements; these pages explain direction 
 
 | Study | Summary |
 | --- | --- |
+| [competitors-2026-10](research/competitors-2026-10.md) | Source study of 13 competitors; what mrun adopted and rejected |
+| [arxiv-sota-2026-10](research/arxiv-sota-2026-10.md) | 2025–2026 papers: agent serving, eviction, speculation, hybrids, SSD tiers |
+| [next-features-2026-10](research/next-features-2026-10.md) | Speculative decoding, KV quantization, hybrids, SSD tier, batching |
 | [landscape-2026-10](research/landscape-2026-10.md) | Competitors, client API needs, models that fit 48 GB, DX patterns |
 | [mlx-rust](research/mlx-rust.md) | MLX Rust bindings, mlx-lm internals, MLX model format |
 | [literature-study](research/literature-study.md) | Papers on prefix reuse, agent serving, KV compression, speculation |
 | [mistralrs-study](research/mistralrs-study.md) | What to adopt and avoid from mistral.rs |
-| [candle-capabilities](research/candle-capabilities.md) | Why Candle was dropped (D010) |
-| [candle-budget](research/candle-budget/results.md) | Allocation-bound experiment; why memory is budgeted by construction (D012) |
-
-## Workflow
-
-Features follow Spec Kit: `/speckit-specify` → `/speckit-clarify` → `/speckit-plan` →
-`/speckit-tasks` → `/speckit-analyze` → `/speckit-implement`. Skills are installed for Claude Code
-(`.claude/skills`) and Copilot (`.github/skills`). Select the active feature with
-`SPECIFY_FEATURE_DIRECTORY=specs/NNN-name` or `.specify/feature.json`.
+| [fact-check-2026-10-15](research/fact-check-2026-10-15.md) | Corrections applied to the specs on 2026-10-15 |
+| [archive](research/archive/) | Candle evaluation (why D010 and D012) |

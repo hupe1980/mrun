@@ -1,6 +1,7 @@
 # Architecture
 
-**Status**: Target design for features 001–005 (2026-10-14). Nothing below is implemented yet.
+**Status**: Target design for the first release (2026-10-15, after the third audit). Only the
+portable foundation (engine trait, identity, chat layer, generation loop) is implemented.
 
 ## Shape
 
@@ -10,93 +11,116 @@ One binary, two crates plus a sys crate:
 crates/
 ├── mlx-sys/     # bindgen over vendored mlx-c v0.7.0 + MLX v0.32.4 (cmake); checked-in bindings
 ├── mrun-engine/ # Engine trait + identity + budget (no MLX); behind feature `mlx`: safe MLX layer,
-│                # model graphs (qwen3, qwen3_moe), KV cache, sampler, loader, scratch probe
+│                # model graphs (qwen3, qwen3_moe, qwen3_5_moe hybrid), sequence state, sampler,
+│                # loader, scratch probe
 └── mrun/        # the binary: cli, config, hub, chat (tokenizer, template, tool parsing,
                  # constraints), runtime (worker, queue, admission), cache (prefix store),
                  # api (chat completions, messages, responses), bench
 ```
 
-`mrun` talks to the engine through one primitive trait, `Engine` (reserve, prefill, decode, trim,
-snapshot, restore), implemented by `MlxEngine` and by `ScriptedEngine` (a deterministic test double
-for API, cache and scheduler tests on any OS, built with `--no-default-features`). The generation
-loop (stops, UTF-8, events) lives in `mrun`. This is a test seam, not a plugin system (Principle VI).
+`mrun` talks to the engine through one primitive trait, `Engine`, implemented by `MlxEngine` and
+by `ScriptedEngine`, a deterministic double that models allocation, growth, pipelining and
+checkpoints so API, cache and scheduler logic is tested on Linux. It is a test seam, not a plugin
+system.
+
+## Models and sequence state
+
+| Model | Layers | Attention state per token | Fixed recurrent state | Role |
+| --- | --- | --- | --- | --- |
+| Qwen3.6-35B-A3B, 4-bit (≈20 GB) | 30 Gated DeltaNet + 10 gated attention, MoE 256 experts | ≈20 KiB | ≈60–150 MiB per checkpoint | Default (confirmed by `mrun bench` before release) |
+| Qwen3-Coder-30B-A3B, 4-bit (17.2 GB) | 48 attention, MoE 128 experts | 96 KiB | none | Attention-only alternative |
+| Qwen3-8B, 4-bit | 36 attention, dense | 144 KiB | none | Reference for correctness; small Macs |
+
+The **sequence state** of the active conversation is the attention KV of every attention layer
+(contiguous per-layer arrays; `offset` marks the valid length) plus, for hybrid models, the
+recurrent state of every linear-attention layer (convolution and delta-rule state at the current
+position). Attention KV can be cut at any position. Recurrent state exists only at the position it
+was computed for, so a hybrid model resumes from a **checkpoint**: a copy of all recurrent state
+taken at a planned position during prefill.
+
+Worked budget on the target (M4 Pro, 48 GB): `min(0.75 × 48, 36) − 8 = 28 GiB`. Qwen3.6 4-bit
+leaves ≈8 GiB after weights and scratch, which is far more than its 262K window needs. Qwen3-Coder
+leaves ≈10 GiB, ≈105K tokens. Clients assume larger windows (Claude Code 200K, Codex 272K for
+unknown models), so mrun reports its real capacity and `mrun launch` passes it on.
 
 ## Request flow
 
 ```text
-client ──HTTP──▶ api (parse: chat|messages|responses ─▶ ChatRequest)
-                 │ validate limits, map tools, reasoning control
+client ──HTTP──▶ api (Chat | Messages | Responses ─▶ ChatRequest; namespaces flattened,
+                 │      deferred tools held back, limits checked)
                  ▼
-          chat::render (template ─▶ token ids) ── count_tokens answers here
-                 ▼
-          runtime::queue (FIFO, 8 waiting, 600 s wait deadline, keepalives, cancel on disconnect)
-                 ▼  (one at a time)
-          engine worker thread (owns MLX, the active sequence and the prefix store)
-             1. prefix lookup: longest exact token match (pins nodes)
-             2. admission: prompt + max_tokens must fit; evict unpinned cache as needed
-             3. prepare: trim the live path (zero copy) or restore matched segments (copy)
-             4. prefill remaining tokens in 2,048-token chunks (≤ 2 layers in flight, cancel check per layer)
-             5. decode: sample on device (+ grammar mask if strict; unpipelined then),
-                async-eval pipelined, cancel check per token, lazy cache eviction as KV grows
-             6. finish: trim to committed tokens; record the live path and its boundaries
-                 ▼ bounded channel of Events (token text, tool deltas, usage, finish)
-          api encoder (per API SSE format) ──▶ client
+          chat::render (model template, HF-compatible Jinja ─▶ tokens + message boundaries)
+                 ▼                                           count_tokens answers here
+          runtime::queue (FIFO, keepalives: SSE comments, Anthropic ping, Responses in_progress)
+                 ▼  one request at a time
+          engine worker thread (owns MLX, the sequence state and the prefix store)
+             1. lookup: longest exact token match against the live path and stored branches
+             2. admit: the prompt must fit; the output limit is clamped to what remains
+             3. switch: keep the shared prefix in place, move the old tail out, move the
+                matched branch in (hybrids: resume from the deepest checkpoint ≤ match)
+             4. prefill the rest in chunks ending at message boundaries; chunk size shrinks with
+                depth so one layer stays short; one layer in flight, cancel checked per layer;
+                checkpoints captured at planned boundaries; only whole chunks are committed
+             5. decode: forward and sample split (grammar mask computed between them), pipelined
+                one token ahead; cancel checked per token; cache evicted on demand as state grows
+             6. finish: keep exactly the committed tokens (prompt + emitted output)
+                 ▼ bounded async channel of events; `Finished` always delivered
+          api encoder (per API) ──▶ client
 ```
 
 ## Engine thread and memory
 
-- MLX objects are not shared across threads: one engine thread owns the device, weights, the active
-  KV cache and the prefix store, and a single GPU stream. Async code sends commands over a channel
-  and receives events over a bounded channel (stall timeout cancels).
-- **Budget by construction** (D012): `budget = min(fraction × physical, recommended_working_set) −
-  reserve`. Load weights (measured with `get_active_memory`), run one worst-case prefill chunk at
-  maximum context to measure peak scratch (`get_peak_memory`), then size KV capacity from the
-  remainder. `set_memory_limit` and `set_cache_limit` back the budget; `set_wired_limit` is set to
-  the budget for the engine's lifetime (no privileged tuning).
-- **KV cache**: per layer, K and V arrays allocated at admission (prompt + min(output, 4K), rounded
-  to 256) and grown in 4,096-token steps one layer at a time (transient ≤ one layer, budgeted); `offset` marks the valid length; trim = move `offset`.
-  Appends use in-place slice updates on solely-owned buffers.
-- **Snapshots** are explicit deep copies (MLX may share buffers on `slice`/`copy`, and a shared
-  buffer makes every later append copy the whole cache). Restore drops the active cache first,
-  then copies segments into fresh buffers.
+- One engine thread owns the device, weights, sequence state, prefix store and one GPU stream.
+  Competing servers that drive MLX from several threads have hit stream errors and kernel panics.
+- **Budget by construction**: `budget = min(fraction × physical, recommended working set) −
+  reserve`, with the reserve defaulting to `clamp(15% of physical, 2 GiB, 8 GiB)`. Weights are
+  measured after load; scratch is measured by one probe chunk at the deepest admissible position
+  (cached per model, machine, MLX version and chunk size); capacity is sized from the remainder
+  and never exceeds the probed depth. MLX memory and cache limits back the budget.
+- **Allocation never exceeds the reservation**: per-layer attention arrays start at the prompt
+  plus up to 4K tokens of output and grow in 4K steps, both clamped to the request's reserved
+  total. Before any growth the engine reports the bytes it needs; the worker evicts cache first.
+- **Cancellation bound**: one layer in flight; prefill chunk = `clamp(2048 × 16K / depth, 256,
+  2048)` tokens so a layer stays near 100 ms at any depth. A cancelled prefill keeps every whole
+  chunk.
 
-## Prefix store (003)
+## Prefix store
 
-Radix tree over token ids, one tree per model identity (weights, tokenizer, template, KV dtype).
-The active cache is the tree's live path: a continuing conversation copies nothing, and a
-divergence inside it is handled by trimming. Segments (deep copies, one per node edge) are
-materialized at message boundaries (end of system+tools, each user/tool turn, each assistant turn,
-every 4,096 tokens) only when the live path is replaced by another conversation or branch.
-Lookup walks tokens (never hashes alone). Eviction is LRU over unpinned leaves, assistant turns
-before user/tool turns before system prompts; cached state may occupy capacity reserved for output
-and is evicted lazily as output grows. Memory pressure (dispatch source) shrinks the store first.
-Every lookup produces a miss report: divergence token, closest cached length, cause.
+One tree of token sequences per model identity (weights, tokenizer, template, state format). The
+**live path** is the active sequence state itself; every other stored conversation is a **branch**
+hanging off it.
 
-Exactness definition: a reused segment holds the stored bytes computed for exactly those tokens
-under the same model identity. Recomputing the same tokens with different chunking may differ in
-the last bits (MLX selects kernels by shape), so tests compare cache-on to cache-off with a logit
-tolerance and greedy agreement, while staleness tests are structural (token prefix equality).
+- **Continue** (next turn of the live conversation): nothing moves; the new tokens are appended.
+- **Switch** (a subagent, a title request, another session, a retry with an edit): the shared
+  prefix stays in place. The old tail is **moved** out into a branch segment, one layer at a time
+  (copy the tail, then free that layer's slack), and the requested branch is moved in the same way.
+  State is never held twice, so a 90K-token conversation survives a subagent on a 105K-token
+  machine. Tiny tails (under 256 tokens) are discarded instead.
+- **Hybrid models**: checkpoints are captured during prefill at the end of system+tools, at the
+  start of the last user or tool message, and at the end of the prompt (where the next turn's
+  re-rendered reply diverges). At most 8 per conversation; middle ones are dropped first. A switch
+  or edit resumes from the deepest checkpoint at or below the match and re-prefills the gap.
+- **Eviction**: least recently used branch leaves; the live path is never evicted while in use.
+  Under memory pressure, branches go first, then an idle live path.
+- **Miss report** on every request: cached and processed tokens, divergence position, and a cause
+  (`new`, `edit`, `template`, `evicted`, `capacity`, `checkpoint`, `model`, `disabled`).
+
+Exactness: reuse requires identical tokens and model identity. Reused state equals recomputation
+up to the floating-point rounding any chunked prefill has; tests compare cache-on to cache-off
+runs that use the same chunk split, so results must match bit for bit.
 
 ## Chat layer
 
-- Tokenizer: `tokenizers` (HF `tokenizer.json`); template: `minijinja` with the model's own
-  `chat_template`, rendered with tools and reasoning flags; only templates from pulled, hashed
-  models are rendered.
-- Tool calls: streaming parsers for the model's native syntax (Qwen3 `<tool_call>{json}`,
-  Qwen3-Coder XML `<function=…><parameter=…>`). Strict tools and JSON response formats use
-  `llguidance` masks (decode is not pipelined while a mask is active).
-- One internal `ChatRequest` / `Event` model; three thin encoders map it to Chat Completions,
-  Anthropic Messages and Responses wire formats.
-
-## Testing strategy
-
-- Linux CI (every PR): fmt, clippy, unit and integration tests with `ScriptedEngine`; `mlx-sys`
-  and `mrun-engine` build with MLX's CPU backend and run tiny random-weight model tests.
-- macOS CI: build only (hosted runners lack a reliable Metal GPU for MLX).
-- Apple hardware (developer Mac / self-hosted): logits oracle against mlx-lm on pinned weights,
-  greedy conformance, engine benchmark and `mrun bench` cells.
+- Tokenizer: `tokenizers` (HF `tokenizer.json`). Templates: `minijinja` configured like HF
+  (`trim_blocks`, `lstrip_blocks`, a `tojson` without HTML escaping), golden-tested against HF
+  renderings with tools.
+- Tool calls: streaming parsers for the model's native syntax (Qwen3 JSON, Qwen3-Coder and Qwen3.6
+  XML). Values end only at the full closing sequence, are never coerced or evaluated, and code
+  containing the syntax's own tags round-trips. Strict tools and JSON response formats use
+  `llguidance` masks computed between forward and sample.
+- One internal `ChatRequest` / event model; three thin encoders.
 
 ## What is deliberately absent
 
 No paged attention, no continuous batching, no multi-model router, no plugin system, no on-disk
-cache, no server-side tools. Each has a roadmap slot if evidence demands it.
+cache (an opt-in SSD tier is spec 007), no server-side tools, no speculative work while idle.

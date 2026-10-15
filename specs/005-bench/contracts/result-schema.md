@@ -3,16 +3,23 @@
 ## CLI
 
 ```text
-mrun bench [--suite agent|synthetic|cancel|memory|quality|all] [--trace NAME]...
+mrun bench [--suite agent|synthetic|cancel|all] [--trace NAME]...
            [--system NAME=URL[,apis=chat+messages+responses][,model=M][,pid=N][,profile=P]]...
-           [--compare] [--gaps none|recorded] [--reps N] [--out DIR] [--baseline FILE]
+           [--compare] [--reps N] [--out DIR] [--baseline FILE]
 ```
 
 - Without `--system`, benchmarks the local mrun server (`http://127.0.0.1:8484`).
-- `--compare` with several `--system` entries runs them sequentially and writes one combined
-  report.
-- `--baseline FILE` runs regression mode; exit code 7 when thresholds fail; 5 when a system is
-  unreachable (exit codes per the [CLI contract](../../004-models-cli/contracts/cli.md#exit-codes)).
+- `--compare` with several `--system` entries runs them one at a time (profile start → health →
+  reset per repetition → stop; or a "Stop X, start Y, press Enter" pause without commands) and
+  writes one combined report. The `cancel` suite runs for mrun only.
+- Exit codes per the [CLI contract](../../004-models-cli/contracts/cli.md#exit-codes): 7 when
+  `--baseline` thresholds fail; 5 only when every system (or the only system) is unreachable. An
+  unreachable competitor under `--compare` yields "not run" cells, not an error exit.
+
+## Profile (`bench/profiles/<name>.toml`)
+
+`start`, `stop`, `health` (optional; all or none), `reset` (required), `pid` (optional command),
+`context_length` flags, cache flags, model name, format and quantization.
 
 ## Result schema (v1)
 
@@ -22,7 +29,8 @@ Additive changes keep `schema_version: 1`; removals or meaning changes bump it. 
 
 ## Report (markdown)
 
-Sections: Method (teacher-forced replay, gaps mode, repetitions) · Machine · Systems (versions, flags, model
-name, format, quantization) · Agent suite (per-turn TTFT table and session totals) · Synthetic
-cells · Cancellation · Memory · Quality · Warnings (power, throttling, early EOS, malformed tool calls per system) · Losing cells
-(always present, possibly "none").
+Sections: Method (in-order replay, reuse measured up to the previous reply, cache resets, equal
+context, repetitions) · Machine · Systems (versions, flags, context length, model name, format,
+bits per weight) · Agent suite (per-turn TTFT table, session totals, peak memory, malformed tool
+calls and early EOS per system) · Synthetic cells · Cancellation (mrun) · Warnings (power,
+throttling, memory not recovered) · Losing cells (always present, possibly "none").

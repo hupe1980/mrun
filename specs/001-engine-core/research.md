@@ -1,6 +1,6 @@
 # Research: Engine Core
 
-Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [candle-capabilities](../../concepts/research/candle-capabilities.md),
+Sources: [mlx-rust](../../concepts/research/mlx-rust.md), [candle-capabilities](../../concepts/research/archive/candle-capabilities.md),
 [landscape](../../concepts/research/landscape-2026-10.md), [literature](../../concepts/research/literature-study.md).
 
 ## R1: Engine library and bindings
