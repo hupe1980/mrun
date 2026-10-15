@@ -9,8 +9,16 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+# The MLX engine. Off by default: it builds MLX from source through `mlx-sys` (CMake; on Linux
+# also BLAS/LAPACK). Default builds and `cargo test --workspace` never compile it.
+default = []
+mlx = ["dep:mlx-sys"]
+
 [dependencies]
+mlx-sys = { workspace = true, optional = true }
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 toml.workspace = true

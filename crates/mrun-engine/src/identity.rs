@@ -6,6 +6,7 @@
 //! (canonical path, size, mtime, inode).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
@@ -39,6 +40,8 @@ pub enum IdentityError {
     NotAModel(PathBuf),
     #[error("cannot read {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
+    #[error("{path} is not valid JSON: {message}")]
+    Json { path: PathBuf, message: String },
     #[error("identity cache {path} is corrupt: {message}")]
     Cache { path: PathBuf, message: String },
 }
@@ -109,6 +112,79 @@ pub fn identify(dir: &Path, cache_path: &Path) -> Result<Identity, IdentityError
         changed_from,
         files,
     })
+}
+
+/// End-of-sequence token IDs of the model in `dir`, sorted: `eos_token_id` from `config.json`
+/// (root or `text_config`) and `generation_config.json` (int or list), the tokenizer's EOS token
+/// from `tokenizer_config.json` and `special_tokens_map.json`, and the family's `extra` end
+/// tokens. Token texts missing from the vocabulary are skipped.
+pub fn eos_union(dir: &Path, extra: &[&str]) -> Result<Vec<u32>, IdentityError> {
+    let config = read_json(&dir.join("config.json"))?;
+    let generation = read_json(&dir.join("generation_config.json"))?;
+    let tokenizer_config = read_json(&dir.join("tokenizer_config.json"))?;
+    let special = read_json(&dir.join("special_tokens_map.json"))?;
+    let tokenizer = read_json(&dir.join("tokenizer.json"))?;
+
+    let mut ids = Vec::new();
+    for value in [
+        &config["eos_token_id"],
+        &config["text_config"]["eos_token_id"],
+        &generation["eos_token_id"],
+    ] {
+        match value {
+            Value::Array(items) => ids.extend(items.iter().filter_map(token_id)),
+            other => ids.extend(token_id(other)),
+        }
+    }
+    let texts = [&tokenizer_config["eos_token"], &special["eos_token"]]
+        .into_iter()
+        .filter_map(|token| token.as_str().or_else(|| token["content"].as_str()))
+        .chain(extra.iter().copied());
+    for text in texts {
+        ids.extend(vocab_id(text, &tokenizer, &tokenizer_config));
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
+fn token_id(value: &Value) -> Option<u32> {
+    value.as_u64().and_then(|id| u32::try_from(id).ok())
+}
+
+/// ID of `text` in `tokenizer.json` (added tokens, then the model vocabulary) or in
+/// `tokenizer_config.json` `added_tokens_decoder`.
+fn vocab_id(text: &str, tokenizer: &Value, tokenizer_config: &Value) -> Option<u32> {
+    let added = tokenizer["added_tokens"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|token| token["content"] == text)
+        .and_then(|token| token_id(&token["id"]));
+    added
+        .or_else(|| token_id(&tokenizer["model"]["vocab"][text]))
+        .or_else(|| {
+            tokenizer_config["added_tokens_decoder"]
+                .as_object()?
+                .iter()
+                .find(|(_, token)| token["content"] == text)
+                .and_then(|(id, _)| id.parse().ok())
+        })
+}
+
+/// Parsed JSON file, or `Null` when it does not exist.
+fn read_json(path: &Path) -> Result<Value, IdentityError> {
+    match fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|error| IdentityError::Json {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Value::Null),
+        Err(source) => Err(IdentityError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn file_sha256(path: &Path, cache: &mut Cache) -> Result<String, IdentityError> {
@@ -275,6 +351,72 @@ mod tests {
                 .files
                 .contains(&("model.safetensors".to_string(), sha))
         );
+    }
+
+    #[test]
+    fn eos_union_joins_every_source_and_follows_generation_config() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = model_dir(root.path());
+        let write = |name: &str, value: serde_json::Value| {
+            fs::write(dir.join(name), value.to_string()).unwrap();
+        };
+        write(
+            "config.json",
+            serde_json::json!({"model_type": "gpt_oss", "eos_token_id": 200002}),
+        );
+        write(
+            "generation_config.json",
+            serde_json::json!({"eos_token_id": [200002, 199999]}),
+        );
+        write(
+            "tokenizer.json",
+            serde_json::json!({
+                "added_tokens": [
+                    {"id": 200012, "content": "<|call|>"},
+                    {"id": 200002, "content": "<|return|>"}
+                ],
+                "model": {"vocab": {"</s>": 2}}
+            }),
+        );
+        write(
+            "tokenizer_config.json",
+            serde_json::json!({
+                "eos_token": {"content": "<|return|>"},
+                "added_tokens_decoder": {"200007": {"content": "<|end|>"}}
+            }),
+        );
+        write(
+            "special_tokens_map.json",
+            serde_json::json!({"eos_token": "</s>"}),
+        );
+        let extra = ["<|call|>", "<|return|>", "<|end|>", "<|missing|>"];
+        assert_eq!(
+            eos_union(&dir, &extra).unwrap(),
+            [2, 199999, 200002, 200007, 200012]
+        );
+
+        write(
+            "generation_config.json",
+            serde_json::json!({"eos_token_id": 7}),
+        );
+        assert_eq!(eos_union(&dir, &[]).unwrap(), [2, 7, 200002]);
+    }
+
+    #[test]
+    fn eos_union_reads_wrapped_configs_and_tolerates_missing_files() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        fs::write(
+            dir.join("config.json"),
+            r#"{"model_type":"qwen3_5_moe","text_config":{"eos_token_id":248044}}"#,
+        )
+        .unwrap();
+        assert_eq!(eos_union(dir, &["<|im_end|>"]).unwrap(), [248044]);
+        fs::write(dir.join("generation_config.json"), "{").unwrap();
+        assert!(matches!(
+            eos_union(dir, &[]),
+            Err(IdentityError::Json { .. })
+        ));
     }
 
     #[test]

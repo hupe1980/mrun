@@ -27,14 +27,49 @@ jobs:
       - name: Tests
         run: cargo test --locked --workspace
 
+  mlx-sys-linux:
+    name: Linux (mlx-sys, MLX CPU backend)
+    # Builds mlx-c + MLX from source (CMake, OpenBLAS/LAPACKE) and runs the FFI smoke test.
+    # mlx-sys is not a workspace member, so the fast job above never builds it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install CMake, BLAS and LAPACK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libopenblas-dev liblapacke-dev
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Cache the MLX build
+        uses: actions/cache@v4
+        with:
+          path: crates/mlx-sys/target
+          key: mlx-sys-${{ runner.os }}-${{ hashFiles('crates/mlx-sys/build.rs', 'crates/mlx-sys/Cargo.lock', 'rust-toolchain.toml') }}-${{ hashFiles('.gitmodules') }}-mlxc-a341b49
+      - name: Clippy (mlx-sys)
+        run: cargo clippy --locked --manifest-path crates/mlx-sys/Cargo.toml --all-targets -- -D warnings
+      - name: Test (mlx-sys smoke test)
+        run: cargo test --locked --manifest-path crates/mlx-sys/Cargo.toml
+
   macos:
     name: macOS (build)
     # Hosted runners have no reliable Metal GPU for MLX: build only; Metal tests run on Apple hardware.
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
       - name: Build
         run: cargo build --locked --workspace --all-targets
+      - name: Cache the MLX build
+        uses: actions/cache@v4
+        with:
+          path: target/debug/build/mlx-sys-*
+          key: mlx-sys-${{ runner.os }}-${{ hashFiles('crates/mlx-sys/build.rs', 'Cargo.lock', 'rust-toolchain.toml') }}-mlxc-a341b49
+      - name: Build mrun-engine with MLX (Metal)
+        run: cargo build --locked -p mrun-engine --features mlx

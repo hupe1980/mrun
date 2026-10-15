@@ -69,8 +69,9 @@ impl StreamDecoder<'_> {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod test_support {
+/// Fixtures for unit and integration tests.
+#[doc(hidden)]
+pub mod test_support {
     use super::Tokenizer;
     use tokenizers::models::bpe::{BPE, Vocab};
     use tokenizers::pre_tokenizers::byte_level::ByteLevel;

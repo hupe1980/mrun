@@ -6,6 +6,7 @@
 //! and segments. Recurrent state is modelled as the tokens it has consumed, so restoring a
 //! checkpoint or segment that does not match the live sequence is detected on the next use.
 
+use mrun_engine::budget::{self, BudgetError, DeviceMemory, Overrides};
 use mrun_engine::{
     CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind, MAX_PLAN_CHECKPOINTS,
     MemoryBudget, ModelInfo, PrefillPlan, Prefilled, Sampling, Segment, SegmentId, Step, TokenMask,
@@ -20,6 +21,105 @@ pub const SCRIPT_EOS: u32 = u32::MAX - 1;
 pub const KV_BYTES: u64 = 16;
 /// Allocation granularity of the live state, in positions.
 const ALIGN: u32 = 256;
+
+/// Byte costs of one family's reference model (4-bit or MXFP4 weights, bf16 state).
+#[derive(Clone, Copy, Debug)]
+pub struct FamilyProfile {
+    pub family: &'static str,
+    pub layers: u32,
+    /// Kind of layer `i`.
+    pub layer_kind: fn(u32) -> LayerKind,
+    pub kv_bytes_per_token: u64,
+    /// Position-bound bytes per checkpoint.
+    pub recurrent_bytes: u64,
+    pub max_position: u32,
+    /// Approximate weight bytes, for budget fixtures.
+    pub weights: u64,
+}
+
+const KIB: u64 = 1 << 10;
+const MIB: u64 = 1 << 20;
+
+/// Reference models: Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, gpt-oss-20b and Qwen3-8B.
+pub const PROFILES: [FamilyProfile; 4] = [
+    FamilyProfile {
+        family: "qwen3_5_moe",
+        layers: 40,
+        layer_kind: |i| {
+            if (i + 1) % 4 == 0 {
+                LayerKind::FullAttention
+            } else {
+                LayerKind::Linear
+            }
+        },
+        kv_bytes_per_token: 20 * KIB,
+        recurrent_bytes: 64_389_120,
+        max_position: 262_144,
+        weights: 20 * 1024 * MIB,
+    },
+    FamilyProfile {
+        family: "qwen3_moe",
+        layers: 48,
+        layer_kind: |_| LayerKind::FullAttention,
+        kv_bytes_per_token: 96 * KIB,
+        recurrent_bytes: 0,
+        max_position: 262_144,
+        weights: 16 * 1024 * MIB,
+    },
+    FamilyProfile {
+        family: "gpt_oss",
+        layers: 24,
+        layer_kind: |i| {
+            if i % 2 == 0 {
+                LayerKind::SlidingAttention { window: 128 }
+            } else {
+                LayerKind::FullAttention
+            }
+        },
+        kv_bytes_per_token: 48 * KIB,
+        recurrent_bytes: 0,
+        max_position: 131_072,
+        weights: 11_571 * MIB,
+    },
+    FamilyProfile {
+        family: "qwen3",
+        layers: 36,
+        layer_kind: |_| LayerKind::FullAttention,
+        kv_bytes_per_token: 144 * KIB,
+        recurrent_bytes: 0,
+        max_position: 40_960,
+        weights: 4_400 * MIB,
+    },
+];
+
+impl FamilyProfile {
+    pub fn get(family: &str) -> Option<&'static Self> {
+        PROFILES.iter().find(|profile| profile.family == family)
+    }
+
+    /// Budget on a machine with `physical` bytes (all usable by the GPU) and `scratch` probed.
+    pub fn budget(&self, physical: u64, scratch: u64) -> Result<MemoryBudget, BudgetError> {
+        let info = ModelInfo {
+            identity: String::new(),
+            family: self.family.into(),
+            layer_kinds: Vec::new(),
+            kv_heads: 1,
+            head_dim: 1,
+            vocab: 1,
+            max_position: self.max_position,
+            kv_bytes_per_token: self.kv_bytes_per_token,
+            recurrent_bytes: self.recurrent_bytes,
+            eos_tokens: Vec::new(),
+        };
+        let device = DeviceMemory {
+            physical,
+            recommended_working_set: physical,
+        };
+        let top = budget::plan(device, Overrides::default())?;
+        let depth = budget::probe_depth(&top, self.weights, &info);
+        budget::with_state_capacity(top, self.weights, scratch, depth, &info)
+    }
+}
 
 #[derive(Debug)]
 struct Pending {
@@ -96,36 +196,60 @@ impl ScriptedEngine {
     }
 
     fn build(script: Vec<u32>, capacity: u32, kinds: Vec<LayerKind>, recurrent: u64) -> Self {
+        let info = ModelInfo {
+            identity: "scripted".into(),
+            family: if recurrent > 0 {
+                "qwen3_5_moe"
+            } else {
+                "qwen3"
+            }
+            .into(),
+            layer_kinds: kinds,
+            kv_heads: 1,
+            head_dim: 1,
+            vocab: u32::MAX,
+            max_position: capacity,
+            kv_bytes_per_token: KV_BYTES,
+            recurrent_bytes: recurrent,
+            eos_tokens: vec![SCRIPT_EOS],
+        };
+        let budget = MemoryBudget {
+            probed_depth: capacity,
+            state_capacity_bytes: u64::from(capacity) * KV_BYTES
+                + recurrent * (1 + MAX_PLAN_CHECKPOINTS as u64),
+            kv_capacity_tokens: capacity,
+            ..MemoryBudget::default()
+        };
+        Self::with_info(script, info, budget)
+    }
+
+    /// Engine with the byte costs of a family's reference model under `budget`.
+    pub fn for_family(script: Vec<u32>, profile: &FamilyProfile, budget: MemoryBudget) -> Self {
+        let info = ModelInfo {
+            identity: "scripted".into(),
+            family: profile.family.into(),
+            layer_kinds: (0..profile.layers).map(profile.layer_kind).collect(),
+            kv_heads: 1,
+            head_dim: 1,
+            vocab: u32::MAX,
+            max_position: profile.max_position,
+            kv_bytes_per_token: profile.kv_bytes_per_token,
+            recurrent_bytes: profile.recurrent_bytes,
+            eos_tokens: vec![SCRIPT_EOS],
+        };
+        Self::with_info(script, info, budget)
+    }
+
+    fn with_info(script: Vec<u32>, info: ModelInfo, budget: MemoryBudget) -> Self {
+        let hybrid = info.is_hybrid();
         Self {
-            info: ModelInfo {
-                identity: "scripted".into(),
-                family: if recurrent > 0 {
-                    "qwen3_5_moe"
-                } else {
-                    "qwen3"
-                }
-                .into(),
-                layer_kinds: kinds,
-                kv_heads: 1,
-                head_dim: 1,
-                vocab: u32::MAX,
-                max_position: capacity,
-                kv_bytes_per_token: KV_BYTES,
-                recurrent_bytes: recurrent,
-                eos_tokens: vec![SCRIPT_EOS],
-            },
-            budget: MemoryBudget {
-                probed_depth: capacity,
-                state_capacity_bytes: u64::from(capacity) * KV_BYTES
-                    + recurrent * (1 + MAX_PLAN_CHECKPOINTS as u64),
-                kv_capacity_tokens: capacity,
-                ..MemoryBudget::default()
-            },
+            info,
+            budget,
             script,
             next: 0,
             tokens: Vec::new(),
             cap: 0,
-            recurrent: (recurrent > 0).then(Vec::new),
+            recurrent: hybrid.then(Vec::new),
             reserved: 0,
             grown: false,
             pending: None,
@@ -971,6 +1095,61 @@ mod tests {
         prefill(&mut engine, &[9, 9]);
         assert_eq!(engine.tokens(), [0, 1, 2, 3, 9, 9]);
         engine.drop_segment(tail.id);
+    }
+
+    #[test]
+    fn family_profiles_match_the_registry_byte_costs_and_capacities_on_48_gb() {
+        use mrun_engine::budget::GIB;
+        // (family, token capacity range) from the worked 48 GB example.
+        for (family, capacity) in [
+            ("qwen3_5_moe", 262_144..=262_144),
+            ("qwen3_moe", 105_000..=120_000),
+            ("gpt_oss", 131_072..=131_072),
+            ("qwen3", 40_960..=40_960),
+        ] {
+            let profile = FamilyProfile::get(family).unwrap();
+            let budget = profile.budget(48 * GIB, 2 * GIB).unwrap();
+            assert_eq!(budget.budget, 28 * GIB);
+            assert!(
+                capacity.contains(&budget.kv_capacity_tokens),
+                "{family}: {}",
+                budget.kv_capacity_tokens
+            );
+            let mut engine = ScriptedEngine::for_family(vec![7], profile, budget);
+            assert_eq!(engine.info().family, family);
+            assert_eq!(engine.info().layers(), profile.layers);
+            assert_eq!(engine.info().is_hybrid(), profile.recurrent_bytes > 0);
+            let total = budget.kv_capacity_tokens;
+            engine.reserve(0, total).unwrap();
+            prefill(&mut engine, &seq(0..total));
+            assert!(
+                engine.allocated() <= budget.state_capacity_bytes,
+                "{family}"
+            );
+        }
+        assert_eq!(
+            PROFILES
+                .iter()
+                .map(|profile| (0..profile.layers)
+                    .filter(|&i| (profile.layer_kind)(i) == LayerKind::Linear)
+                    .count())
+                .collect::<Vec<_>>(),
+            [30, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn small_machines_refuse_or_shrink_large_families() {
+        use mrun_engine::budget::GIB;
+        let coder = FamilyProfile::get("qwen3_moe").unwrap();
+        assert!(matches!(
+            coder.budget(16 * GIB, 2 * GIB),
+            Err(BudgetError::DoesNotFit { .. })
+        ));
+        let qwen3 = FamilyProfile::get("qwen3").unwrap();
+        let small = qwen3.budget(16 * GIB, GIB).unwrap();
+        assert!(small.kv_capacity_tokens < qwen3.max_position);
+        assert!(small.kv_capacity_tokens > 4096);
     }
 
     #[test]

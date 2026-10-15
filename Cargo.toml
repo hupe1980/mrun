@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/mrun-engine", "crates/mrun"]
+# `mlx-sys` builds MLX from source (15-40 min), so it is not a member: `cargo test --workspace`
+# stays fast. It is pulled in by `mrun-engine --features mlx` and tested on its own with
+# `cargo test --manifest-path crates/mlx-sys/Cargo.toml`.
+exclude = ["crates/mlx-sys"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +16,7 @@ authors = ["hupe1980"]
 
 [workspace.dependencies]
 mrun-engine = { path = "crates/mrun-engine" }
+mlx-sys = { path = "crates/mlx-sys" }
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
 minijinja = { version = "3.0.0", features = ["serde", "json", "loop_controls", "preserve_order"] }
 minijinja-contrib = { version = "3.0.0", features = ["pycompat"] }

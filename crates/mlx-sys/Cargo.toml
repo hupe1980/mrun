@@ -1,0 +1,24 @@
+[package]
+name = "mlx-sys"
+description = "Raw FFI bindings to mlx-c v0.7.0 over a statically linked, pinned MLX v0.32.4"
+# Not a member of the root workspace (see the root Cargo.toml `exclude`): building MLX takes
+# 15-40 minutes, so `cargo test --workspace` must not touch it. Keep these in sync by hand.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hupe1980/mrun"
+authors = ["hupe1980"]
+publish = false
+links = "mlxc"
+build = "build.rs"
+
+[build-dependencies]
+cmake = "0.1.58"
+sha2 = "0.11.1"
+
+[lints.rust]
+missing_debug_implementations = "warn"
+
+# Standalone workspace: test with `cargo test --manifest-path crates/mlx-sys/Cargo.toml`.
+[workspace]
