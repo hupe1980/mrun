@@ -91,6 +91,7 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
                     schema => schema.clone(),
                 },
                 strict: function["strict"].as_bool().unwrap_or(false),
+                ..Default::default()
             };
             check_tool(&def, &path)?;
             request.tools.push(def);

@@ -7,7 +7,8 @@
 //! renders one call per assistant message, so multi-call history is split.
 
 use crate::api::model::{
-    ApiError, AssistantPart, ChatRequest, Effort, ErrorKind, Message, ReasoningCtl, UserPart,
+    ApiError, AssistantPart, ChatRequest, Effort, ErrorKind, Message, ReasoningCtl, ToolDef,
+    UserPart,
 };
 use crate::chat::prompt::{MessageMark, RenderedPrompt, Role};
 use crate::chat::template::{ChatTemplate, RenderOptions};
@@ -67,18 +68,15 @@ pub fn render(request: &ChatRequest, ctx: &RenderContext<'_>) -> Result<Rendered
     if thinking && !ctx.supports_thinking && ctx.syntax != SyntaxId::Harmony {
         logs.push(RenderLog::ThinkingUnsupported);
     }
-    let tools = (!request.tools.is_empty()).then(|| {
-        Value::Array(
-            request
-                .tools
-                .iter()
-                .map(|t| {
-                    json!({"type": "function", "function": {
-                        "name": t.name, "description": t.description, "parameters": t.schema}})
-                })
-                .collect(),
-        )
-    });
+    // Deferred tools stay out of the tools region (FR-028): their definitions appear inline
+    // in the tool result that returned them, so the prefix stays append-only.
+    let rendered: Vec<Value> = request
+        .tools
+        .iter()
+        .filter(|t| !t.deferred)
+        .map(ToolDef::definition)
+        .collect();
+    let tools = (!rendered.is_empty()).then_some(Value::Array(rendered));
     let mut options = RenderOptions {
         add_generation_prompt: !request.prefill,
         enable_thinking: thinking && ctx.supports_thinking,
@@ -620,6 +618,7 @@ You are Qwen.<|im_end|>
             description: "Read a file".into(),
             schema: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
             strict: false,
+            ..Default::default()
         }];
         request.messages = vec![
             Message::user_text("open it"),

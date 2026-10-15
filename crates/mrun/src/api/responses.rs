@@ -13,7 +13,7 @@ use crate::api::decode::{
 use crate::api::handler::{self, ApiShape, StreamEncode};
 use crate::api::model::{
     ApiError, ApiKind, AssistantPart, ChatRequest, ErrorKind, Finish, GenEvent, Message,
-    ResponseFormat, ToolChoice, ToolDef, ToolResult, Usage, UserPart,
+    NAMESPACE_SEP, ResponseFormat, ToolChoice, ToolDef, ToolResult, Usage, UserPart,
 };
 use crate::api::sse::{self, new_id};
 use crate::chat::reasoning;
@@ -23,6 +23,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiError> {
     obj(body, "body")?;
@@ -44,6 +45,54 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
         request.system.push(instructions.to_string());
     }
 
+    if let Some(tools) = body.get("tools").filter(|t| !t.is_null()) {
+        for (i, tool) in arr(tools, "tools")?.iter().enumerate() {
+            let path = format!("tools[{i}]");
+            obj(tool, &path)?;
+            match str_field(tool, "type", &path)? {
+                "function" => request.tools.push(function_tool(tool, &path, None)?),
+                // MCP and sub-agent tools (FR-027): flattened to `<namespace>__<tool>`.
+                "namespace" => {
+                    let namespace = str_field(tool, "name", &path)?;
+                    for (j, inner) in arr(&tool["tools"], &format!("{path}.tools"))?
+                        .iter()
+                        .enumerate()
+                    {
+                        let ipath = format!("{path}.tools[{j}]");
+                        request
+                            .tools
+                            .push(function_tool(inner, &ipath, Some(namespace))?);
+                    }
+                }
+                // Codex's client-executed tool search: the model calls it like a function; the
+                // call goes back as a `tool_search_call` item (FR-028).
+                "tool_search" => request.tools.push(ToolDef {
+                    name: TOOL_SEARCH.into(),
+                    description: tool["description"]
+                        .as_str()
+                        .unwrap_or("Search the available tools by keyword; matching tool definitions are returned and can be called afterwards.")
+                        .to_string(),
+                    schema: match &tool["parameters"] {
+                        Value::Null => json!({"type": "object",
+                            "properties": {"query": {"type": "string"}}, "required": ["query"]}),
+                        schema => schema.clone(),
+                    },
+                    ..Default::default()
+                }),
+                web if web.starts_with("web_search") => {
+                    // A hosted tool mrun cannot run: dropped so the request still works.
+                    eprintln!("mrun: tool-dropped (web_search)");
+                }
+                other => {
+                    return Err(ApiError::invalid(
+                        format!("tool type '{other}' is not supported; only function, namespace and tool_search tools are"),
+                        format!("{path}.type"),
+                    ));
+                }
+            }
+        }
+    }
+
     match &body["input"] {
         Value::String(text) => request.messages.push(Message::user_text(text.clone())),
         Value::Array(items) => decode_items(items, options, &mut request)?,
@@ -59,40 +108,6 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
         return Err(ApiError::invalid("input must not be empty", "input"));
     }
 
-    if let Some(tools) = body.get("tools").filter(|t| !t.is_null()) {
-        for (i, tool) in arr(tools, "tools")?.iter().enumerate() {
-            let path = format!("tools[{i}]");
-            obj(tool, &path)?;
-            let kind = str_field(tool, "type", &path)?;
-            match kind {
-                "function" => {
-                    let def = ToolDef {
-                        name: str_field(tool, "name", &path)?.to_string(),
-                        description: opt_str(tool, "description", &path)?
-                            .unwrap_or_default()
-                            .to_string(),
-                        schema: match &tool["parameters"] {
-                            Value::Null => json!({"type": "object", "properties": {}}),
-                            schema => schema.clone(),
-                        },
-                        strict: tool["strict"].as_bool().unwrap_or(false),
-                    };
-                    check_tool(&def, &path)?;
-                    request.tools.push(def);
-                }
-                web if web.starts_with("web_search") => {
-                    // A hosted tool mrun cannot run: dropped so the request still works.
-                    eprintln!("mrun: tool-dropped (web_search)");
-                }
-                other => {
-                    return Err(ApiError::invalid(
-                        format!("tool type '{other}' is not supported; only function tools are"),
-                        format!("{path}.type"),
-                    ));
-                }
-            }
-        }
-    }
     request.tool_choice = match &body["tool_choice"] {
         Value::Null => ToolChoice::Auto,
         Value::String(s) => match s.as_str() {
@@ -222,11 +237,72 @@ fn decode_items(
                     Value::Null => "{}".to_string(),
                     other => other.to_string(),
                 };
+                let name = str_field(item, "name", &path)?;
+                let name = match opt_str(item, "namespace", &path)? {
+                    Some(namespace) => format!("{namespace}{NAMESPACE_SEP}{name}"),
+                    None => name.to_string(),
+                };
                 assistant.push(AssistantPart::ToolCall {
                     id: str_field(item, "call_id", &path)?.to_string(),
-                    name: str_field(item, "name", &path)?.to_string(),
+                    name,
                     raw_args,
                 });
+            }
+            "tool_search_call" => {
+                let raw_args = match &item["arguments"] {
+                    Value::String(s) => s.clone(),
+                    Value::Null => "{}".to_string(),
+                    other => other.to_string(),
+                };
+                assistant.push(AssistantPart::ToolCall {
+                    id: str_field(item, "call_id", &path)?.to_string(),
+                    name: TOOL_SEARCH.to_string(),
+                    raw_args,
+                });
+            }
+            // The tools a search returned: their definitions are rendered here, in the tool
+            // result, and they are callable from now on without entering the tools region.
+            "tool_search_output" => {
+                flush(&mut assistant, &mut request.messages);
+                let call_id = str_field(item, "call_id", &path)?.to_string();
+                let mut found = Vec::new();
+                for (j, tool) in arr(&item["tools"], &format!("{path}.tools"))?
+                    .iter()
+                    .enumerate()
+                {
+                    let tpath = format!("{path}.tools[{j}]");
+                    match tool["type"].as_str() {
+                        Some("namespace") => {
+                            let namespace = str_field(tool, "name", &tpath)?;
+                            for (k, inner) in arr(&tool["tools"], &format!("{tpath}.tools"))?
+                                .iter()
+                                .enumerate()
+                            {
+                                found.push(function_tool(
+                                    inner,
+                                    &format!("{tpath}.tools[{k}]"),
+                                    Some(namespace),
+                                )?);
+                            }
+                        }
+                        _ => found.push(function_tool(tool, &tpath, None)?),
+                    }
+                }
+                let mut content = String::new();
+                for mut tool in found {
+                    tool.deferred = true;
+                    content.push_str(&tool.definition().to_string());
+                    content.push('\n');
+                    if !request.tools.iter().any(|t| t.name == tool.name) {
+                        request.tools.push(tool);
+                    }
+                }
+                request.messages.push(Message::Tool(ToolResult {
+                    call_id,
+                    content: content.trim_end().to_string(),
+                    is_error: false,
+                    images_omitted: 0,
+                }));
             }
             "reasoning" => {
                 if let Some(text) = reasoning_text(item) {
@@ -260,6 +336,29 @@ fn decode_items(
     }
     flush(&mut assistant, &mut request.messages);
     Ok(())
+}
+
+/// A function tool, flattened into `namespace` when it came from one.
+fn function_tool(tool: &Value, path: &str, namespace: Option<&str>) -> Result<ToolDef, ApiError> {
+    let name = str_field(tool, "name", path)?;
+    let def = ToolDef {
+        name: match namespace {
+            Some(namespace) => format!("{namespace}{NAMESPACE_SEP}{name}"),
+            None => name.to_string(),
+        },
+        description: opt_str(tool, "description", path)?
+            .unwrap_or_default()
+            .to_string(),
+        schema: match &tool["parameters"] {
+            Value::Null => json!({"type": "object", "properties": {}}),
+            schema => schema.clone(),
+        },
+        strict: tool["strict"].as_bool().unwrap_or(false),
+        deferred: tool["defer_loading"].as_bool().unwrap_or(false),
+        namespace: namespace.map(str::to_string),
+    };
+    check_tool(&def, path)?;
+    Ok(def)
 }
 
 /// Reasoning text of a replayed item: from mrun's `encrypted_content`, else from
@@ -399,9 +498,56 @@ fn message_item(id: &str, text: &str, complete: bool) -> Value {
         "content": [output_text(text)]})
 }
 
-fn call_item(id: &str, call_id: &str, name: &str, arguments: &str, complete: bool) -> Value {
-    json!({"type": "function_call", "id": id, "call_id": call_id, "name": name,
-        "arguments": arguments, "status": status(complete)})
+/// How calls go back to the client: namespaced tools split into `namespace` and `name`
+/// (FR-027), and calls of Codex's client-executed `tool_search` as `tool_search_call` items.
+#[derive(Clone, Debug, Default)]
+pub struct Naming {
+    namespaced: HashMap<String, (String, String)>,
+    tool_search: bool,
+}
+
+/// Name of the synthetic tool standing for Codex's `tool_search` (client-executed).
+pub const TOOL_SEARCH: &str = "tool_search";
+
+impl Naming {
+    pub fn of(request: &ChatRequest) -> Self {
+        let mut naming = Self::default();
+        for tool in &request.tools {
+            if let Some((namespace, name)) = tool.split_name() {
+                naming
+                    .namespaced
+                    .insert(tool.name.clone(), (namespace.to_string(), name.to_string()));
+            }
+            naming.tool_search |= tool.name == TOOL_SEARCH && tool.namespace.is_none();
+        }
+        naming
+    }
+
+    fn item(&self, id: &str, call_id: &str, name: &str, arguments: &str, status: &str) -> Value {
+        if self.tool_search && name == TOOL_SEARCH {
+            let arguments: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+            return json!({"type": "tool_search_call", "id": id, "call_id": call_id,
+                "execution": "client", "arguments": arguments, "status": status});
+        }
+        let mut item = json!({"type": "function_call", "id": id, "call_id": call_id,
+            "name": name, "arguments": arguments, "status": status});
+        if let Some((namespace, tool)) = self.namespaced.get(name) {
+            item["name"] = tool.as_str().into();
+            item["namespace"] = namespace.as_str().into();
+        }
+        item
+    }
+}
+
+fn call_item(
+    naming: &Naming,
+    id: &str,
+    call_id: &str,
+    name: &str,
+    arguments: &str,
+    complete: bool,
+) -> Value {
+    naming.item(id, call_id, name, arguments, status(complete))
 }
 
 /// The response object of bodies and lifecycle events.
@@ -432,7 +578,7 @@ fn response_object(
 }
 
 /// Non-streaming body.
-pub fn response(model: &str, collected: &Collected) -> Value {
+pub fn response(model: &str, collected: &Collected, naming: &Naming) -> Value {
     let (finish, _, usage) =
         collected
             .finish
@@ -451,6 +597,7 @@ pub fn response(model: &str, collected: &Collected) -> Value {
                 Block::Reasoning(text) => reasoning_item(&new_id("rs_"), text),
                 Block::Text(text) => message_item(&new_id("msg_"), text, item_complete),
                 Block::Call(call) => call_item(
+                    naming,
                     &new_id("fc_"),
                     &call.id,
                     &call.name,
@@ -506,11 +653,13 @@ pub struct StreamEncoder {
     output: Vec<Value>,
     open: Option<Open>,
     done: bool,
+    naming: Naming,
 }
 
 impl StreamEncoder {
-    pub fn new(model: &str) -> Self {
+    pub fn new(model: &str, naming: Naming) -> Self {
         Self {
+            naming,
             id: new_id("resp_"),
             created_at: sse::unix_now(),
             model: model.to_string(),
@@ -583,7 +732,7 @@ impl StreamEncoder {
                         json!({"item_id": id, "output_index": index, "arguments": args}),
                     ));
                 }
-                call_item(&id, &call_id, &name, &args, complete && ended)
+                call_item(&self.naming, &id, &call_id, &name, &args, complete && ended)
             }
         };
         frames.push(self.event(
@@ -676,11 +825,10 @@ impl StreamEncoder {
                 self.close(true, &mut frames);
                 let id = new_id("fc_");
                 let index = self.index();
+                let item = self.naming.item(&id, call_id, name, "", "in_progress");
                 frames.push(self.event(
                     "response.output_item.added",
-                    json!({"output_index": index, "item": {"type": "function_call", "id": id,
-                        "call_id": call_id, "name": name, "arguments": "",
-                        "status": "in_progress"}}),
+                    json!({"output_index": index, "item": item}),
                 ));
                 self.open = Some(Open::Call {
                     id,
@@ -792,6 +940,7 @@ pub async fn handle(State(state): State<ServerState>, headers: HeaderMap, body: 
         };
     request.ignore_eos = flags.ignore_eos;
     let stream = request.stream;
+    let naming = Naming::of(&request);
     let turn = match handler::start(&state, request).await {
         Ok(turn) => turn,
         // Codex compacts only on the in-stream form of this error (contract: status codes).
@@ -799,18 +948,18 @@ pub async fn handle(State(state): State<ServerState>, headers: HeaderMap, body: 
             let model = handler::ready(&state)
                 .map(|loaded| loaded.model_id.clone())
                 .unwrap_or_default();
-            return handler::stream_error_response(StreamEncoder::new(&model), error);
+            return handler::stream_error_response(StreamEncoder::new(&model, naming), error);
         }
         Err(error) => return SHAPE.error(&error),
     };
     if stream {
-        let encoder = StreamEncoder::new(&turn.model);
+        let encoder = StreamEncoder::new(&turn.model, naming);
         return handler::stream_response(turn, encoder);
     }
     let model = turn.model.clone();
     match handler::collect(turn).await {
         Ok((collected, warnings)) => {
-            handler::json_response(response(&model, &collected), &collected, &warnings)
+            handler::json_response(response(&model, &collected, &naming), &collected, &warnings)
         }
         Err(error) => SHAPE.error(&error),
     }
@@ -990,11 +1139,93 @@ mod tests {
         assert_eq!(request.tools[0].name, "shell");
         assert_eq!(request.tool_choice, ToolChoice::Named("shell".into()));
         assert!(!request.parallel_tool_calls);
-        for kind in ["custom", "namespace", "file_search"] {
+        for kind in ["custom", "file_search"] {
             let error = decode_err(json!({"input": "x", "tools": [{"type": kind, "name": "t"}]}));
             assert_eq!(error.param.as_deref(), Some("tools[0].type"), "{kind}");
             assert!(error.message.contains(kind));
         }
+    }
+
+    #[test]
+    fn resp_namespace_roundtrip() {
+        let body = json!({"input": [
+            {"role": "user", "content": "list issues"},
+            {"type": "function_call", "call_id": "c1", "namespace": "mcp__github",
+             "name": "list_issues", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "[]"}],
+            "tools": [{"type": "namespace", "name": "mcp__github", "description": "GitHub",
+                "tools": [{"type": "function", "name": "list_issues",
+                    "parameters": {"type": "object", "properties": {}}}]}]});
+        let request = decode_ok(body);
+        assert_eq!(request.tools[0].name, "mcp__github__list_issues");
+        let Message::Assistant(parts) = &request.messages[1] else {
+            panic!()
+        };
+        assert!(
+            matches!(&parts[0], AssistantPart::ToolCall { name, .. } if name == "mcp__github__list_issues")
+        );
+        // Calls go back split into namespace and name, streamed and final.
+        let naming = Naming::of(&request);
+        let item = call_item(
+            &naming,
+            "fc_1",
+            "call_2",
+            "mcp__github__list_issues",
+            "{}",
+            true,
+        );
+        assert_eq!(
+            (item["namespace"].as_str(), item["name"].as_str()),
+            (Some("mcp__github"), Some("list_issues"))
+        );
+        let mut encoder = StreamEncoder::new("m", naming);
+        let frames = encoder.encode(&GenEvent::ToolStart {
+            idx: 0,
+            id: "call_2".into(),
+            name: "mcp__github__list_issues".into(),
+        });
+        let added = &events(&frames)[0].1;
+        assert_eq!(added["item"]["namespace"], "mcp__github");
+        assert_eq!(added["item"]["name"], "list_issues");
+    }
+
+    #[test]
+    fn tool_search_call_and_output_expand_deferred_tools() {
+        let body = json!({"input": [
+            {"role": "user", "content": "find a tool"},
+            {"type": "tool_search_call", "call_id": "s1", "execution": "client",
+             "arguments": {"query": "issues"}},
+            {"type": "tool_search_output", "call_id": "s1", "execution": "client",
+             "tools": [{"type": "namespace", "name": "mcp__github", "tools": [
+                {"type": "function", "name": "list_issues", "defer_loading": true,
+                 "parameters": {"type": "object", "properties": {}}}]}]}],
+            "tools": [{"type": "tool_search", "execution": "client"},
+                {"type": "function", "name": "shell", "parameters": {"type": "object"}}]});
+        let request = decode_ok(body);
+        let found = request.tool("mcp__github__list_issues").unwrap();
+        assert!(found.deferred, "callable but never in the tools region");
+        let Message::Tool(result) = &request.messages[2] else {
+            panic!()
+        };
+        assert!(
+            result
+                .content
+                .contains("\"name\":\"mcp__github__list_issues\""),
+            "{}",
+            result.content
+        );
+        let naming = Naming::of(&request);
+        let item = call_item(
+            &naming,
+            "ts_1",
+            "s2",
+            TOOL_SEARCH,
+            "{\"query\":\"pr\"}",
+            true,
+        );
+        assert_eq!(item["type"], "tool_search_call");
+        assert_eq!(item["arguments"], json!({"query": "pr"}));
+        assert_eq!(item["execution"], "client");
     }
 
     #[test]
@@ -1021,7 +1252,7 @@ mod tests {
         ] {
             collected.push(event);
         }
-        let body = response("m", &collected);
+        let body = response("m", &collected, &Naming::default());
         assert_eq!(body["object"], "response");
         assert_eq!(body["status"], "completed");
         assert!(body["incomplete_details"].is_null());
@@ -1067,13 +1298,13 @@ mod tests {
         ] {
             collected.push(event);
         }
-        let body = response("m", &collected);
+        let body = response("m", &collected, &Naming::default());
         assert_eq!(body["status"], "incomplete");
         assert_eq!(body["incomplete_details"]["reason"], "max_output_tokens");
         assert_eq!(body["output"][0]["status"], "incomplete");
         assert_eq!(body["output"][0]["arguments"], "{\"cmd\":");
 
-        let mut encoder = StreamEncoder::new("m");
+        let mut encoder = StreamEncoder::new("m", Naming::default());
         let mut frames = Vec::new();
         for event in [
             GenEvent::ToolStart {
@@ -1107,7 +1338,7 @@ mod tests {
 
     #[test]
     fn stream_event_order_and_sequence_numbers() {
-        let mut encoder = StreamEncoder::new("m");
+        let mut encoder = StreamEncoder::new("m", Naming::default());
         let mut frames = encoder.open();
         frames.push(encoder.keepalive());
         for event in [
@@ -1211,7 +1442,7 @@ mod tests {
             (ErrorKind::QueueTimeout, "server_busy"),
             (ErrorKind::Overloaded, "server_busy"),
         ] {
-            let mut encoder = StreamEncoder::new("m");
+            let mut encoder = StreamEncoder::new("m", Naming::default());
             let frames = encoder.encode(&GenEvent::Failed(ApiError::new(kind, "x")));
             let (name, data) = &events(&frames)[0];
             assert_eq!(name, "response.failed");

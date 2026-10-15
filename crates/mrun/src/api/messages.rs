@@ -56,32 +56,6 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
         }
     }
 
-    let messages = arr(&body["messages"], "messages")?;
-    if messages.is_empty() {
-        return Err(ApiError::invalid("messages must not be empty", "messages"));
-    }
-    for (i, message) in messages.iter().enumerate() {
-        let path = format!("messages[{i}]");
-        obj(message, &path)?;
-        match str_field(message, "role", &path)? {
-            "user" => user(&message["content"], &path, options, &mut request.messages)?,
-            "assistant" => request
-                .messages
-                .push(assistant(&message["content"], &path)?),
-            "system" => {
-                let text = blocks_text(&message["content"], &path)?;
-                request.messages.push(Message::System(text));
-            }
-            other => {
-                return Err(ApiError::invalid(
-                    format!("unsupported role '{other}'"),
-                    format!("{path}.role"),
-                ));
-            }
-        }
-    }
-    request.prefill = matches!(request.messages.last(), Some(Message::Assistant(_)));
-
     if let Some(tools) = body.get("tools").filter(|t| !t.is_null()) {
         for (i, tool) in arr(tools, "tools")?.iter().enumerate() {
             let path = format!("tools[{i}]");
@@ -105,11 +79,51 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
                     schema => schema.clone(),
                 },
                 strict: tool["strict"].as_bool().unwrap_or(false),
+                deferred: tool["defer_loading"].as_bool().unwrap_or(false),
+                ..Default::default()
             };
             check_tool(&def, &path)?;
             request.tools.push(def);
         }
     }
+    if !request.tools.is_empty() && request.tools.iter().all(|t| t.deferred) {
+        return Err(ApiError::invalid(
+            "All tools have defer_loading set. At least one tool must be non-deferred.",
+            "tools",
+        ));
+    }
+    let messages = arr(&body["messages"], "messages")?;
+    if messages.is_empty() {
+        return Err(ApiError::invalid("messages must not be empty", "messages"));
+    }
+    for (i, message) in messages.iter().enumerate() {
+        let path = format!("messages[{i}]");
+        obj(message, &path)?;
+        match str_field(message, "role", &path)? {
+            "user" => user(
+                &message["content"],
+                &path,
+                options,
+                &request.tools,
+                &mut request.messages,
+            )?,
+            "assistant" => request
+                .messages
+                .push(assistant(&message["content"], &path)?),
+            "system" => {
+                let text = blocks_text(&message["content"], &path)?;
+                request.messages.push(Message::System(text));
+            }
+            other => {
+                return Err(ApiError::invalid(
+                    format!("unsupported role '{other}'"),
+                    format!("{path}.role"),
+                ));
+            }
+        }
+    }
+    request.prefill = matches!(request.messages.last(), Some(Message::Assistant(_)));
+
     let choice = &body["tool_choice"];
     request.tool_choice = match choice["type"].as_str() {
         None | Some("auto") => ToolChoice::Auto,
@@ -231,6 +245,7 @@ fn user(
     content: &Value,
     path: &str,
     options: DecodeOptions,
+    tools: &[ToolDef],
     out: &mut Vec<Message>,
 ) -> Result<(), ApiError> {
     let Value::Array(blocks) = content else {
@@ -250,7 +265,7 @@ fn user(
                         &mut text,
                     ))]));
                 }
-                out.push(Message::Tool(tool_result(block, &bpath, options)?));
+                out.push(Message::Tool(tool_result(block, &bpath, options, tools)?));
             }
             _ => {
                 return Err(ApiError::invalid(
@@ -266,7 +281,12 @@ fn user(
     Ok(())
 }
 
-fn tool_result(block: &Value, path: &str, options: DecodeOptions) -> Result<ToolResult, ApiError> {
+fn tool_result(
+    block: &Value,
+    path: &str,
+    options: DecodeOptions,
+    tools: &[ToolDef],
+) -> Result<ToolResult, ApiError> {
     let call_id = str_field(block, "tool_use_id", path)?.to_string();
     let mut content = String::new();
     let mut images_omitted = 0;
@@ -282,10 +302,20 @@ fn tool_result(block: &Value, path: &str, options: DecodeOptions) -> Result<Tool
                         content.push_str(tool_image(options, &ppath)?);
                         images_omitted += 1;
                     }
-                    // Deferred tool loading (FR-028) is expanded by T011a; until then a
-                    // reference renders as its name.
+                    // A tool search result (FR-028): the referenced tool's definition is
+                    // rendered here, so the tools region and the cached prefix stay unchanged.
                     Some("tool_reference") => {
-                        content.push_str(part["tool_name"].as_str().unwrap_or_default());
+                        let name = str_field(part, "tool_name", &ppath)?;
+                        let tool = tools.iter().find(|t| t.name == name).ok_or_else(|| {
+                            ApiError::invalid(
+                                format!("Tool reference '{name}' not found in available tools"),
+                                &ppath,
+                            )
+                        })?;
+                        if !content.is_empty() && !content.ends_with('\n') {
+                            content.push('\n');
+                        }
+                        content.push_str(&tool.definition().to_string());
                     }
                     _ => {
                         return Err(ApiError::invalid(

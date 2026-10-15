@@ -358,3 +358,76 @@ async fn msg_thinking_budget_closes_the_block() {
     assert_eq!(reply["content"][0]["thinking"], "abcde", "{reply}");
     assert_eq!(reply["content"][1]["text"], "fghij");
 }
+
+#[tokio::test]
+async fn msg_tool_reference_inline_no_prefix_change() {
+    // A deferred tool is not in the tools region; a tool search result renders its definition
+    // inline, so the prompt only grows at the end.
+    let server = common::start(&["one", "two"]).await;
+    let tools = json!([
+        {"name": "Read", "input_schema": {"type": "object"}},
+        {"name": "mcp__github__list_issues", "defer_loading": true,
+         "description": "List issues", "input_schema": {"type": "object"}}]);
+    let first = json!({"max_tokens": 50, "tools": tools, "messages": [
+        {"role": "user", "content": "find issues"}]});
+    let count = |body: &Value| {
+        let body = body.clone();
+        let server = &server;
+        async move {
+            let reply = server.post("/v1/messages/count_tokens", &body).await;
+            assert_eq!(reply.status, 200, "{}", reply.text);
+            reply.json()["input_tokens"].as_u64().unwrap()
+        }
+    };
+    let mut without_deferred = first.clone();
+    without_deferred["tools"] = json!([tools[0]]);
+    assert_eq!(count(&first).await, count(&without_deferred).await);
+
+    let second = json!({"max_tokens": 50, "tools": tools, "messages": [
+        {"role": "user", "content": "find issues"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "ToolSearch",
+            "input": {"query": "issues"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1",
+            "content": [{"type": "tool_reference", "tool_name": "mcp__github__list_issues"}]}]}]});
+    let reply = server.post("/v1/messages", &second).await;
+    assert_eq!(reply.status, 200, "{}", reply.text);
+
+    let mut unknown = second.clone();
+    unknown["messages"][2]["content"][0]["content"][0]["tool_name"] = json!("nope");
+    let reply = server.post("/v1/messages", &unknown).await;
+    assert_eq!(reply.status, 400);
+    assert!(
+        reply.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("nope")
+    );
+
+    let mut all_deferred = first.clone();
+    all_deferred["tools"] = json!([tools[1]]);
+    assert_eq!(server.post("/v1/messages", &all_deferred).await.status, 400);
+}
+
+#[tokio::test]
+async fn msg_midconversation_system_in_place() {
+    let server = common::start(&["ok"]).await;
+    let body = json!({"max_tokens": 50, "system": "S", "messages": [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b"},
+        {"role": "system", "content": "Reminder: be brief."},
+        {"role": "user", "content": "c"}]});
+    let with_reminder =
+        server.post("/v1/messages/count_tokens", &body).await.json()["input_tokens"]
+            .as_u64()
+            .unwrap();
+    let mut plain = body.clone();
+    plain["messages"].as_array_mut().unwrap().remove(2);
+    let without = server
+        .post("/v1/messages/count_tokens", &plain)
+        .await
+        .json()["input_tokens"]
+        .as_u64()
+        .unwrap();
+    assert!(with_reminder > without);
+    assert_eq!(server.post("/v1/messages", &body).await.status, 200);
+}

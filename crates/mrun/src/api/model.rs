@@ -144,16 +144,41 @@ pub struct ToolResult {
     pub images_omitted: u32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ToolDef {
+    /// The name the model sees; for a namespaced tool `<namespace>__<tool>` (FR-027).
     pub name: String,
     pub description: String,
     /// JSON Schema of the arguments (key order preserved).
     pub schema: Value,
     pub strict: bool,
+    /// `defer_loading` (FR-028): not rendered in the tools region; its definition appears
+    /// inline where a tool search returns it.
+    pub deferred: bool,
+    /// Responses namespace the tool came from, restored on calls.
+    pub namespace: Option<String>,
 }
 
+/// Separator of flattened namespace tool names.
+pub const NAMESPACE_SEP: &str = "__";
+
 impl ToolDef {
+    /// The definition as tools regions render it (OpenAI function shape).
+    pub fn definition(&self) -> Value {
+        serde_json::json!({"type": "function", "function": {
+            "name": self.name, "description": self.description, "parameters": self.schema}})
+    }
+
+    /// `(namespace, tool)` for a namespaced tool's call.
+    pub fn split_name(&self) -> Option<(&str, &str)> {
+        let namespace = self.namespace.as_deref()?;
+        let tool = self
+            .name
+            .strip_prefix(namespace)?
+            .strip_prefix(NAMESPACE_SEP)?;
+        Some((namespace, tool))
+    }
+
     /// JSON Schema type of a top-level parameter, if declared.
     pub fn param_type(&self, param: &str) -> Option<&str> {
         let ty = self.schema.get("properties")?.get(param)?.get("type")?;
@@ -372,6 +397,7 @@ mod tests {
                 "opts": {}
             }}),
             strict: false,
+            ..Default::default()
         };
         assert_eq!(tool.param_type("path"), Some("string"));
         assert_eq!(tool.param_type("line"), Some("integer"));

@@ -214,6 +214,7 @@ pub(crate) mod test_util {
             description: String::new(),
             schema,
             strict: false,
+            ..Default::default()
         }
     }
 

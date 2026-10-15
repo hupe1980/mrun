@@ -318,6 +318,7 @@ mod tests {
             schema: json!({"type": "object", "properties": {"path": {"type": "string"},
                 "limit": {"type": "integer"}}, "required": ["path"], "additionalProperties": false}),
             strict,
+            ..Default::default()
         }
     }
 
