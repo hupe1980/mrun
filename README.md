@@ -3,9 +3,9 @@
 The local inference server built for coding agents on Apple Silicon.
 
 Coding agents resend tens of thousands of tokens of instructions, tool schemas and history on
-every turn. On a laptop GPU, re-reading that context costs tens of seconds per turn. mrun computes
-it once, reuses it exactly across turns, branches and tool loops, explains every cache miss, and
-never pushes your Mac into swap.
+every turn. On a laptop GPU, re-reading that context costs a minute or more. mrun computes it
+once, reuses it exactly across turns, subagents and tool loops, explains every cache miss, and stays
+inside a memory budget fixed at startup.
 
 **[Documentation](https://hupe1980.github.io/mrun/)** ·
 [Getting started](https://hupe1980.github.io/mrun/docs/getting-started/) ·
@@ -18,25 +18,26 @@ never pushes your Mac into swap.
 ## Planned experience
 
 ```sh
-mrun pull qwen3-coder      # Qwen3-Coder-30B-A3B, 4-bit MLX, verified download
-mrun serve --detach        # http://127.0.0.1:8484
-mrun launch claude-code    # or: codex, opencode
+mrun launch claude-code    # pulls Qwen3.6-35B-A3B if needed, starts the server, starts Claude Code
+mrun launch codex          # or opencode
+mrun pull qwen3-coder      # other models: verified download into the shared Hugging Face cache
 mrun ps                    # model, memory budget, cache hit rate, last cache miss
 mrun doctor                # diagnose the machine and client setup
 ```
 
 - **Three agent APIs.** Anthropic Messages, OpenAI Chat Completions and OpenAI Responses, with
-  streaming, tool calls and structured output.
-- **Exact prefix cache.** A radix tree of attention state reuses the longest identical token
-  prefix and reports cached tokens and the reason for each miss.
+  streaming, tool calls, structured output, MCP tools and deferred tool loading.
+- **Exact prefix cache.** Reuses the longest identical token prefix across turns and subagents,
+  for attention and hybrid models, and reports cached tokens and the reason for each miss.
 - **Predictable memory.** Weights, attention state and scratch are budgeted at startup; requests
   that cannot fit are refused up front.
-- **Instant interruption.** Cancellation is checked after every model layer.
+- **Interruption that keeps progress.** Cancellation is checked after every model layer; finished
+  work is kept for the retry.
 - **Apple MLX from Rust.** One native binary; no Python at runtime.
 - **Private by default.** Loopback only, no telemetry, no prompt logging, offline after `pull`.
 
-Target hardware is an Apple Silicon Mac; the default model needs 48 GB of memory. Linux builds
-compile and pass the portable tests in CI.
+Target hardware is an Apple Silicon Mac; the default model, Qwen3.6-35B-A3B, gets its full 262K
+context with 48 GB of memory. Linux builds compile and pass the portable tests in CI.
 
 ## Development
 

@@ -8,7 +8,7 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "mrun",
-  "description": "{{ config.description }}",
+  "description": {{ config.description | json_encode | safe }},
   "url": "{{ config.base_url }}/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS (Apple Silicon)",
@@ -35,13 +35,13 @@
     </div>
     <figure class="terminal" aria-label="Example terminal session">
       <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
-<pre><code><span class="c-prompt">$</span> mrun pull qwen3-coder
-<span class="c-dim">Qwen3-Coder-30B-A3B-Instruct · 4-bit MLX · 17.2 GB · Apache-2.0</span>
-<span class="c-ok">✓</span> verified · fits this Mac with 104K tokens of context
+<pre><code><span class="c-prompt">$</span> mrun pull qwen3.6
+<span class="c-dim">Qwen3.6-35B-A3B · 4-bit MLX · ≈20 GB · Apache-2.0</span>
+<span class="c-ok">✓</span> verified · fits this Mac with the full 262K context
 <span class="c-prompt">$</span> mrun serve --detach
 <span class="c-ok">✓</span> serving on http://127.0.0.1:8484
 <span class="c-prompt">$</span> mrun launch claude-code
-<span class="c-dim">turn 12 · 41,203 cached · 618 processed · first token 0.4 s</span></code></pre>
+<span class="c-dim">turn 12 · 41,203 cached · 618 processed</span></code></pre>
       <figcaption class="c-dim">Planned first-release workflow.</figcaption>
     </figure>
   </div>
@@ -54,7 +54,7 @@
     <div class="cards">
       <article class="card">
         <h3>Exact prefix cache</h3>
-        <p>A radix tree of attention-state snapshots reuses the longest identical token prefix across turns, subagents and edited history. Reuse is token-exact and bound to the model's content hash.</p>
+        <p>The longest identical token prefix is reused across turns, subagents and edited history. Switching to a subagent moves the main conversation aside instead of throwing it away. Reuse is token-exact and bound to the model's content hash.</p>
       </article>
       <article class="card">
         <h3>Every miss explained</h3>
@@ -66,7 +66,7 @@
       </article>
       <article class="card">
         <h3>Instant interruption</h3>
-        <p>Cancellation is checked after every model layer and every token, so stopping a 30K-token prompt takes well under a third of a second and the next request starts immediately.</p>
+        <p>Cancellation is checked after every model layer and every token, so an interrupted request stops quickly at any context length, and the work already done is kept for the retry.</p>
       </article>
       <article class="card">
         <h3>Three APIs, one binary</h3>

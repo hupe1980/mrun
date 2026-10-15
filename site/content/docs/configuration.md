@@ -22,7 +22,7 @@ Every key is optional. The defaults:
 [server]
 host = "127.0.0.1"
 port = 8484
-queue = 8
+queue = 16
 queue_wait_s = 600
 thinking = "client"        # client | on | off
 max_output = 16384
@@ -30,15 +30,14 @@ reject_tool_images = false
 
 [memory]
 fraction = 0.75
-reserve_gib = 8
+# reserve_gib: 15% of physical memory, between 2 and 8 GiB
 
 [engine]
 chunk = 2048
-default_model = "qwen3-coder"
+default_model = "qwen3.6"
 
 [cache]
 enabled = true
-warmup = true
 
 [limits]
 body_mib = 8

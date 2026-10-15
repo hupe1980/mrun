@@ -1,47 +1,42 @@
 +++
 title = "Roadmap"
-description = "What mrun ships first and what comes next: engine, agent APIs, prefix cache, developer experience, benchmarks, then hybrid models, SSD cache, speculative decoding and more."
+description = "What mrun ships first and what comes next: engine with hybrid models, agent APIs, prefix cache, developer experience, benchmarks and distribution, then speculative decoding and a persistent cache."
 weight = 110
 +++
 
 mrun is in active development; nothing is released yet. Each milestone has a measurable gate on
-the target Mac (M4 Pro, 48 GB) before the next one starts.
+the target Mac (M4 Pro, 48 GB) before it counts as done.
 
 ## First release
 
-| Milestone | Outcome | Gate |
-| --- | --- | --- |
-| **Engine** | `mrun run` streams Qwen3-8B and Qwen3-Coder-30B-A3B with chunked prefill, per-layer cancellation and the memory budget | Greedy output identical to mlx-lm; at least 90% of its speed; cancellation under 300 ms |
-| **Agent APIs** | Claude Code, Codex and OpenCode complete real tool loops | Conformance suite green; 5 of 5 real-client runs per client |
-| **Prefix cache** | Exact reuse across turns, branches and tool loops, with miss reports | Repeated turns at 30K context at least 5× faster than without cache; zero stale reuse |
-| **Models and DX** | `pull`, `ls`, `rm`, `launch`, `connect`, `doctor`, `ps` | Fresh Mac to working Claude Code session in under 5 minutes |
-| **Benchmarks** | `mrun bench` with agent-trace replay | First dated public comparison, losing cells included |
+| Milestone | Outcome |
+| --- | --- |
+| **Foundation** | MLX bindings proven on a Mac: quantized and mixture-of-experts kernels, attention, custom Metal kernels, memory controls |
+| **Engine** | `mrun run` streams Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B and Qwen3-8B with the memory budget, hybrid-model checkpoints and per-layer cancellation; output matches mlx-lm |
+| **Agent APIs** | Claude Code, Codex and OpenCode complete real tool loops, including MCP tools and deferred tool loading; a nightly check runs the latest client releases |
+| **Prefix cache** | Exact reuse across turns, subagents and edits for attention and hybrid models, with miss reports |
+| **Models and DX** | `pull`, `launch`, `connect`, `doctor`, `ps`; fresh install to working agent with one command |
+| **Benchmarks** | `mrun bench` replays recorded agent sessions against llama.cpp, Ollama, oMLX, mlx-lm and SGLang; first dated public comparison, losing cells included |
+| **Distribution** | Homebrew, a signed binary, a background service and `/metrics` |
 
 ## Next
 
-These come after the first release, each once measurements on real agent traces justify it:
+Each comes after the first release, once measurements on recorded agent sessions justify it:
 
-- **Newer models with hybrid attention**, such as Qwen3-Next and later Qwen releases. Their
-  recurrent layers can't be trimmed like attention state, so the prefix cache stores state
-  checkpoints at message boundaries.
-- **Persistent prefix cache on SSD**, opt-in, so long sessions survive server restarts. Reading a
-  30K-token prefix from a Mac SSD is expected to take well under a second instead of a minute of
-  recomputation.
-- **Speculative decoding for code edits.** Agents copy large parts of their context verbatim when
-  editing files; drafting tokens from the prompt itself (n-gram lookup) can speed that up. Model
-  multi-token-prediction heads follow where available. Mixture-of-experts models need careful
-  tuning here, so it stays adaptive and falls back to normal decoding.
-- **8-bit attention state** to roughly double context capacity on the same Mac.
-- **Small items**: `/metrics` and a Homebrew formula with a launchd service.
+- **Speculative decoding.** Qwen3.6 ships multi-token prediction heads, and agents copy large parts
+  of their context when editing files. Both can speed up generation without changing output. On
+  mixture-of-experts models checking a draft costs more, so a controller turns speculation off
+  where it does not pay.
+- **Persistent cache on SSD**, opt-in, so long sessions survive server restarts.
 
 ## Later
 
-- Concurrent sessions with batched decoding, if traces show agents waiting on each other.
+- Concurrent sessions with batched decoding, if recordings show agents waiting on each other.
 - Linux builds already compile and pass tests in CI; running models on Linux is evaluated after
   the Mac release, without performance commitments.
 
 ## Not planned
 
 A web UI, running tools on the server, multi-model routing, multi-GPU or distributed serving,
-training or fine-tuning, a custom quantization format, Ollama's native API, and server-stored
-Responses state.
+training or fine-tuning, a custom quantization format, Ollama's native API, server-stored
+Responses state, and approximate context reuse.

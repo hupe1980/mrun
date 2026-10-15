@@ -1,6 +1,6 @@
 +++
 title = "How it works"
-description = "The design of mrun: one engine thread on Apple MLX, an exact prefix cache, a startup memory budget and interruptible prefill."
+description = "The design of mrun: one engine thread on Apple MLX, hybrid and attention models, an exact prefix cache that survives subagents, a startup memory budget and interruptible prefill."
 weight = 30
 +++
 
@@ -9,8 +9,9 @@ weight = 30
 A coding agent sends the whole conversation on every turn: system instructions, tool schemas,
 files it has read, tool results and the history. After a few turns that is 20,000–60,000 tokens,
 of which only the last few hundred are new. On a laptop GPU, reading the prompt (prefill) runs at
-hundreds to a few thousand tokens per second, so re-reading the full context each turn costs tens
-of seconds before the first token appears.
+a few hundred to about a thousand tokens per second at depth, so re-reading 30,000 tokens takes
+about a minute before the first token appears, and 100,000 close to ten. Agents also branch:
+subagents, title requests and retries arrive between the turns of the main conversation.
 
 Cloud APIs solve this with prompt caching. mrun brings the same idea to your Mac, exactly and with
 explanations.
@@ -26,10 +27,11 @@ explanations.
    and clamps the output limit to the space left. Prompts that cannot fit are refused with the
    numbers, and the cache is left intact.
 4. **Prefix lookup.** The [prefix cache](@/docs/prefix-cache.md) finds the longest token prefix it
-   has already computed and restores that attention state. The usual case — the next turn of the
-   current conversation — needs no copy at all.
-5. **Prefill.** Only the new tokens run through the model, in chunks of 2,048 tokens. Cancellation
-   is checked after every layer, so an interrupted request stops within a fraction of a second.
+   has already computed. The usual case — the next turn of the current conversation — needs no
+   copy at all; a different conversation moves the old one aside and its own state in.
+5. **Prefill.** Only the new tokens run through the model, in chunks that end at message
+   boundaries and shrink at depth. Cancellation is checked after every layer, so an interrupted
+   request stops quickly and keeps the chunks it finished.
 6. **Decode.** Tokens stream back. Tool calls are parsed from the model's output format into each
    API's native tool-call structure.
 7. **Record.** The finished conversation, including the model's reply, becomes the new reusable
@@ -52,6 +54,15 @@ fast. mrun owns everything around them: model graphs, attention-state layout, me
 scheduling and the server. Model graphs are ported from the reference
 [mlx-lm](https://github.com/ml-explore/mlx-lm) implementations, and output is checked
 token-for-token against them.
+
+## Attention and hybrid models
+
+Classic transformers keep attention state for every token; a cached prefix can be cut at any
+position. Hybrid models such as Qwen3.6 replace three of every four attention layers with linear
+attention, which keeps one fixed-size state per layer. That makes long context cheap — about
+20 KiB per token instead of 96 KiB — but the state exists only for the position it was computed
+at. mrun saves checkpoints of it at message boundaries while processing a prompt, so an edited or
+branching conversation resumes from the nearest checkpoint instead of from the start.
 
 ## Design rules
 

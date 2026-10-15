@@ -28,15 +28,16 @@ definitions; this page lists what mrun serves and where it deliberately differs.
   all is refused.
 - **Stateless Responses.** `previous_response_id` and item references return 400, because nothing
   is stored. Clients resend the conversation, and the prefix cache makes that cheap.
-- **Queueing.** One request runs at a time; others wait up to 600 seconds in a queue of 8. Queued
-  streams receive keepalives every 10 seconds.
+- **Queueing.** One request runs at a time; others wait up to 600 seconds in a queue of 16. While a
+  request waits or its prompt is processed, streams receive keepalives every 10 seconds in each
+  API's own form (Anthropic `ping`, Responses `response.in_progress`, Chat SSE comments).
 - **Cache off per request.** Send `x-mrun-cache: off`.
 - **Disconnect cancels.** Closing the connection stops queued or running work at once.
 - **Invalid tool arguments.** When the model emits tool-call arguments that aren't valid JSON, mrun
   reports them in the way each API allows and adds a `tool-args-invalid` warning.
-- **Cache diagnostics.** Anthropic requests with `diagnostics.previous_message_id` receive the
-  standard `diagnostics.cache_miss_reason` (`system_changed`, `tools_changed`, `messages_changed`,
-  and others).
+- **MCP and deferred tools.** Codex namespaces are flattened and restored; `defer_loading` tools
+  and `tool_reference` results are handled; server-executed tools are refused. See
+  [MCP and skills](@/docs/mcp-and-skills.md).
 - **No server-side context editing.** Anthropic `context_management` is accepted and ignored; mrun
   never rewrites or summarizes your conversation. Clients compact on their own at the reported
   context window.
@@ -57,8 +58,8 @@ Response bodies stay standard. Additional information travels beside them:
 
 | Condition | Chat Completions / Responses | Anthropic Messages |
 | --- | --- | --- |
-| Queue full | 429 `rate_limit_exceeded` with `retry-after` | 529 `overloaded_error` with `retry-after` |
-| Waited too long in the queue | 503 `server_busy` | 504 `timeout_error` |
+| Queue full | 429 `rate_limit_exceeded` with `retry-after` (≤ 60 s) | 529 `overloaded_error` with `retry-after` (≤ 60 s) |
+| Waited too long in the queue | 503 `server_busy`; once streaming: an in-stream error (`response.failed` for Responses) | 504 `timeout_error`; once streaming: an `error` event |
 | Prompt does not fit | 400 `context_length_exceeded` | 400 `invalid_request_error` ("prompt is too long") |
 | Unsupported input | 400 `invalid_request_error` with `param` | 400 `invalid_request_error` |
 | Host or Origin rejected | 403 | 403 |

@@ -26,14 +26,19 @@ attention state as recomputing it, up to floating-point rounding in the GPU kern
 
 ## Which models are supported?
 
-Qwen3 dense and Qwen3 mixture-of-experts models in MLX format, with Qwen3-Coder-30B-A3B as the
-default. More model families follow based on what coding agents actually use; see
+Qwen3.6-35B-A3B (the default, a hybrid mixture-of-experts model), Qwen3-Coder-30B-A3B and Qwen3
+dense models in MLX format. More model families follow based on what coding agents actually use; see
 [Models](@/docs/models.md) and the [roadmap](@/docs/roadmap.md).
 
 ## Can I use GGUF files?
 
 No. mrun runs MLX-format models, which use Apple's fast quantized kernels. Most popular models are
 published in MLX format by the mlx-community organization on Hugging Face.
+
+## Do MCP servers and skills work?
+
+Yes. They run in your agent, which sends their tools and instructions to mrun like any others. See
+[MCP and skills](@/docs/mcp-and-skills.md) for keeping large tool sets fast.
 
 ## Does it run on Linux, Windows or NVIDIA GPUs?
 
@@ -54,7 +59,7 @@ No. It listens only on loopback by default, has no telemetry and does not log pr
 
 ## How good is a local model compared to a frontier API?
 
-Smaller. Qwen3-Coder-30B-A3B handles everyday edits, refactors and tool loops well, but it is not a
+Smaller. Qwen3.6-35B-A3B handles everyday edits, refactors and tool loops well, but it is not a
 substitute for the strongest hosted models on hard problems. mrun's goal is to make the local
 option fast and dependable, not to claim parity.
 

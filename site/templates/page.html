@@ -9,8 +9,8 @@
   "@graph": [
     {
       "@type": "TechArticle",
-      "headline": "{{ page.title }}",
-      "description": "{{ page.description | default(value=config.description) }}",
+      "headline": {{ page.title | json_encode | safe }},
+      "description": {{ page.description | default(value=config.description) | json_encode | safe }},
       "url": "{{ page.permalink }}",
       "isPartOf": { "@type": "WebSite", "name": "mrun", "url": "{{ config.base_url }}/" }
     },
@@ -19,7 +19,7 @@
       "itemListElement": [
         { "@type": "ListItem", "position": 1, "name": "mrun", "item": "{{ config.base_url }}/" },
         { "@type": "ListItem", "position": 2, "name": "Docs", "item": "{{ get_url(path='@/docs/_index.md') }}" },
-        { "@type": "ListItem", "position": 3, "name": "{{ page.title }}", "item": "{{ page.permalink }}" }
+        { "@type": "ListItem", "position": 3, "name": {{ page.title | json_encode | safe }}, "item": "{{ page.permalink }}" }
       ]
     }
   ]

@@ -3,9 +3,8 @@
 {%- if page %}{% set page_url = page.permalink %}{% elif section %}{% set page_url = section.permalink %}{% endif %}
 <title>{{ page_title }}</title>
 <meta name="description" content="{{ page_description }}">
-<meta name="keywords" content="{{ config.extra.keywords }}">
 <link rel="canonical" href="{{ page_url }}">
-<meta name="robots" content="index, follow">
+<meta name="robots" content="{% if noindex %}noindex{% else %}index, follow{% endif %}">
 <meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta property="og:type" content="{% if page %}article{% else %}website{% endif %}">

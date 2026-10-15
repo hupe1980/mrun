@@ -7,10 +7,10 @@ weight = 10
 ## Requirements
 
 - A Mac with Apple Silicon (M1 or later) and macOS 15 or newer.
-- Memory: 48 GB for the default coding model, Qwen3-Coder-30B-A3B (about 100K tokens of context);
-  24 GB for Qwen3-8B. mrun keeps 8 GiB free for your other apps by default; on smaller machines
-  lower that with `--reserve-gib` (see [Memory](@/docs/memory.md)).
-- About 20 GB of free disk space for the default coding model.
+- Memory: 48 GB or more for the default model, Qwen3.6-35B-A3B, with its full context; 36 GB
+  runs it with about 50K tokens of context. Smaller Macs use Qwen3-8B. `mrun pull` tells you how
+  much context a model gets on your Mac before downloading (see [Memory](@/docs/memory.md)).
+- About 20 GB of free disk space for the default model.
 
 ## Install
 
@@ -25,7 +25,7 @@ cargo install --path crates/mrun
 ## Download a model
 
 ```sh
-mrun pull qwen3-coder
+mrun pull qwen3.6
 ```
 
 `pull` shows the model's size, license and whether it fits this Mac (and with how much context)
@@ -36,7 +36,7 @@ reused instead of downloaded again. See [Models](@/docs/models.md).
 ## Try it in the terminal
 
 ```sh
-mrun run qwen3-coder
+mrun run qwen3.6
 ```
 
 `run` opens an interactive chat. Add `--info` to see the memory budget, or `--check` to verify the
@@ -59,7 +59,8 @@ mrun launch claude-code    # or: codex, opencode
 ```
 
 `launch` starts the client already pointed at mrun, for that process only; your global client
-settings stay untouched. To configure a client permanently, use `mrun connect` (see
+settings stay untouched. It also starts the server and offers to download the model if needed, so
+on a fresh install this one command is enough. To configure a client permanently, use `mrun connect` (see
 [Clients](@/docs/clients.md)).
 
 ## When something is off

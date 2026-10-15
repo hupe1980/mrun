@@ -33,6 +33,7 @@ model is downloaded, it offers the default. `--dry-run` prints what it would set
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | Keeps the session local |
 | `CLAUDE_CODE_TOTAL_TOKENS_REMINDER` | `off` | Removes a per-turn token count that would break prefix reuse |
 | `API_TIMEOUT_MS` | 50 minutes | Long local prompts take longer than hosted APIs |
+| `ENABLE_TOOL_SEARCH` | `auto:10` | Loads MCP tool definitions on demand once they exceed 10% of the context (see [MCP and skills](@/docs/mcp-and-skills.md)) |
 
 Claude Code also adds a per-request nonce to its attribution line. mrun replaces just that nonce
 with a fixed value, so reuse works even if you start `claude` yourself with only

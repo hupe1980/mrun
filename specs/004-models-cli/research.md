@@ -31,7 +31,9 @@
 
 ## R4: Curated aliases
 
-- **Decision**: Compile-time table in `hub/aliases.rs`: `qwen3-coder` →
+- **Decision**: Compile-time table in `hub/aliases.rs`: `qwen3.6` →
+  `mlx-community/Qwen3.6-35B-A3B-4bit` (default; ≈4.5 bits per weight, ≈20 GB; third-party tables
+  report ≈20.7 GB peak [U], repo verified at pin time), `qwen3-coder` →
   `mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit`, `qwen3-8b` → `mlx-community/Qwen3-8B-4bit`,
   each with pinned revision and file hashes, refreshed by a maintainer script. Unknown names are
   treated as HF repo ids (`org/name[@revision]`), pinned on first pull.

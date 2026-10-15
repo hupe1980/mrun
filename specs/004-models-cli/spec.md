@@ -31,7 +31,7 @@ task using only the commands mrun suggests.
 
 **Acceptance Scenarios**:
 
-1. **Given** a fresh install, **When** the developer runs `mrun pull qwen3-coder`, **Then** mrun
+1. **Given** a fresh install, **When** the developer runs `mrun pull qwen3.6`, **Then** mrun
    shows size, license and progress, verifies the download and reports where it is stored.
 2. **Given** a pulled model and a running server, **When** the developer runs
    `mrun launch claude-code` (or `codex`, `opencode`), **Then** the client starts already pointed
@@ -108,8 +108,9 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
   `HF_ENDPOINT` for mirrors, `HF_TOKEN` or else `$HF_HOME/token` for gated models, and
   `HF_HUB_OFFLINE=1` by failing fast with exit 6), show size, license and memory fit
   before downloading, resume interrupted downloads, and verify every file's content hash.
-- **FR-002**: mrun MUST ship a curated alias list (for example `qwen3-coder` →
-  Qwen3-Coder-30B-A3B-Instruct 4-bit, `qwen3-8b` → Qwen3-8B 4-bit) with pinned revisions and hashes.
+- **FR-002**: mrun MUST ship a curated alias list with pinned revisions and hashes: `qwen3.6` →
+  Qwen3.6-35B-A3B 4-bit (default, hybrid), `qwen3-coder` → Qwen3-Coder-30B-A3B-Instruct 4-bit,
+  `qwen3-8b` → Qwen3-8B 4-bit. Each alias records the agent-usable context on the user's Mac.
 - **FR-003**: `mrun ls`, `mrun rm`, `mrun show <model>` MUST manage and describe local models,
   including disk size, fit in the current memory budget and context capacity (computed with the
   same budget function as feature 001). `ls` also lists compatible MLX repositories already in the

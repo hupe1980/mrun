@@ -1,32 +1,30 @@
 +++
 title = "Prefix cache"
-description = "How mrun reuses attention state exactly across turns, branches and tool calls, and how it explains every cache miss."
+description = "How mrun reuses attention state exactly across turns, subagents and tool calls, for attention and hybrid models, and how it explains every cache miss."
 weight = 40
 +++
 
 ## What gets reused
 
-When a model reads a prompt it produces attention state — keys and values for every token at
-every layer. The next request that starts with the same tokens can reuse that state instead of
-computing it again. mrun stores it in a radix tree keyed by token ids:
+When a model reads a prompt it produces state for every token. The next request that starts with
+the same tokens can reuse that state instead of computing it again. mrun keeps:
 
-- **The live conversation** stays in place. The next turn reuses it without any copy.
-- **Branches** — subagents, retries, edited history, a second conversation — are kept as snapshots
-  of shared segments. Switching back restores the longest matching prefix by copy.
-- **Boundaries** are recorded at message ends, so a branch that diverges mid-conversation still
-  reuses everything up to the last shared message.
+- **The live conversation in place.** The next turn reuses it without any copy; only the new
+  tokens are processed.
+- **Branches beside it.** When a different conversation arrives — a subagent, a title request,
+  another session, a retry with an edit — the shared beginning stays where it is and the rest of
+  the old conversation is *moved* aside. Switching back moves it in again. State is never held
+  twice, so a 90K-token conversation survives a subagent even when memory has room for only about
+  105K tokens.
+- **Checkpoints for hybrid models.** Linear-attention layers keep a fixed-size state that only
+  exists for the position it was computed at. While processing a prompt, mrun saves checkpoints
+  at the end of the system prompt and tools, at the start of the last message and at the end of
+  the prompt. An edited or re-rendered history resumes from the nearest checkpoint before the
+  change.
+- **Progress of interrupted prompts.** If a client gives up during a long prompt and retries, mrun
+  resumes from the last completed chunk instead of starting over.
 
-Reuse is exact: the same token ids, the same model content hash, the same rendering. Nothing is
-approximated.
-
-Two more things keep the cache warm:
-
-- **Interrupted prompts keep their progress.** If a client gives up during a long prompt and
-  retries, mrun resumes from the last completed chunk instead of starting over.
-- **Warm-up while tools run.** After a turn that ends in tool calls, the GPU is idle while your
-  agent runs them. mrun uses that time to process the conversation exactly as the client will send
-  it next (templates often re-render the previous reply slightly differently). A real request
-  always takes priority; a wrong guess costs only idle time.
+Reuse is exact: the same token ids and the same model content hash. Nothing is approximated.
 
 ## Reading the numbers
 
@@ -45,24 +43,23 @@ also attaches its own report:
 | Cause | Meaning | What to do |
 | --- | --- | --- |
 | `new` | No earlier request shares a prefix | Nothing; the first turn is always computed |
-| `edit` | The conversation, system prompt or tools changed before the divergence point | Expected after compaction or editing history; otherwise check client settings that change per session |
-| `template` | The same messages rendered to different tokens, e.g. earlier reasoning re-rendered differently | Usually a client or template quirk; report it if it repeats |
-| `volatile` | Content that changes on every request appears early in the prompt (timestamps, token counters) | Use `mrun launch`, which turns these off for supported clients |
-| `evicted` | The prefix was removed to free memory | More memory, or fewer parallel conversations |
+| `edit` | The conversation, system prompt or tools changed before the divergence point | Expected after compaction, edits or an MCP server connecting; otherwise check what changes per session |
+| `template` | The same messages produced different tokens (for example earlier reasoning dropped by the template) | Usually expected once per turn on thinking models |
+| `checkpoint` | Hybrid model: resumed from the nearest checkpoint before the divergence | Expected; the gap is reported |
+| `evicted` | The branch was removed to free memory | More memory, or fewer parallel conversations |
 | `capacity` | The prompt was too large to keep | Shorter context or more memory |
-| `model` | A different model or revision was loaded | Expected |
-| `disabled` | Caching was off for this request | `--no-cache` or `"mrun": {"cache": false}` |
+| `model` | A different model, revision or template was loaded | Expected |
+| `disabled` | Caching was off for this request | `--no-cache` or `x-mrun-cache: off` |
 
 The divergence report gives the token position where the prompt differed from the best cached
-candidate. `mrun serve --debug-cache` additionally prints short text excerpts around
-the divergence to the server terminal — never to logs or responses.
+candidate. `mrun serve --debug-cache` additionally prints short text excerpts around it to the
+server terminal — never to logs or responses.
 
 ## Memory and eviction
 
-Cached segments share the memory budget with the active request. When a new request needs room,
-mrun evicts the least recently used segments: first conversations superseded by a compaction,
-then finished subagents and other sessions, then assistant turns before user and tool turns before system prompts. A request is never refused while evictable cache remains. If macOS reports memory
-pressure, mrun sheds cache first.
+Branches share the memory budget with the live conversation. When a request needs room, mrun
+evicts the least recently used branches; the live conversation is never evicted while it runs.
+Under memory pressure, branches go first.
 
 ## Shared between clients
 
@@ -70,23 +67,11 @@ All clients of one server share the cache. Cached-token counts therefore reveal 
 client recently sent the same prefix. On your own Mac this doesn't matter; if you expose mrun to
 other people with `--host`, keep it in mind, or run with `--no-cache`.
 
-## Client hints
-
-mrun reads the session and subagent ids that Claude Code, Codex and OpenCode send, plus Anthropic
-`cache_control` breakpoints and OpenAI `prompt_cache_key`. Breakpoints mark good places to keep a
-snapshot; session ids let eviction drop finished subagents and other sessions before your main
-conversation. Hints never change what is reused.
-
-Clients can also ask why a turn missed the cache with `diagnostics.previous_message_id`; mrun
-answers with the standard `diagnostics.cache_miss_reason` in the response.
-
 ## Controls
 
 | Control | Effect |
 | --- | --- |
 | `mrun serve --no-cache` | Disable reuse for the whole server |
-| `x-mrun-cache: off` request header | Disable reuse for one request (all APIs) |
-| `"mrun": {"cache": false}` in a Chat Completions or Responses body | Same, in the body |
-| `mrun cache clear` | Drop all cached segments of the running server |
-| `mrun serve --no-warmup` | Turn off warm-up while tools run |
+| `x-mrun-cache: off` request header | Disable reuse for one request |
+| `mrun cache clear` | Drop all cached state of the running server |
 | `mrun serve --debug-cache` | Print divergence excerpts on the server terminal (loopback only) |
