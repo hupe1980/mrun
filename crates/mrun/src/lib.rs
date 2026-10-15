@@ -1,6 +1,7 @@
 //! mrun: a local inference server for coding agents on Apple Silicon.
 
 pub mod api;
+pub mod bench;
 pub mod cache;
 pub mod chat;
 pub mod cli;
