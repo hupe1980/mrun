@@ -303,3 +303,108 @@ async fn chat_response_format_json_object() {
     );
     assert_ne!(server.post("/v1/chat/completions", &body).await.status, 200);
 }
+
+#[tokio::test]
+async fn xapi_max_tokens_clamped_reported() {
+    let server = common::start_with(
+        &["x"],
+        Setup {
+            capacity: 200,
+            ..Setup::default()
+        },
+    )
+    .await;
+    let mut body = user("hi");
+    body["max_tokens"] = json!(100_000);
+    let reply = server.post("/v1/chat/completions", &body).await;
+    assert_eq!(reply.status, 200, "{}", reply.text);
+    let applied: u32 = reply.header("x-mrun-max-tokens").unwrap().parse().unwrap();
+    let prompt = reply.json()["usage"]["prompt_tokens"].as_u64().unwrap() as u32;
+    assert_eq!(applied, 200 - prompt);
+    assert_eq!(reply.header("x-mrun-warning"), Some("max-tokens-clamped"));
+    // Streaming: the first `: mrun` comment carries the limit, the last one the warning.
+    body["stream"] = json!(true);
+    let server = common::start_with(
+        &["x"],
+        Setup {
+            capacity: 200,
+            ..Setup::default()
+        },
+    )
+    .await;
+    let reply = server.post("/v1/chat/completions", &body).await;
+    let comments: Vec<String> = reply
+        .frames()
+        .into_iter()
+        .filter(|(name, _)| name == ":")
+        .map(|(_, text)| text)
+        .collect();
+    assert!(
+        comments[0].contains(&format!("\"max_tokens\":{applied}")),
+        "{comments:?}"
+    );
+    assert!(
+        comments.last().unwrap().contains("max-tokens-clamped"),
+        "{comments:?}"
+    );
+}
+
+#[tokio::test]
+async fn chat_nonstrict_invalid_args_returned_raw_with_warning() {
+    let call = "<tool_call>\n{\"name\": \"read\", \"arguments\": {\"path\": oops}}\n</tool_call>";
+    let server = common::start(&[call]).await;
+    let body = json!({"messages": [{"role": "user", "content": "go"}], "tools": read_tool(false)});
+    let reply = server.post("/v1/chat/completions", &body).await;
+    let message = &reply.json()["choices"][0]["message"];
+    assert_eq!(
+        message["tool_calls"][0]["function"]["arguments"],
+        "{\"path\": oops}"
+    );
+    assert_eq!(reply.header("x-mrun-warning"), Some("tool-args-invalid"));
+}
+
+#[tokio::test]
+async fn xapi_cached_tokens_resume_p_minus_1() {
+    // The same prompt again: everything but the last prompt token is reused.
+    let server = common::start(&["a", "b"]).await;
+    let first = server
+        .post("/v1/chat/completions", &user("same prompt"))
+        .await
+        .json();
+    let second = server
+        .post("/v1/chat/completions", &user("same prompt"))
+        .await
+        .json();
+    let prompt = second["usage"]["prompt_tokens"].as_u64().unwrap();
+    assert_eq!(first["usage"]["prompt_tokens"], prompt);
+    assert_eq!(
+        second["usage"]["prompt_tokens_details"]["cached_tokens"],
+        prompt - 1
+    );
+}
+
+#[tokio::test]
+async fn xapi_five_screenshots_in_history_fit_the_body_limit() {
+    // Five ~6 MB base64 screenshots in tool results: accepted and replaced by placeholders.
+    let server = common::start(&["seen"]).await;
+    let image = "A".repeat(6 * 1024 * 1024);
+    let mut messages = vec![json!({"role": "user", "content": "look"})];
+    for i in 0..5 {
+        let id = format!("c{i}");
+        messages.push(
+            json!({"role": "assistant", "content": null, "tool_calls": [{"id": id,
+            "type": "function", "function": {"name": "read", "arguments": "{}"}}]}),
+        );
+        messages.push(json!({"role": "tool", "tool_call_id": id, "content": [
+            {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{image}")}}]}));
+    }
+    let body = json!({"messages": messages, "tools": read_tool(false)});
+    let reply = server.post("/v1/chat/completions", &body).await;
+    assert_eq!(
+        reply.status,
+        200,
+        "{}",
+        &reply.text[..reply.text.len().min(300)]
+    );
+    assert_eq!(reply.header("x-mrun-warning"), Some("image-omitted"));
+}

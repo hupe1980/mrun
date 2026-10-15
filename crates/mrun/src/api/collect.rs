@@ -21,6 +21,9 @@ pub enum Block {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Collected {
     pub blocks: Vec<Block>,
+    /// Prompt tokens, of which `cached` were reused.
+    pub input: u32,
+    pub cached: u32,
     pub max_tokens: u32,
     pub finish: Option<(Finish, Option<String>, Usage)>,
     pub error: Option<ApiError>,
@@ -29,7 +32,15 @@ pub struct Collected {
 impl Collected {
     pub fn push(&mut self, event: GenEvent) {
         match event {
-            GenEvent::Started { max_tokens, .. } => self.max_tokens = max_tokens,
+            GenEvent::Started {
+                input,
+                cached,
+                max_tokens,
+            } => {
+                self.input = input;
+                self.cached = cached;
+                self.max_tokens = max_tokens;
+            }
             GenEvent::ReasoningDelta(text) => match self.blocks.last_mut() {
                 Some(Block::Reasoning(r)) => r.push_str(&text),
                 _ => self.blocks.push(Block::Reasoning(text)),

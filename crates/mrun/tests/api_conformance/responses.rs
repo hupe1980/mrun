@@ -226,7 +226,7 @@ async fn resp_function_call_item_done_parsable_by_codex() {
     )
     .await;
     assert_eq!(input_tokens(&reply), string_tokens);
-    assert!(reply.header("x-mrun-warnings").is_none());
+    assert!(reply.header("x-mrun-warning").is_none());
 
     // resp_function_call_output_image_placeholder (FR-020).
     let reply = post(
@@ -236,7 +236,7 @@ async fn resp_function_call_item_done_parsable_by_codex() {
     )
     .await;
     assert_eq!(reply.status, 200, "{}", reply.text);
-    assert_eq!(reply.header("x-mrun-warnings"), Some("image-omitted"));
+    assert_eq!(reply.header("x-mrun-warning"), Some("image-omitted"));
 }
 
 #[tokio::test]
@@ -522,7 +522,7 @@ async fn resp_no_limit_defaults_to_remaining_capacity() {
     let expected = (u64::from(capacity) - prompt).to_string();
     assert_eq!(reply.header("x-mrun-max-tokens"), Some(expected.as_str()));
     assert!(
-        reply.header("x-mrun-warnings").is_none(),
+        reply.header("x-mrun-warning").is_none(),
         "the default is not a clamp"
     );
     assert_eq!(reply.json()["status"], "completed");
@@ -538,4 +538,52 @@ async fn resp_no_limit_defaults_to_remaining_capacity() {
         .unwrap();
     let meta: Value = serde_json::from_str(meta.strip_prefix("mrun ").unwrap()).unwrap();
     assert_eq!(meta["max_tokens"].to_string(), expected);
+}
+
+#[tokio::test]
+async fn resp_queued_over_idle_timeout_client_survives() {
+    // Scaled-down Codex: a client that gives up after 150 ms without an event survives a
+    // request queued for ~600 ms, because `response.in_progress` arrives every 50 ms.
+    use mrun::api::run::Timing;
+    use std::time::Duration;
+    let setup = common::Setup {
+        timing: Timing {
+            keepalive: Duration::from_millis(50),
+            queue_wait: Duration::from_secs(60),
+        },
+        step_delay: Some(Duration::from_millis(60)),
+        ..common::Setup::default()
+    };
+    let server = common::start_with(&["busy busy", "done"], setup).await;
+    let client = server.client.clone();
+    let url = server.url("/v1/responses");
+    let first = tokio::spawn(async move {
+        client
+            .post(url)
+            .json(&serde_json::json!({"input": "a"}))
+            .send()
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let mut response = server
+        .client
+        .post(server.url("/v1/responses"))
+        .json(&serde_json::json!({"input": "b", "stream": true}))
+        .send()
+        .await
+        .unwrap();
+    let mut text = String::new();
+    loop {
+        let chunk = tokio::time::timeout(Duration::from_millis(150), response.chunk())
+            .await
+            .expect("no event within the client's idle timeout")
+            .unwrap();
+        match chunk {
+            Some(bytes) => text.push_str(&String::from_utf8_lossy(&bytes)),
+            None => break,
+        }
+    }
+    assert!(text.matches("response.in_progress").count() >= 3, "{text}");
+    assert!(text.contains("response.completed"));
+    first.await.unwrap().unwrap();
 }

@@ -101,7 +101,11 @@ pub async fn collect(mut turn: Turn) -> Result<(Collected, Vec<Warning>), ApiErr
     let mut warnings = turn.warnings.clone();
     while let Some(tick) = turn.ticks.recv().await {
         let Tick::Event(event) = tick else { continue };
-        note_warnings(&event, turn.requested_max, &mut warnings);
+        note_warnings(
+            &event,
+            turn.explicit_max.then_some(turn.requested_max),
+            &mut warnings,
+        );
         let terminal = event.is_terminal();
         collected.push(event);
         if terminal {
@@ -120,9 +124,12 @@ pub async fn collect(mut turn: Turn) -> Result<(Collected, Vec<Warning>), ApiErr
     Ok((collected, warnings))
 }
 
-fn note_warnings(event: &GenEvent, requested_max: u32, warnings: &mut Vec<Warning>) {
+/// `requested_max`: the client's own limit; a clamped server default is not reported.
+fn note_warnings(event: &GenEvent, requested_max: Option<u32>, warnings: &mut Vec<Warning>) {
     let warning = match event {
-        GenEvent::Started { max_tokens, .. } if *max_tokens < requested_max => {
+        GenEvent::Started { max_tokens, .. }
+            if requested_max.is_some_and(|requested| *max_tokens < requested) =>
+        {
             Warning::MaxTokensClamped
         }
         GenEvent::ToolEnd { valid: false, .. } => Warning::ToolArgsInvalid,
@@ -137,6 +144,11 @@ fn note_warnings(event: &GenEvent, requested_max: u32, warnings: &mut Vec<Warnin
 pub fn json_response(body: Value, collected: &Collected, warnings: &[Warning]) -> Response {
     let mut response = axum::Json(body).into_response();
     let headers = response.headers_mut();
+    headers.insert("x-mrun-cache-cached", HeaderValue::from(collected.cached));
+    headers.insert(
+        "x-mrun-cache-processed",
+        HeaderValue::from(collected.input - collected.cached.min(collected.input)),
+    );
     headers.insert("x-mrun-max-tokens", HeaderValue::from(collected.max_tokens));
     if !warnings.is_empty() {
         let list = warnings
@@ -145,23 +157,32 @@ pub fn json_response(body: Value, collected: &Collected, warnings: &[Warning]) -
             .collect::<Vec<_>>()
             .join(",");
         if let Ok(value) = HeaderValue::from_str(&list) {
-            headers.insert("x-mrun-warnings", value);
+            headers.insert("x-mrun-warning", value);
         }
     }
     response
 }
 
-/// An SSE response: headers now, then frames as ticks arrive. The first `: mrun` comment
-/// carries the applied output limit and warnings known at the start.
+/// The `: mrun` comment opening a stream: reuse and the applied output limit.
+fn start_comment(input: u32, cached: u32, max_tokens: u32) -> String {
+    let meta = json!({"cached": cached, "processed": input - cached.min(input),
+        "max_tokens": max_tokens});
+    sse::comment(&format!("mrun {meta}"))
+}
+
+/// An SSE response: headers now, then frames as ticks arrive. `: mrun` comments carry the
+/// metadata: reuse and the applied limit before the first event, warnings before the last.
 pub fn stream_response(turn: Turn, mut encoder: impl StreamEncode) -> Response {
     let opening = encoder.open();
-    let state = (turn, encoder, Some(opening), false);
-    let stream =
-        futures_util::stream::unfold(state, |(mut turn, mut encoder, opening, done)| async move {
+    let warnings = turn.warnings.clone();
+    let state = (turn, encoder, Some(opening), false, warnings);
+    let stream = futures_util::stream::unfold(
+        state,
+        |(mut turn, mut encoder, opening, done, mut warnings)| async move {
             if let Some(frames) = opening {
                 return Some((
                     Ok::<_, std::convert::Infallible>(Bytes::from(frames.concat())),
-                    (turn, encoder, None, done),
+                    (turn, encoder, None, done, warnings),
                 ));
             }
             if done {
@@ -172,20 +193,35 @@ pub fn stream_response(turn: Turn, mut encoder: impl StreamEncode) -> Response {
                 Tick::Keepalive => (encoder.keepalive(), false),
                 Tick::Event(event) => {
                     let mut frames = String::new();
-                    if let GenEvent::Started { max_tokens, .. } = &event {
-                        let mut warnings = turn.warnings.clone();
-                        note_warnings(&event, turn.requested_max, &mut warnings);
-                        let meta = json!({"max_tokens": max_tokens,
-                        "warnings": warnings.iter().map(|w| w.as_str()).collect::<Vec<_>>()});
-                        frames.push_str(&sse::comment(&format!("mrun {meta}")));
+                    note_warnings(
+                        &event,
+                        turn.explicit_max.then_some(turn.requested_max),
+                        &mut warnings,
+                    );
+                    if let GenEvent::Started {
+                        input,
+                        cached,
+                        max_tokens,
+                    } = &event
+                    {
+                        frames.push_str(&start_comment(*input, *cached, *max_tokens));
                     }
                     let done = event.is_terminal();
+                    if done && !warnings.is_empty() {
+                        let list: Vec<&str> = warnings.iter().map(|w| w.as_str()).collect();
+                        let meta = json!({"warnings": list});
+                        frames.push_str(&sse::comment(&format!("mrun {meta}")));
+                    }
                     frames.push_str(&encoder.encode(&event).concat());
                     (frames, done)
                 }
             };
-            Some((Ok(Bytes::from(frames)), (turn, encoder, None, done)))
-        });
+            Some((
+                Ok(Bytes::from(frames)),
+                (turn, encoder, None, done, warnings),
+            ))
+        },
+    );
     sse_response(Body::from_stream(stream))
 }
 

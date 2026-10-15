@@ -43,6 +43,8 @@ pub struct Turn {
     pub prompt_tokens: u32,
     /// Output limit asked for (or the API default), before clamping.
     pub requested_max: u32,
+    /// The client sent the limit (only then is clamping it worth a warning).
+    pub explicit_max: bool,
     pub warnings: Vec<Warning>,
 }
 
@@ -137,6 +139,7 @@ pub async fn start(
         model: loaded.model_id.clone(),
         prompt_tokens,
         requested_max,
+        explicit_max: request.max_output_tokens.is_some(),
         warnings,
     })
 }
