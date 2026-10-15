@@ -245,3 +245,25 @@ async fn doctor_and_completions() {
     assert!(out.status.success());
     assert!(stdout(&out).contains("mrun"));
 }
+
+#[tokio::test]
+async fn cache_clear_reports_and_quiet_silences_info() {
+    let server = server(105_000).await;
+    let port = server.addr.port().to_string();
+    let home = tempfile::tempdir().unwrap();
+    let out = mrun(home.path(), &strings(&["cache", "clear", "--port", &port])).await;
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cleared"));
+    let out = mrun(
+        home.path(),
+        &strings(&["-q", "cache", "clear", "--port", &port]),
+    )
+    .await;
+    assert!(out.status.success());
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    server.shutdown().await.unwrap();
+}

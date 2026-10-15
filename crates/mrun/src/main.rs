@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use mrun::chat::limits::MAX_PROMPT_BYTES;
+use mrun::cli::cache::CacheCommand;
 use mrun::cli::connect::{self, ConnectArgs};
 use mrun::cli::doctor::{self, DoctorArgs};
 use mrun::cli::launch::{self, LaunchArgs};
@@ -13,6 +14,9 @@ use std::process::ExitCode;
 #[derive(Debug, Parser)]
 #[command(name = "mrun", version, about, propagate_version = true)]
 struct Cli {
+    /// Print only warnings and errors.
+    #[arg(short, long, global = true)]
+    quiet: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -46,6 +50,9 @@ enum Command {
     /// Stop a server started with `mrun serve --detach`.
     #[command(after_help = "Examples:\n  mrun stop")]
     Stop(StopArgs),
+    /// Manage the running server's prefix cache.
+    #[command(subcommand, after_help = "Examples:\n  mrun cache clear")]
+    Cache(CacheCommand),
     /// Print a shell completion script.
     #[command(
         after_help = "Examples:\n  mrun completions zsh > ~/.zfunc/_mrun\n  mrun completions bash > /etc/bash_completion.d/mrun"
@@ -104,6 +111,7 @@ fn main() -> ExitCode {
         eprintln!("{warning}");
     }
     let cli = Cli::parse();
+    mrun::cli::set_quiet(cli.quiet);
     match cli.command {
         Command::Run(args) => run(args),
         Command::Serve(args) => ExitCode::from(serve::run(args, serve::default_factory())),
@@ -112,6 +120,7 @@ fn main() -> ExitCode {
         Command::Ps(args) => ExitCode::from(ps::run(args)),
         Command::Doctor(args) => ExitCode::from(doctor::run(args)),
         Command::Stop(args) => ExitCode::from(stop::run(args)),
+        Command::Cache(command) => ExitCode::from(mrun::cli::cache::run(command)),
         Command::Completions { shell } => {
             use clap::CommandFactory;
             clap_complete::generate(shell, &mut Cli::command(), "mrun", &mut std::io::stdout());

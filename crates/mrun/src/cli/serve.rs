@@ -374,7 +374,7 @@ pub fn run(args: ServeArgs, factory: EngineFactory) -> u8 {
                 dir.display()
             );
         }
-        eprintln!("mrun listening on {url} (loading model)");
+        crate::cli::info(&format!("mrun listening on {url} (loading model)"));
         match server.loaded().await {
             Ok(loaded) => {
                 let syntax = crate::chat::syntax::registry::ChatSyntax::get(loaded.syntax).name;

@@ -1,5 +1,6 @@
 //! Command implementations shared by the binary and the integration tests.
 
+pub mod cache;
 pub mod clients;
 pub mod connect;
 pub mod doctor;
@@ -10,6 +11,21 @@ pub mod server;
 pub mod stop;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// `-q/--quiet`: informational messages are suppressed; warnings and errors are not.
+pub fn set_quiet(quiet: bool) {
+    QUIET.store(quiet, Ordering::Relaxed);
+}
+
+/// Prints an informational message to stderr unless `--quiet`.
+pub fn info(message: &str) {
+    if !QUIET.load(Ordering::Relaxed) {
+        eprintln!("{message}");
+    }
+}
 
 /// mrun's own state directory: `MRUN_HOME`, else `~/.mrun`.
 pub fn mrun_home() -> PathBuf {

@@ -63,6 +63,6 @@ fn stop(port: u16) -> Result<(), CliError> {
         std::thread::sleep(Duration::from_millis(200));
     }
     let _ = std::fs::remove_file(pid_file());
-    eprintln!("mrun stopped (pid {pid})");
+    crate::cli::info(&format!("mrun stopped (pid {pid})"));
     Ok(())
 }
