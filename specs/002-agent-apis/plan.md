@@ -9,8 +9,9 @@
 `mrun serve` is an Axum server with three thin decoders (Chat Completions, Anthropic Messages,
 Responses) into one `ChatRequest`, one render/tokenize path, a single-worker FIFO queue in front of
 the engine, and three encoders that fold one `GenEvent` stream into each API's native SSE or JSON
-body. Tool calls and reasoning are parsed by streaming parsers from a syntax registry, named by the
-model's family and confirmed by a template probe at load: Hermes JSON (Qwen3), Qwen XML
+body. Tool calls and reasoning are parsed by streaming parsers from a syntax registry. The family
+names an ordered set of accepted syntaxes; the template probe at load picks the first that matches
+(FR-032): Hermes JSON (Qwen3), Qwen XML
 (Qwen3-Coder, Qwen3.6), Harmony (gpt-oss: analysis/commentary/final channels, `to=functions.NAME`
 calls, reasoning effort) and Mistral `[TOOL_CALLS]` (Devstral Small 2); strict tools and JSON response formats arm an llguidance matcher
 that supplies per-step token masks to the engine (uncompilable schemas fall back to unconstrained
@@ -78,11 +79,11 @@ crates/mrun/src/
 ├── chat/
 │   ├── render.rs         # ChatRequest -> template context -> tokens (shared with count_tokens)
 │   ├── syntax/{mod.rs, registry.rs, holdback.rs, hermes.rs, qwen_xml.rs, harmony.rs, mistral.rs}
-│   │                     # registry: family → syntax, template probe; qwen_xml serves Qwen3-Coder and Qwen3.6
+│   │                     # registry: family → accepted syntaxes, template probe; qwen_xml serves Qwen3-Coder and Qwen3.6
 │   ├── constrain.rs      # llguidance ParserFactory per model, Matcher per request, strict-unsupported fallback,
 │   │                     # tool_choice:none opener-token bias
-│   └── reasoning.rs      # per-family thinking control (enable_thinking, Harmony effort), think-tag split,
-│                         # signature + encrypted_content codec
+│   └── reasoning.rs      # think-tag split, codecs; thinking control and history rules read from the
+│                         # syntax entry (data-model Syntax rows)
 ├── runtime/
 │   ├── queue.rs          # FIFO, deadline, cancel tokens, retry-after
 │   └── worker.rs         # dequeues and calls 001 `runtime/generate.rs` (owner of the per-request loop;

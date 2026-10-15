@@ -11,7 +11,7 @@ Define the family mechanism that 001, 002 and 004 implement for release 0.1 (blo
 template probe, aliases), and own what lies beyond it: the family contract and locality rule,
 tiers (Tier 2 loading of any repo of a registered architecture, tiny-model parity per
 architecture), the Tier 1 gate across all families, and the post-0.1 families. 0.1 families are
-built by 001 (T039–T045: `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`, `mistral`), their
+built by 001 (T039–T043a, T045, T046 (+ goldens T010d, parity T027d/e): `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`, `mistral`), their
 syntaxes by 002 (T006a–T006c: Hermes, Qwen XML, Harmony, Mistral), their aliases by 004. After 0.1,
 each of `glm4_moe_lite` (MLA), `gemma4` (sliding + global, KV sharing, Gemma syntax) and
 `nemotron_h` (Mamba2 hybrid) lands through the same porting checklist, gated by its measure-first
@@ -35,7 +35,7 @@ cells
 layers O(W + L) per chunk
 **Constraints**: Parity with mlx-lm `ba8a08f`; no family logic outside its module and syntax
 (Principle V); no new kernels beyond mlx-lm's own (Mamba2 decode kernel ported verbatim, like GDN)
-**Scale/Scope**: 5 Tier 1 models at 0.1 (4 architectures + Qwen3-8B), 3 after; 6 syntaxes
+**Scale/Scope**: 5 Tier 1 models at 0.1 (5 architectures), 3 after; 6 syntaxes
 
 ## Constitution Check
 
@@ -87,14 +87,14 @@ directories; it creates no parallel structure.
 
 ## Relation to other specs
 
-- **001**: FR-002 and FR-023–FR-025 build the 0.1 families on blocks and the registry (T039–T045).
+- **001**: FR-002 and FR-023–FR-025 build the 0.1 families on blocks and the registry (T039–T043a, T045, T046 (+ goldens T010d, parity T027d/e)).
   010's contract adds per-layer K/V widths and `None` layers to 001 FR-025's layer kinds (needed
   for MLA and Gemma's shared-KV layers, post-0.1). Reconciled by T003.
 - **002**: FR-032–FR-035 own the syntax registry, probe and 0.1 syntaxes; 010 adds GLM XML and
-  Gemma under FR-004's rules and proposes an ordered accepted-syntax set per family (OQ-7).
+  Gemma under FR-004's rules; 002 FR-032 already holds the ordered set (OQ-7 decided).
 - **003**: No change; relies on state kinds through the engine contract. SC-003 adds window cases.
 - **004**: FR-002 owns the 0.1 aliases (`gpt-oss`, `devstral`, …) and FR-014 the pull gate; 010
-  adds post-0.1 aliases and the `tier` field. Reconciled by T003.
+  adds post-0.1 aliases; the `tier`, `syntax` and fit fields are in 004's manifest. Reconciled by T003.
 - **005**: One synthetic and one agent cell set per Tier 1 model.
 - **ARCHITECTURE / D015**: the syntax list gains Gemma when Gemma 4 lands; the model table gets
   measured numbers.

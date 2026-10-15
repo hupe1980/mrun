@@ -89,7 +89,7 @@
     and reads `max_model_len` from `/v1/models`, which 002 reports; an upstream discovery plugin
     for port 8484 is a later contribution.
 - **Rationale**: Analysis I3 (all model slots, else background/subagent requests use `claude-*`
-  ids), I4 (clients default to 200K–272K context; mrun's capacity is ≈ 100–110K on 48 GB), S4
+  ids), I4 (clients default to 200K–272K context; mrun's capacity on 48 GB is 40,960 for Qwen3-8B, ≈ 78K for Devstral, ≈ 105–120K for Qwen3-Coder, 131,072 for gpt-oss and ≈ 262K for Qwen3.6; 001 plan), S4
   (global settings redirect all Claude Code use; launch is scoped). Key names are re-verified
   against pinned client versions in 002 research before release; snapshot tests freeze output.
 

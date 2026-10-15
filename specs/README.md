@@ -24,13 +24,13 @@ engineering principles.
 
 | # | Feature | Release | Depends on | Covers | Status |
 | --- | --- | --- | --- | --- | --- |
-| 001 | [Engine core](001-engine-core/spec.md): Qwen3.6 hybrid, Qwen3-Coder, Qwen3-8B; budget; checkpoints; cancellation | 0.1 (M0–M1) | — | PR-3, PR-4, PR-5 | Foundation implemented; MLX engine planned |
+| 001 | [Engine core](001-engine-core/spec.md): five 0.1 families (Qwen3.6 hybrid, Qwen3-Coder, gpt-oss, Devstral, Qwen3-8B) on a block library; budget; checkpoints; cancellation | 0.1 (M0–M1) | — | PR-3, PR-4, PR-5 | Foundation implemented; MLX engine planned |
 | 002 | [Agent APIs](002-agent-apis/spec.md): Messages, Chat Completions, Responses; MCP, namespaces, deferred tools | 0.1 (M2) | 001 | PR-1, PR-4, PR-5 | Planned |
 | 003 | [Prefix cache](003-prefix-cache/spec.md): live path plus moved branches, hybrid checkpoints, miss reports | 0.1 (M3) | 001, 002 | PR-2, PR-3 | Planned |
 | 004 | [Models and CLI](004-models-cli/spec.md): pull, launch, connect, doctor, ps | 0.1 (M4) | 001; 002 for launch/connect/ps | PR-6 | Planned |
 | 005 | [Benchmark harness](005-bench/spec.md): in-order trace replay, fair comparisons | 0.1 (M5) | 002; 003 for cache cells | PR-7 | Planned |
 | 008 | [Distribution](008-distribution/spec.md): Homebrew, signed binary, launchd service, `/metrics` | 0.1 (M6) | 002, 004 | PR-6 | Planned |
-| 010 | [Model families](010-model-families/spec.md): block library, family registry, syntax registry, tiers; GLM, Gemma 4, Nemotron-H after 0.1 | 0.1 (0.1 families) + after 0.1 | 001, 002, 003 | PR-1 | Planned |
+| 010 | [Model families](010-model-families/spec.md): family contract, tiers, locality, Tier 1 gate; GLM, Gemma 4, Nemotron-H after 0.1 | 0.1 (0.1 families) + after 0.1 | 001, 002, 003, 004, 005 | PR-1 | Planned |
 | 006 | [Speculative decoding](006-speculative-decoding/spec.md): copy-aware n-gram drafts (MTP heads gated on measurement) | After 0.1 | 001, 003, 005 | PR-1 | Planned (measure first) |
 | 007 | [Persistent prefix tier](007-persistent-prefix-tier/spec.md): opt-in SSD branches and checkpoints | After 0.1 | 003, 005 | PR-2, PR-5 | Planned (measure first) |
 | 009 | [Image input](009-image-input/spec.md): screenshots and image tool results for vision-capable models | After 0.1 | 001, 002, 003 | PR-1 | Planned (measure first) |

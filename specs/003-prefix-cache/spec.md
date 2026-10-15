@@ -9,7 +9,7 @@
 **Input**: "Exact prefix reuse across turns, branches and tool loops for attention and hybrid
 models. The active sequence state is the live path; other conversations are branches whose state
 was moved out, never copied twice, so a subagent or title request never destroys the main
-conversation. Hybrid models resume from recurrent-state checkpoints captured during prefill. Plain
+conversation. Hybrid models resume from position-bound-state checkpoints captured during prefill. Plain
 LRU eviction; memory pressure sheds branches first. Every request reports cached and processed
 tokens, the divergence position and a miss cause."
 

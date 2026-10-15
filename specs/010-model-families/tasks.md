@@ -9,7 +9,7 @@ description: "Tasks for 010 Model Families"
 
 ## Format: `[ID] [P?] [Story] Description`
 
-0.1 families are built by other specs: blocks, registry and modules by 001 (T039–T045), syntaxes
+0.1 families are built by other specs: blocks, registry and modules by 001 (T039–T043a, T045, T046 (+ goldens T010d, parity T027d/e)), syntaxes
 and probe by 002 (T006a–T006c, T014a), aliases and pull gate by 004 (T005, T013a). Tasks here
 own the mechanism's cross-family parts, the Tier 1 gate, Tier 2 and the post-0.1 families. Every
 family follows the porting checklist (research R11): module → syntax → goldens → parity → alias +
@@ -19,14 +19,15 @@ fit → client smoke → cache cases → bench cells → locality.
 
 - [ ] T001 `scripts/check_family_diff.sh` (allowed-path list from the contract) and a CI job on PRs labelled `family:*`; self-test on a fixture diff (FR-019)
 - [ ] T002 [P] MF-1: full-KV vs ring state per family on 48/36/24 GB budgets (arithmetic now; allocation check on the target Mac when gpt-oss runs); record in research R3 (OQ-1 stays open until Gemma's turn)
-- [ ] T003 Reconcile in the change that lands each piece: 001 FR-025/contract (per-layer K/V widths, `None` layers), 002 FR-032/T006a (accepted-syntax set, OQ-7), 004 manifest (`tier`), ARCHITECTURE model table (measured numbers) and syntax list (Gemma), D015, site `docs/models.md`
+- [ ] T003 Reconcile in the change that lands each piece: 001 FR-025/contract (per-layer K/V widths, `None` layers), 004 manifest (`tier`, `syntax`, fit fields), ARCHITECTURE model table (measured numbers) and syntax list (Gemma), D015, site `docs/models.md`
 
 ## Phase 2: Foundational (blocks all stories)
 
 - [ ] T004 Contract conformance of 001's registry and modules (001 T040): `Family` methods per [contract](contracts/families.md), `StateLayout` per layer incl. differing K/V widths and `None`, `LoadError` set incl. `SyntaxMismatch`; review against the locality rule (needs 001 T039–T043)
 - [ ] T005 [P] `scripts/gen_tiny_models.py` (mlx-lm, fixed seeds; quantized, unquantized and MXFP4 variants; every block option a config enables) and `crates/mrun-engine/tests/families.rs`: greedy ids for 32 steps and CPU logits for every registry key (FR-017, SC-006)
 - [ ] T006 [P] MF-2: window slice vs both references (temporal-order substituted cache; `KVCache` + full-depth mask) on gpt-oss shapes: bit agreement and speed at 16K/64K; record in research R3 (with 001 T043a)
-- [ ] T007 Accepted-syntax sets in the 002 registry (`qwen3_moe` {QwenXml, Hermes}); probe test with a Qwen3-30B-A3B-Instruct-2507 template fixture loading as Hermes, and a mismatch fixture refused (FR-014; needs 002 T006a; OQ-7)
+- [ ] T007 Verify 002 T006a with a Qwen3-30B-A3B-Instruct-2507 fixture loading as Hermes and a mismatch fixture (owned by 002) (FR-014; OQ-7)
+- [ ] T007a Probe tool-placement check (FR-014): `tools_late` set for a Mistral Small 3.2 template fixture (`[AVAILABLE_TOOLS]` before the last user message) and clear for Ministral 3 and Devstral Small 2507 fixtures; `mrun doctor` and `mrun ps` show `template-tools-late`
 
 ## Phase 3: US1 + US2 + US3 — Tier 1 gate for the 0.1 families (P1) 🎯 MVP
 

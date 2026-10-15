@@ -16,7 +16,7 @@ description: "Tasks for 004 Models and CLI Experience"
 
 - [ ] T004 `crates/mrun/src/hub/mod.rs`: resolve path → alias → repo id; HF cache resolution (`HF_HUB_CACHE`, `HF_HOME`, `HF_ENDPOINT`); identity via `mrun_engine::identity` (001)
 - [ ] T005 [P] `hub/aliases.rs`: curated table (`qwen3.6` default, `qwen3-coder`, `qwen3-8b`) with pinned revisions and file hashes; `cargo xtask refresh-aliases`
-- [ ] T005a [P] Aliases `gpt-oss` and `devstral` (research R4): resolve the `[U]` repos (Devstral plain `-4bit` vs OptiQ; gpt-oss `-MXFP4-Q8` quantization block), pin revisions and hashes, record family per alias; default alias field set from 005 T012a
+- [ ] T005a [P] Aliases `gpt-oss` and `devstral` (research R4): resolve the `[U]` repos (Devstral plain `-4bit` vs OptiQ; gpt-oss `-MXFP4-Q8` quantization block), pin revisions and hashes, record family, syntax, tier and fit numbers per alias; default alias field set from 005 T012a
 - [ ] T006 [P] `hub/verify.rs` + `cli/verify.rs`: fast checks (size, mtime, inode) and full re-hash; test flipping a byte with preserved mtime is caught by `verify` only
 
 ## Phase 3: US1 — Zero to working agent (P1) 🎯 MVP

@@ -29,7 +29,7 @@ its module, a syntax entry if new, an alias and tests."
 - Q: What kind of state is MLA? → A: Positional. The compressed latent and the RoPE key are stored
   per token per layer and cut by offset like K/V.
 - Q: What does 010 own, given 001, 002 and 004 deliver the 0.1 families? → A: 001 delivers the
-  block options, registry and family modules of 0.1 (001 FR-023–FR-025, T039–T045), 002 the syntax
+  block options, registry and family modules of 0.1 (001 FR-023–FR-025, T039–T043a, T045, T046 (+ goldens T010d, parity T027d/e)), 002 the syntax
   registry, template probe and the 0.1 syntaxes (002 FR-032–FR-035), 004 the aliases and the pull
   gate (004 FR-002, FR-014). 010 owns the complete design they implement (family contract,
   per-layer state layout, tiers, porting checklist, locality rule), Tier 2, the Tier 1 gate across
@@ -188,8 +188,9 @@ Nemotron-H changes.
 
 ### Functional Requirements
 
-Ownership: for the 0.1 families these requirements are implemented by 001 (FR-001–FR-010, via
-001 FR-023–FR-025), 002 (FR-011–FR-015, via 002 FR-032–FR-035) and 004 (FR-016 aliases); 010's
+Ownership: 001 implements FR-002–FR-008 and FR-010 for the 0.1 block options (via 001
+FR-023–FR-025; uniform per-layer widths suffice at 0.1); FR-001's post-0.1 blocks, FR-005's
+per-layer `StateLayout`, FR-009 and FR-017–FR-019 are 010's. For the 0.1 families 002 (FR-011–FR-015, via 002 FR-032–FR-035) and 004 (FR-016 aliases); 010's
 own work is the post-0.1 parts, Tier 2, the locality check and the cross-family gates.
 
 **Family mechanism**
@@ -205,11 +206,12 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
 - **FR-002**: A family module MUST implement the family contract
   ([contracts/families.md](contracts/families.md)): parse and validate its config (rejecting
   unknown values with named reasons), map and sanitize weights, compose the layer stack from
-  blocks, declare per-layer state layout and kind, and name its default chat syntax. Family code
+  blocks, declare per-layer state layout and kind, and name its ordered set of accepted chat
+  syntaxes (FR-014). Family code
   MUST NOT leak outside its module (Principle V).
 - **FR-003**: A registry MUST map `(model_type, text_config.model_type?)` to a family module. An
   unregistered pair MUST be refused before reading weights (exit 3) with the supported
-  architectures and Tier 1 aliases listed.
+  architectures and Tier 1 aliases listed (message: 004 E034).
 - **FR-004**: Loading MUST check, before weights are read: registered architecture, supported
   quantization mode and bits for every path, tensor names and shapes expected by the module
   (after sanitize), and dimensions consistent with the config. Failures name the path or key.
@@ -263,7 +265,11 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
   A family declares an ordered set of accepted syntaxes; the probe's syntax is used when it is in
   the set; otherwise the load is refused naming the family, the accepted set and the detected
   syntax (002 FR-032). A template without tool support passes the probe only for families whose
-  set allows it (none at 0.1).
+  set allows it (none at 0.1). The probe also checks tool placement: a template that renders
+  tools after the first user message (e.g. Mistral Small 3.2 puts `[AVAILABLE_TOOLS]` before the
+  last user message) changes the prefix every turn and defeats caching; such a model loads, and
+  `mrun doctor` and `mrun ps` warn `template-tools-late`. Ministral 3 and Devstral Small 2507
+  templates put tools at the start (llama.cpp `models/templates`).
 - **FR-015**: History rendering MUST pass template options that keep earlier reasoning when the
   template offers them (Qwen3.6 preserve-thinking, GLM `clear_thinking=false`) and MUST map
   reasoning into the field each template reads (`reasoning_content`, Harmony `thinking`, Mistral
@@ -274,7 +280,9 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
 - **FR-016**: Tier 1 models MUST have a curated alias (004 FR-002 format) with pinned revision,
   hashes, license, family, syntax and fit numbers. 0.1 aliases (004 FR-002): `qwen3.6`,
   `qwen3-coder`, `gpt-oss`, `devstral`, `qwen3-8b`. After 0.1: `glm-4.7-flash`, `gemma4`,
-  `nemotron-3-nano` (each when its family passes its gates).
+  `nemotron-3-nano` (each when its family passes its gates). A 0.1 alias whose model fails a
+  Tier 1 gate (incl. SC-002, 5 of 5 client runs) ships with `tier: 2` in its manifest, is
+  labelled as Tier 2 by `mrun show` and `mrun ls`, and cannot be the default.
 - **FR-017**: Every registered architecture MUST have a tiny random-weight parity test against
   mlx-lm (CPU, Linux CI), covering every block option its config space enables.
 - **FR-018**: A family port MUST complete the porting checklist (tasks): module; syntax entry if
@@ -287,8 +295,8 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
 ### Key Entities
 
 - **Block**: A shared, parameterized layer component ported from mlx-lm.
-- **Family module**: Config mapping, sanitize, layer composition, state layout, default syntax.
-- **Registry entry**: `(model_type, text model_type?)` → family, tier, aliases.
+- **Family module**: Config mapping, sanitize, layer composition, state layout, accepted syntaxes.
+- **Registry entry**: `(model_type, text model_type?)` → family, tier, aliases, accepted syntaxes.
 - **State layout**: Per layer: kind, widths, window, bytes per token or per checkpoint.
 - **Chat syntax**: Streaming tool-call and reasoning parser plus history-rendering options.
 - **Template probe result**: Detected syntax, markers found, decision.
@@ -302,14 +310,16 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
   of its reference set (001 SC-001 definition: ≥ 20 prompts up to 8K tokens, 256 output tokens,
   same weights and chunk split). For sliding-window families the reference is mlx-lm with a
   temporal-order full-KV windowed cache substituted for `RotatingKVCache` in the reference process
-  (001 R16); stock mlx-lm must match token for token (OQ-2).
+  (001 R16); stock mlx-lm's token agreement is recorded (OQ-2); a disagreement is reported in
+  001 research R16 and does not fail SC-001.
 - **SC-002**: For every Tier 1 model, the 004 scripted read-edit-test task completes 5 of 5 runs in
   each of Claude Code, Codex and OpenCode (pinned versions).
 - **SC-003**: For every Tier 1 model, cache-on equals cache-off bit for bit (token ids and logits)
   at the same chunk split on ≥ 30 cases (003 SC-005); sliding-window families include divergences
   at p mod W ∈ {0, 1, W − 1} and p < W, p > 2W; hybrids include restores from each checkpoint kind.
 - **SC-004**: Each syntax passes 100% of its parser suite: every marker split at every byte
-  boundary, parallel calls, values containing the syntax's own closing markers, string values
+  boundary (text-matched markers) or token boundary (token-id markers), parallel calls where the
+  syntax allows them (not Harmony), values containing the syntax's own closing markers, string values
   `"null"`/`"true"` kept as strings, malformed and truncated calls, undeclared tools; and ≥ 10
   template golden fixtures per Tier 1 model render to Hugging Face's text and token ids (001
   SC-009; mistral-common for Devstral, OQ-3).
@@ -338,10 +348,10 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
   1024-window). Alternative: treat the window ring as position-bound state (≈ 200 MiB per
   checkpoint) under 003's checkpoint policy. Decide after MF-1; the decision for gpt-oss stands.
 - **OQ-2**: Does stock mlx-lm with `RotatingKVCache` agree token for token with the full-KV
-  reference on gpt-oss-20b (001 R16 requires it; resolved on device by 001 T043a)? If not, the
+  reference on gpt-oss-20b (recorded in 001 R16, not a gate; resolved on device by 001 T043a)? If not, the
   same question decides Gemma 4's reference.
-- **OQ-3** (decided 2026-10-15): the repo's `chat_template.jinja` renders prompts (constitution: the
-  model's own template); goldens compare it against mistral-common, and a mismatch keeps Devstral
+- **OQ-3** (decided 2026-10-15): the repo's `chat_template.jinja` renders prompts (ARCHITECTURE, Models: the
+  model's own Jinja template renders prompts); goldens compare it against mistral-common, and a mismatch keeps Devstral
   at Tier 2 until the template is fixed upstream or pinned to a corrected revision.
 - **OQ-4** (decided 2026-10-15): `strftime_now` returns the date the server started, so the prompt
   stays stable for the server's lifetime; restarting picks up the new date. Documented as a

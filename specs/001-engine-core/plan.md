@@ -43,8 +43,9 @@ conformance on real weights, exactness of moves/checkpoints, bench cells
 ≤ 300 ms p95 at 16K, 64K and max depth; first token ≤ 15 s cold for 8B
 **Constraints**: Budget by construction (III); exact greedy parity (II); no network; input caps
 **Scale/Scope**: 5 families (one model each), 1 live sequence; capacity on 48 GB ≈ 262K (Qwen3.6,
-max position), ≈ 105–120K (Qwen3-Coder), 131,072 (gpt-oss-20b, max position; ≈ 13 GiB of KV
-would allow more), ≈ 85K (Devstral Small 2, 160 KiB/token), 40,960 (Qwen3-8B, max position)
+max position), ≈ 105–120K (Qwen3-Coder), 131,072 (gpt-oss-20b, max position; ≈ 14.7 GiB of KV
+would allow > 300K (capped at 131K)), ≈ 78K (Devstral Small 2, 160 KiB/token), 40,960 (Qwen3-8B,
+max position)
 
 ## Constitution Check
 

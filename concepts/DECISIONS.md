@@ -46,8 +46,9 @@ defaults to one sixth of physical memory, between 2 and 8 GiB (8 GiB on a 48 GB 
 
 - **Open architecture.** mrun supports model *families*, not one model. A family is a small module
   that composes shared blocks (full GQA, sliding-window with sinks and MLA attention; Gated
-  DeltaNet and later Mamba2; dense and mixture-of-experts feed-forward), plus a tool-call and
-  reasoning syntax from a registry (Hermes JSON, Qwen XML, Harmony, Mistral, GLM XML). Each module
+  DeltaNet and later Mamba2; dense and mixture-of-experts feed-forward), plus an ordered set of
+  accepted tool-call and reasoning syntaxes from a registry (Hermes JSON, Qwen XML, Harmony,
+  Mistral, GLM XML); the template probe at load picks the first that matches. Each module
   is a port of the mlx-lm reference with a parity test. Unknown architectures are refused with the
   list of supported families. No plugin system: adding a family is one module and one test.
 - **Release 0.1** covers every state kind and the most used tool formats: Qwen3.6-35B-A3B (hybrid
@@ -58,7 +59,9 @@ defaults to one sixth of physical memory, between 2 and 8 GiB (8 GiB on a 48 GB 
 - **After 0.1** (spec 010): GLM-4.7-Flash (MLA), Gemma 4 (sliding window + global), Nemotron-H
   (Mamba2 hybrid), then families by demand.
 - **Default**: whichever 0.1 model wins the agent suite of `mrun bench` on the M4 Pro (task in 005);
-  Qwen3.6 is the expected winner.
+  Qwen3.6 is the expected winner. A 0.1 alias whose model fails a Tier 1 gate (incl. 010 SC-002,
+  5 of 5 client runs) ships with `tier: 2` in its manifest, is labelled by `mrun show`/`ls`, and
+  cannot be the default.
 
 ## D017: Prefix store
 

@@ -8,6 +8,8 @@
 | text_model_type | `Option<&'static str>` | `text_config.model_type` when the config nests the text model (`mistral3` → `ministral3`, `gemma4` → `gemma4_text`) |
 | family | `&'static dyn Family` | the module (contract) |
 | release | `Release` | `V0_1` \| `After0_1`; only families whose module ships are in the table |
+| tier | `1 \| 2` | highest tier of any model of this architecture; per-model tier is in the 004 manifest |
+| aliases | `&'static [&'static str]` | Tier 1 aliases of this architecture (listed in 004 E034) |
 
 Lookup is exact on the pair; a nested config whose text type is unregistered is refused
 (`UnsupportedArchitecture { model_type, text_model_type, supported }`).
@@ -45,7 +47,7 @@ validated; every value the module uses is typed. Shared fields every module fill
 - `RopeSpec = Default { theta, dims } | Linear { factor } | Yarn { factor, orig_max, beta_fast,
   beta_slow, mscale, mscale_all_dim } | Proportional { theta, rotated_dims, factor }`
 
-## StateLayout (per layer; replaces 001 `ModelInfo.kv_heads/head_dim`)
+## StateLayout (per layer; replaces 001 `ModelInfo.kv_heads/head_dim`) (post-0.1; at 0.1 001's `layer_kinds` + `kv_bytes_per_token`)
 
 | Variant | Fields | Bytes |
 | --- | --- | --- |
@@ -53,7 +55,7 @@ validated; every value the module uses is typed. Shared fields every module fill
 | `PositionBound` | arrays (`conv [k−1, conv_dim]`, `state [..]`) with dtypes | per checkpoint: sum of arrays |
 | `None` | — | 0 (shared-KV and FFN-only layers) |
 
-`ModelInfo` gains `family: &'static str`, `syntax: SyntaxId`, `state: Vec<StateLayout>`,
+`ModelInfo` (which has `family: String` since 001 T040a) gains `syntax: SyntaxId`, `state: Vec<StateLayout>`,
 `kv_bytes_per_token = Σ Positional`, `recurrent_bytes = Σ PositionBound`. `is_hybrid()` = any
 `PositionBound`. 003 depends only on these sums and `is_hybrid()`.
 
@@ -92,7 +94,7 @@ the file → `UnsupportedQuantization { path, mode }`.
 
 ## ProbeResult
 
-`{ detected: Option<SyntaxId>, accepted: &[SyntaxId], used: SyntaxId }`: shown by `mrun show` and
+`{ detected: Option<SyntaxId>, accepted: &[SyntaxId], used: SyntaxId, tools_late: bool }`: shown by `mrun show` and
 `/mrun/status`. `detected ∉ accepted` ⇒ `SyntaxMismatch` load error. Accepted sets at 0.1:
 `qwen3` {Hermes}, `qwen3_moe` {QwenXml, Hermes}, `qwen3_5_moe` {QwenXml}, `gpt_oss` {Harmony},
 `mistral` {Mistral}; after 0.1: `glm4_moe_lite` {GlmXml}, `gemma4` {Gemma}, `nemotron_h`
@@ -102,7 +104,8 @@ the file → `UnsupportedQuantization { path, mode }`.
 
 Adds `family`, `syntax`, `tier: 1`, `state_bytes_per_token`, `checkpoint_bytes`,
 `capacity_48gb`, `parity_ref` (path of the stored reference outputs). Tier 2 models get a manifest
-on pull with `tier: 2` and no parity reference.
+on pull with `tier: 2` and no parity reference; a 0.1 alias that misses a Tier 1 gate keeps its
+alias with `tier: 2` (FR-016).
 
 ## ParityFixture
 

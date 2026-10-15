@@ -126,9 +126,9 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
 - **Worked example (M4 Pro 48 GB)**: reserve 8 GiB, budget = 36 − 8 = 28 GiB.
   Qwen3.6 4-bit: weights ≈ 20 GiB, scratch ≈ 1–2 GiB → ≈ 6–7 GiB state → capped at max position
   262,144 (≈ 5 GiB of attention state + 0.25 GiB recurrent). Qwen3-Coder: ≈ 16 GiB weights →
-  ≈ 10–11 GiB state ≈ 105–120K tokens. gpt-oss-20b: ≈ 12–13 GiB weights → ≈ 13 GiB state → capped
-  at max position 131,072 (≈ 6 GiB of KV). Devstral Small 2: ≈ 13 GiB weights → ≈ 13 GiB state ≈
-  85K tokens. Qwen3-8B: capped at 40,960. (gpt-oss and Devstral weights [U] until pinned in 004.)
+  ≈ 10–11 GiB state ≈ 105–120K tokens. gpt-oss-20b: ≈ 11.3 GiB weights → ≈ 14.7 GiB state (> 300K
+  tokens) → capped at max position 131,072 (≈ 6 GiB of KV). Devstral Small 2: ≈ 14 GiB weights →
+  ≈ 12.2 GiB state ≈ 78K tokens. Qwen3-8B: capped at 40,960. (gpt-oss and Devstral weights [U] until pinned in 004.)
 
 ## R7: Forward/sample split, pipelining and greedy parity
 
@@ -176,7 +176,8 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
   weights' sha256; small files are hashed; other paths cached in `~/.mrun/identity.toml` by
   (canonical path, size, mtime, inode). 004 reuses this function.
 - **EOS**: union of `config.json` `eos_token_id`, `generation_config.json` `eos_token_id` (int or
-  list) and the tokenizer's EOS token (`tokenizer_config.json` / `special_tokens_map.json`). mlx-lm
+  list) and the tokenizer's EOS token (`tokenizer_config.json` / `special_tokens_map.json`), plus
+  the family's declared end tokens (010 `eos_extra`, e.g. Harmony `<|call|>`, `<|return|>`). mlx-lm
   lets generation_config replace config before adding the tokenizer EOS; the union is a superset,
   and a test checks it equals mlx-lm's set for every 0.1 model.
 
@@ -279,10 +280,12 @@ mlx-lm `ba8a08f` source (`models/qwen3.py`, `qwen3_moe.py`, `qwen3_next.py`, `qw
   differ in the last bits. Decision: the reference script
   generates gpt_oss outputs with a temporal-order windowed cache (full KV kept, window slice as
   above) substituted for `RotatingKVCache` in the reference process only (no mlx-lm source patch),
-  and SC-001 compares against that; stock mlx-lm is also run and must match token for token on the
-  reference set (logit bits not required). Resolved on device by the gpt_oss parity task.
+  and SC-001 compares against that; stock mlx-lm is also run and its token agreement on the
+  reference set is recorded here (logit bits not required; a disagreement does not fail SC-001,
+  010 OQ-2). Resolved on device by the gpt_oss parity task.
 - **Tokenizer and template**: o200k Harmony vocabulary (201,088) from `tokenizer.json`; template
-  from the repo; syntax Harmony (002). EOS union must include `<|return|>` and `<|call|>` (R10;
+  from the repo; syntax Harmony (002). EOS = union plus the family's declared end tokens (010
+  `eos_extra`): `<|return|>` and `<|call|>` (R10;
   checked against mlx-lm's set).
 
 ## R17: `mistral` port (Devstral Small 2 24B)

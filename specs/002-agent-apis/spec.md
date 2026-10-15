@@ -28,7 +28,7 @@
 
 ### Session 2026-10-15 (open model architecture, D015)
 
-- Q: How are tool calls and reasoning parsed across model families? → A: Through a syntax registry: one streaming parser per syntax (Hermes JSON, Qwen XML, Harmony, Mistral `[TOOL_CALLS]`; GLM XML with 010). The family names its syntax; a template probe at load confirms it. Every FR-004 rule applies to every syntax.
+- Q: How are tool calls and reasoning parsed across model families? → A: Through a syntax registry: one streaming parser per syntax (Hermes JSON, Qwen XML, Harmony, Mistral `[TOOL_CALLS]`; GLM XML with 010). The family names an ordered set of accepted syntaxes; the template probe at load picks the first that matches (FR-032). Every FR-004 rule applies to every syntax.
 - Q: How is thinking controlled on gpt-oss, which always reasons? → A: By reasoning effort (low/medium/high) mapped from Anthropic `thinking` and OpenAI `reasoning_effort` (research §3b); "off" means `low`. Its reasoning is always returned in the API's reasoning field.
 - Q: Models without a thinking mode (Qwen3-Coder, Devstral Small 2)? → A: Served without thinking, with a `thinking-unsupported` warning when the request asked for it.
 
@@ -296,8 +296,8 @@ timeouts and that the next request runs normally.
 - **FR-032**: Tool-call and reasoning parsing MUST go through a syntax registry
   (`chat/syntax/`): one streaming parser per syntax. A family (001 FR-023) names an ordered set of
   accepted syntaxes; a template probe at load picks the first that matches (so `qwen3_moe` repos with
-  Hermes or Qwen XML templates both load); no match MUST refuse the load naming the family and the
-  template's detected syntax. 0.1 syntaxes: Hermes JSON (Qwen3), Qwen XML (Qwen3-Coder, Qwen3.6),
+  Hermes or Qwen XML templates both load); no match MUST refuse the load naming the family, its
+  accepted syntaxes and the template's detected syntax. 0.1 syntaxes: Hermes JSON (Qwen3), Qwen XML (Qwen3-Coder, Qwen3.6),
   Harmony (gpt-oss), Mistral `[TOOL_CALLS]` (Devstral Small 2). No syntax-specific logic outside
   its parser and its registry entry (constitution V).
 - **FR-033**: Harmony MUST map `analysis` to reasoning, `final` and recipient-less `commentary` to

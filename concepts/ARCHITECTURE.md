@@ -11,7 +11,8 @@ One binary, two crates plus a sys crate:
 crates/
 ├── mlx-sys/     # bindgen over vendored mlx-c v0.7.0 + MLX v0.32.4 (cmake); checked-in bindings
 ├── mrun-engine/ # Engine trait + identity + budget (no MLX); behind feature `mlx`: safe MLX layer,
-│                # model graphs (qwen3, qwen3_moe, qwen3_5_moe hybrid), sequence state, sampler,
+│                # block library + family modules (qwen3, qwen3_moe, qwen3_5_moe, gpt_oss, mistral),
+│                # sequence state, sampler,
 │                # loader, scratch probe
 └── mrun/        # the binary: cli, config, hub, chat (tokenizer, template, tool parsing,
                  # constraints), runtime (worker, queue, admission), cache (prefix cache),
@@ -35,8 +36,9 @@ architecture, each small and tested on its own:
    Modules are ports of the mlx-lm reference and pass a parity test against it.
 2. **A chat syntax** (`mrun/src/chat/syntax/`): the model's own Jinja template renders prompts; a
    registry of tool-call and reasoning parsers covers the formats families use (Hermes JSON in
-   `<tool_call>`, Qwen XML, OpenAI Harmony channels, Mistral `[TOOL_CALLS]`, GLM XML). A family
-   names its syntax; a template probe at load confirms it.
+   `<tool_call>`, Qwen XML, OpenAI Harmony channels, Mistral `[TOOL_CALLS]`, GLM XML). The family
+   names an ordered set of accepted syntaxes; the template probe at load picks the first that
+   matches (002 FR-032).
 3. **Its state kinds**, which decide how the prefix cache restores it (below).
 
 An unknown `model_type` is refused at load with the list of supported families. Adding a family is

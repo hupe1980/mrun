@@ -14,7 +14,7 @@ sprint ([competitors](research/competitors-2026-10.md), [arxiv-sota](research/ar
    have addressed, so 8-bit KV is dropped.
 2. **Model support must be open.** Strong coding models come from several families with different
    attention (sliding window, MLA, linear) and tool formats (Harmony, Mistral, GLM). The engine is a
-   block library with small family modules and a syntax registry; 0.1 ships four families to prove
+   block library with small family modules and a syntax registry; 0.1 ships five families to prove
    it (spec 010 tracks the family set).
 3. **Branching is the real cache problem**, not single-conversation reuse. Subagents, title
    requests and retries must not destroy the main conversation; state moves instead of being
@@ -28,10 +28,10 @@ sprint ([competitors](research/competitors-2026-10.md), [arxiv-sota](research/ar
 | Milestone | Outcome | Specs | Gate |
 | --- | --- | --- | --- |
 | **M0 Foundation** | MLX binding spike on a Mac: load, quantized matmul, gather-qmm, SDPA, RoPE, a custom Metal kernel, memory APIs | 001 phase 1 | Go/no-go within one week |
-| **M1 Engine** | `mrun run` streams the 0.1 families (Qwen3.6, Qwen3-Coder, gpt-oss, Devstral, Qwen3-8B) built from the shared block library, with the memory budget, checkpoints and per-layer cancellation | 001, 010 | 001 SC-001…SC-009 (SC-004 max-depth bucket recorded; at risk, 001 R5) |
-| **M2 Agent APIs** | Claude Code, Codex and OpenCode complete real tool loops, including MCP tools | 002 | 002 SC-001…SC-006; client matrix green |
-| **M3 Prefix cache** | Exact reuse across turns and branches for attention and hybrid models, with miss reports | 003 | 003 SC-001…SC-006; SC-001 synthetic part gates M3; the trace part is reported with M5 |
-| **M4 Models & DX** | `pull`, `launch`, `connect`, `doctor`, `ps`; default model confirmed | 004 | 004 SC-001…SC-005 |
+| **M1 Engine** | `mrun run` streams the 0.1 families (Qwen3.6, Qwen3-Coder, gpt-oss, Devstral, Qwen3-8B) built from the shared block library, with the memory budget, checkpoints and per-layer cancellation | 001, 010 | 001 SC-001…SC-010 (SC-004 max-depth bucket recorded; at risk, 001 R5); 010 SC-001, SC-004, SC-006, SC-008 for the 0.1 families |
+| **M2 Agent APIs** | Claude Code, Codex and OpenCode complete real tool loops, including MCP tools | 002 | 002 SC-001…SC-007; 010 SC-002 per 0.1 alias (misses ship as tier 2); client matrix green |
+| **M3 Prefix cache** | Exact reuse across turns and branches for attention and hybrid models, with miss reports | 003 | 003 SC-001…SC-007; 010 SC-003; SC-001 synthetic part gates M3; the trace part is reported with M5 |
+| **M4 Models & DX** | `pull`, `launch`, `connect`, `doctor`, `ps`; default model confirmed | 004 | 004 SC-001…SC-006; 010 SC-002 per 0.1 alias (misses ship as tier 2) |
 | **M5 Bench** | `mrun bench` with in-order trace replay against llama.cpp, Ollama, oMLX, mlx-lm and SGLang-MLX | 005 | First dated public comparison, losing cells included |
 | **M6 Distribution** | Homebrew formula, signed and notarized binary, launchd service, `/metrics` | 008 | Fresh Mac: `brew install` → `mrun launch claude-code` works |
 

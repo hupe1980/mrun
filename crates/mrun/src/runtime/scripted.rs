@@ -7,11 +7,12 @@
 //! checkpoint or segment that does not match the live sequence is detected on the next use.
 
 use mrun_engine::{
-    Architecture, CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind,
-    MAX_PLAN_CHECKPOINTS, MemoryBudget, ModelInfo, PrefillPlan, Prefilled, Sampling, Segment,
-    SegmentId, Step, TokenMask,
+    CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind, MAX_PLAN_CHECKPOINTS,
+    MemoryBudget, ModelInfo, PrefillPlan, Prefilled, Sampling, Segment, SegmentId, Step, TokenMask,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// End-of-sequence token used by [`ScriptedEngine`].
 pub const SCRIPT_EOS: u32 = u32::MAX - 1;
@@ -67,6 +68,8 @@ pub struct ScriptedEngine {
     /// Requests a yield once this many prefill layers have run in total (one-shot).
     pub yield_after_layers: Option<u64>,
     pub panic_on_forward: bool,
+    /// Incremented by every `reset_all` call (shared so tests can observe the worker thread).
+    pub reset_all_calls: Arc<AtomicUsize>,
     pub layers_run: u64,
     /// Every token fed by `prefill`, `forward` or a pipelined step, in order.
     pub processed: Vec<u32>,
@@ -77,13 +80,18 @@ pub struct ScriptedEngine {
 impl ScriptedEngine {
     /// Attention-only model with four layers; `script` is sampled in order, then [`SCRIPT_EOS`].
     pub fn new(script: Vec<u32>, capacity_tokens: u32) -> Self {
-        Self::build(script, capacity_tokens, vec![LayerKind::Attention; 4], 0)
+        Self::build(
+            script,
+            capacity_tokens,
+            vec![LayerKind::FullAttention; 4],
+            0,
+        )
     }
 
     /// Hybrid model (three linear layers, one attention layer) with `recurrent_bytes` of state.
     pub fn new_hybrid(script: Vec<u32>, capacity_tokens: u32, recurrent_bytes: u64) -> Self {
         let mut kinds = vec![LayerKind::Linear; 3];
-        kinds.push(LayerKind::Attention);
+        kinds.push(LayerKind::FullAttention);
         Self::build(script, capacity_tokens, kinds, recurrent_bytes)
     }
 
@@ -91,11 +99,12 @@ impl ScriptedEngine {
         Self {
             info: ModelInfo {
                 identity: "scripted".into(),
-                architecture: if recurrent > 0 {
-                    Architecture::Qwen35Moe
+                family: if recurrent > 0 {
+                    "qwen3_5_moe"
                 } else {
-                    Architecture::Qwen3
-                },
+                    "qwen3"
+                }
+                .into(),
                 layer_kinds: kinds,
                 kv_heads: 1,
                 head_dim: 1,
@@ -128,6 +137,7 @@ impl ScriptedEngine {
             cancel_after_layers: None,
             yield_after_layers: None,
             panic_on_forward: false,
+            reset_all_calls: Arc::default(),
             layers_run: 0,
             processed: Vec::new(),
             chunks: Vec::new(),
@@ -362,9 +372,11 @@ impl Engine for ScriptedEngine {
         let end = start + tokens.len() as u32;
         let planned = plan.checkpoints_in(start, end).count();
         if planned > MAX_PLAN_CHECKPOINTS {
-            return Err(EngineError::Backend(format!(
-                "{planned} planned checkpoints; at most {MAX_PLAN_CHECKPOINTS} per call"
-            )));
+            return Err(EngineError::InvalidRange {
+                start,
+                end,
+                len: start,
+            });
         }
         self.grow(end, planned as u64 * self.info.recurrent_bytes)?;
 
@@ -624,6 +636,13 @@ impl Engine for ScriptedEngine {
         self.grown = false;
         self.zero_recurrent();
     }
+
+    fn reset_all(&mut self) {
+        self.reset();
+        self.checkpoints.clear();
+        self.segments.clear();
+        self.reset_all_calls.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -873,7 +892,14 @@ mod tests {
         let error = engine
             .prefill(&seq(0..8), &plan, &CancelToken::new(), &mut |_| {})
             .unwrap_err();
-        assert!(matches!(error, EngineError::Backend(_)));
+        assert_eq!(
+            error,
+            EngineError::InvalidRange {
+                start: 0,
+                end: 8,
+                len: 0
+            }
+        );
         assert_eq!(engine.active_len(), 0);
     }
 
@@ -957,6 +983,25 @@ mod tests {
         assert_eq!(engine.active_len(), 0);
         assert_eq!(engine.allocated(), RB);
         assert_eq!(engine.checkpoint_count(), 1);
+        prefill(&mut engine, &[1]);
+    }
+
+    #[test]
+    fn reset_all_also_drops_segments_and_checkpoints() {
+        let mut engine = hybrid(1_000);
+        engine.reserve(0, 1_000).unwrap();
+        prefill(&mut engine, &seq(0..8));
+        let checkpoint = engine.checkpoint().unwrap();
+        let tail = engine.split_off(4, true).unwrap();
+        engine.reset_all();
+        assert_eq!(engine.active_len(), 0);
+        assert_eq!(engine.allocated(), 0);
+        assert_eq!(engine.checkpoint_count(), 0);
+        assert_eq!(engine.segment_range(tail.id), None);
+        assert_eq!(
+            engine.restore_checkpoint(checkpoint.id),
+            Err(EngineError::UnknownCheckpoint(checkpoint.id))
+        );
         prefill(&mut engine, &[1]);
     }
 }

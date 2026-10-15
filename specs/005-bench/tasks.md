@@ -33,7 +33,7 @@ description: "Tasks for 005 Benchmark Harness"
 ## Phase 5: US3 — Speed never hides wrong output (P2)
 
 - [ ] T013 *Removed (quality suite moved to Later).*
-- [ ] T012a [US2] Default-model decision: Qwen3.6-35B-A3B vs Qwen3-Coder-30B-A3B agent-suite cells on the M4 Pro (both mrun); record the outcome in concepts D015 and the 004 alias default before release
+- [ ] T012a [US2] Default-model decision: agent-suite cells for every 0.1 alias (Qwen3.6, Qwen3-Coder, gpt-oss-20b, Devstral Small 2) on the M4 Pro (all mrun; a `tier: 2` alias cannot be the default); record the outcome in concepts D015 and the 004 alias default before release
 - [ ] T014 [US3] Regression mode `--baseline` (exit 7) on median speed and malformed-tool-call/early-EOS counts; tests: injected 15% slowdown detected against a 10% threshold, 0 false alarms on 5 unchanged runs (SC-004); fake-server test that a malformed tool call and early EOS are counted
 
 ## Phase 6: Polish

@@ -87,10 +87,13 @@ pub trait Engine {
 
     /// Empty the live state and release its allocation (segments and checkpoints stay).
     fn reset(&mut self);
+    /// `reset` plus drop every stored segment and checkpoint (worker recovery after a panic).
+    fn reset_all(&mut self);
 }
 
 pub fn chunk_len(depth: u32) -> u32; // clamp(2048 * 16384 / max(depth, 1), 128, 2048)
-/// Per prefill call. Stored checkpoints beyond the live state + 3 are evictable cache (003).
+/// Per prefill call; more planned checkpoints in one call → Err(InvalidRange{start, end, len})
+/// with nothing changed. Stored checkpoints beyond the live state + 3 are evictable cache (003).
 pub const MAX_PLAN_CHECKPOINTS: usize = 3;
 
 pub struct PrefillPlan<'a> { pub boundaries: &'a [u32], pub checkpoints: &'a [u32] } // absolute, ascending
@@ -180,7 +183,7 @@ Events go through `flume::bounded(64)`; the worker sends with a stall timeout, t
 `Token`/`Progress` to that consumer and cancels. The event sender is dropped at finish and
 `Finished` is sent on its own one-slot channel with `try_send` (never blocks, never lost); the
 consumer drains events, then reads `Finished`. The worker wraps each request in `catch_unwind`;
-a panic yields `Finished{Error}` and `reset()`.
+a panic yields `Finished{Error}` and `reset_all()` (the session is cleared with it).
 
 ## CLI: `mrun run`
 
@@ -191,8 +194,10 @@ mrun run <model> [--prompt TEXT] [--system TEXT] [--temperature F] [--top-p F] [
 ```
 
 - `<model>`: local path or HF repo id; aliases arrive with 004. An unsupported `model_type` exits
-  3 with `unsupported architecture '<type>'; supported families: qwen3_5_moe, qwen3_moe, gpt_oss,
-  mistral, qwen3`.
+  3 (message: 004 E034).
+- `--think` per family (002 FR-035): Qwen3 and Qwen3.6 set `enable_thinking`; gpt-oss sets
+  reasoning effort `high` (default `low`); Qwen3-Coder and Devstral print `thinking-unsupported`
+  and run without thinking.
 - Interactive REPL without `--prompt`; `/clear`, `/info`, `/exit`.
 - Stats line per answer: `42 tok · 1.2 s TTFT · 512 tok/s prefill · 61 tok/s decode · 3,104 cached`.
 - `--info`: budget breakdown (FR-006/008) incl. current free memory, then exit.

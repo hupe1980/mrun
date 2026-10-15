@@ -151,7 +151,7 @@ estimate.
   `:277-311`]; GLM drops earlier reasoning unless `clear_thinking=false`; Qwen XML and GLM
   re-serialize non-string arguments with `tojson`.
 - **Template functions**: gpt-oss calls `strftime_now("%Y-%m-%d")` and reads `reasoning_effort`
-  [V template `:201-206`]; minijinja gets `strftime_now` (local date, OQ-4).
+  [V template `:201-206`]; minijinja gets `strftime_now` (server start date, OQ-4).
 
 ## R8: Template probe
 
@@ -161,7 +161,10 @@ estimate.
   `<function=mrun_probe>`, `to=functions.mrun_probe`, `[TOOL_CALLS]mrun_probe[ARGS]`,
   `<tool_call>mrun_probe<arg_key>`, `<|tool_call>call:mrun_probe{`), and check that its markers
   are added tokens. Rendering errors (e.g. templates that `raise_exception` on tools) count as no
-  match.
+  match. The probe also records where tools render: after the first user message (Mistral Small
+  3.2 puts `[AVAILABLE_TOOLS]` before the last user message) the prefix changes every turn and
+  caching is defeated, so `mrun doctor`/`mrun ps` warn `template-tools-late`; Ministral 3 and
+  Devstral Small 2507 put tools at the start [V llama.cpp `models/templates`].
 - **Rationale**: mlx-lm infers from template substrings (`_infer_tool_parser` [V
   `tokenizer_utils.py:619-660`]), which can match text in comments; rendering tests what the model
   will see. Same `model_type` with different syntaxes (Qwen3-30B-A3B-Instruct-2507 Hermes vs
@@ -193,7 +196,7 @@ estimate.
 
 ## R11: Porting checklist (one family)
 
-1. Module (config, sanitize, build, state layout, default syntax) + tiny-model parity.
+1. Module (config, sanitize, build, state layout, accepted syntaxes) + tiny-model parity.
 2. Syntax entry if new + parser suite + probe signature.
 3. Template goldens (≥ 10 fixtures; HF `apply_chat_template` or mistral-common).
 4. Real-weight parity (`--check`) on the pinned repo.

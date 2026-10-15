@@ -28,7 +28,7 @@
 
 ### Session 2026-10-15 (open model architecture, D015)
 
-- Q: One model or many? → A: An open set of **families**. A family module maps `config.json` and weight names onto a shared block library (attention: full GQA, sliding window with optional sinks; Gated DeltaNet; dense SwiGLU and MoE feed-forward; norms; RoPE variants) and composes the layer stack; it is a port of the mlx-lm reference with a parity test. Block library, family registry, chat-syntax registry and the post-0.1 families are spec 010; 001 delivers the blocks and families of release 0.1.
+- Q: One model or many? → A: An open set of **families**. A family module maps `config.json` and weight names onto a shared block library (attention: full GQA, sliding window with optional sinks; Gated DeltaNet; dense SwiGLU and MoE feed-forward; norms; RoPE variants) and composes the layer stack; it is a port of the mlx-lm reference with a parity test. The design of the block library and registry (contract, tiers, locality) and the post-0.1 families are spec 010; 001 delivers the 0.1 blocks, registry and family modules; 002 owns the syntax registry.
 - Q: Which families ship in 0.1? → A: `qwen3_5_moe` (Qwen3.6-35B-A3B, default candidate), `qwen3_moe` (Qwen3-Coder-30B-A3B), `gpt_oss` (gpt-oss-20b, MXFP4), `mistral` (Devstral Small 2 24B, dense) and `qwen3` (Qwen3-8B, correctness reference).
 - Q: How are sliding-window layers (gpt-oss) stored? → A: Full KV is kept and the window is applied when attending, so they are positional state like any attention layer: trimmable and movable at any position. A rotating buffer would make earlier positions unrecoverable; the cost is small (gpt-oss: 12 of 24 layers, 24 KiB per token).
 - Q: What happens with an unknown `model_type`? → A: Refused at load, before weights are read, with the list of supported families.
@@ -200,12 +200,13 @@ uninterrupted run that used the same chunk split.
   `model_type` `mistral3` with text config `ministral3`: dense full attention, YaRN RoPE with
   position-scaled queries; vision tower and projector ignored) and `qwen3` (Qwen3-8B, dense
   reference). An unknown `model_type` MUST be refused before weights are read, naming it and
-  listing the supported families; unsupported quantization modes, layouts or tensor names MUST be
+  listing the supported families (message: 004 E034); unsupported quantization modes, layouts or tensor names MUST be
   rejected with a named reason.
 - **FR-003**: Every loaded model MUST have a content identity over all files that determine output:
   weights, `config.json`, `generation_config.json`, `tokenizer.json`, `tokenizer_config.json`,
   `special_tokens_map.json`, `chat_template.jinja`. End-of-sequence tokens MUST be the union of the
-  EOS ids in `config.json`, `generation_config.json` and the tokenizer's EOS token. A changed
+  EOS ids in `config.json`, `generation_config.json` and the tokenizer's EOS token, plus the
+  family's declared end tokens (010 `eos_extra`, e.g. Harmony `<|call|>`, `<|return|>`). A changed
   identity for a known path MUST be reported at load.
 - **FR-004**: The engine MUST keep the conversation's sequence state between turns so a follow-up
   processes only new tokens. The runtime MUST track committed tokens (prompt + emitted output) and,
@@ -272,7 +273,8 @@ uninterrupted run that used the same chunk split.
   one layer at a time, freeing the source as it goes, so no state is held twice.
 - **FR-021**: Chat templates MUST render as Hugging Face does: `trim_blocks` and `lstrip_blocks`,
   a `tojson` equal to Python `json.dumps` (no HTML escaping, `", "`/`": "` separators, `indent`
-  supported, non-ASCII kept), Python string methods and `raise_exception`.
+  supported, non-ASCII kept), Python string methods and `raise_exception`, except
+  `strftime_now`, which returns the server start date (010 OQ-4).
 - **FR-022**: The loaded model MUST stay resident; it is never unloaded on an idle timer.
 - **FR-023**: Each family MUST be one module that maps its `config.json` and weight names onto the
   shared block library and composes the layer stack; family-specific logic MUST NOT appear outside
@@ -343,7 +345,7 @@ uninterrupted run that used the same chunk split.
   state capacity plus one layer.
 - **SC-009**: 100% of template golden fixtures (≥ 10 per 0.1 family, including tools and tool
   results) render to the same text and token IDs as Hugging Face `apply_chat_template` at the
-  pinned version.
+  pinned version (Devstral Small 2: compared against mistral-common per 010 OQ-3).
 - **SC-010**: 100% of load-refusal fixtures (unknown `model_type`, unknown wrapped
   `text_config.model_type`, unsupported quantization mode, unknown tensor name) are refused before
   weights are read, and the unknown-architecture message lists every supported family.

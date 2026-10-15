@@ -1,21 +1,17 @@
 //! The engine contract: primitives the runtime drives. No MLX types appear here.
 
-use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Model families the engine can run.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Architecture {
-    Qwen3,
-    Qwen3Moe,
-    Qwen35Moe,
-}
-
-/// Kind of a decoder layer: attention (K/V cut at any position) or linear (recurrent state).
+/// Kind of a decoder layer. Attention layers (full or sliding-window) hold positional K/V that
+/// can be cut at any position; linear layers hold position-bound recurrent state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LayerKind {
-    Attention,
+    FullAttention,
+    /// Attends to the last `window` positions of the full K/V.
+    SlidingAttention {
+        window: u32,
+    },
     Linear,
 }
 
@@ -24,7 +20,8 @@ pub enum LayerKind {
 pub struct ModelInfo {
     /// Content identity (see [`crate::identity`]).
     pub identity: String,
-    pub architecture: Architecture,
+    /// Registry family name (the checkpoint's `model_type`, e.g. `qwen3_5_moe`).
+    pub family: String,
     pub layer_kinds: Vec<LayerKind>,
     pub kv_heads: u32,
     pub head_dim: u32,
@@ -185,7 +182,8 @@ pub fn chunk_len(depth: u32) -> u32 {
 pub const MAX_PLAN_CHECKPOINTS: usize = 3;
 
 /// Absolute, ascending positions where prefill chunks must end; recurrent state is also
-/// checkpointed at each `checkpoints` position.
+/// checkpointed at each `checkpoints` position. More than [`MAX_PLAN_CHECKPOINTS`] in one call
+/// is refused with `InvalidRange`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PrefillPlan<'a> {
     pub boundaries: &'a [u32],
@@ -359,16 +357,8 @@ pub trait Engine {
 
     /// Empties the live state and releases its allocation; segments and checkpoints stay.
     fn reset(&mut self);
-}
-
-impl fmt::Display for Architecture {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Qwen3 => "qwen3",
-            Self::Qwen3Moe => "qwen3_moe",
-            Self::Qwen35Moe => "qwen3_5_moe",
-        })
-    }
+    /// `reset` plus dropping every stored segment and checkpoint (recovery after a panic).
+    fn reset_all(&mut self);
 }
 
 #[cfg(test)]
@@ -404,6 +394,29 @@ mod tests {
         assert_eq!(plan.chunk_end(2348, 4000), 4000);
         assert_eq!(plan.checkpoints_in(0, 299).count(), 0);
         assert_eq!(plan.checkpoints_in(0, 300).collect::<Vec<_>>(), [300]);
+    }
+
+    #[test]
+    fn only_linear_layers_make_a_model_hybrid() {
+        let mut info = ModelInfo {
+            identity: "test".into(),
+            family: "gpt_oss".into(),
+            layer_kinds: vec![
+                LayerKind::SlidingAttention { window: 128 },
+                LayerKind::FullAttention,
+            ],
+            kv_heads: 8,
+            head_dim: 64,
+            vocab: 1,
+            max_position: 1,
+            kv_bytes_per_token: 0,
+            recurrent_bytes: 0,
+            eos_tokens: Vec::new(),
+        };
+        assert_eq!(info.layers(), 2);
+        assert!(!info.is_hybrid());
+        info.layer_kinds.push(LayerKind::Linear);
+        assert!(info.is_hybrid());
     }
 
     #[test]

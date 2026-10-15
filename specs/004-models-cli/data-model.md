@@ -10,6 +10,11 @@
 | files | list of {path, size, sha256} | every file needed to load; sha256 64-hex |
 | license | string | SPDX id or "other" with URL |
 | family | string | 001 family registry: `qwen3_5_moe` \| `qwen3_moe` \| `gpt_oss` \| `mistral` \| `qwen3` (0.1) |
+| tier | 1 \| 2 | 1 for a curated alias that passed every Tier 1 gate (010 FR-016); 2 for non-alias repos and for a 0.1 alias that missed a gate (labelled by `show`/`ls`, never the default) |
+| syntax | string | chat syntax chosen by the template probe (002 FR-032): `hermes` \| `qwen_xml` \| `harmony` \| `mistral` |
+| state_bytes_per_token | u64 | positional state per token (001 `kv_bytes_per_token`), measured on the target (010 FR-009) |
+| checkpoint_bytes | u64 | position-bound state per checkpoint (001 `recurrent_bytes`); 0 without it |
+| capacity_48gb | u32 | token capacity on the 48 GB target (aliases only; recorded at pin time) |
 | architecture | string | from `config.json` `model_type` (e.g. `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`, `mistral3`; wrapped `text_config.model_type` recorded too) |
 | quantization | {bits, group_size, mode: affine \| mxfp4, overrides} | from `config.json` |
 | identity | string | 001 identity function: sha256 over sorted (path, sha256); used by 001/003 |

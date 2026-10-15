@@ -61,9 +61,11 @@ error[E031]: model 'qwen3-codr' not found
   hint: did you mean 'qwen3-coder'? Run 'mrun ls' to see local models.
 
 error[E034]: unsupported architecture 'llama4' in org/model (nothing downloaded)
-  supported families: qwen3_5_moe (qwen3.6), qwen3_moe (qwen3-coder), gpt_oss (gpt-oss),
-  mistral (devstral), qwen3 (qwen3-8b)
+  supported families: qwen3_5_moe (qwen3.6), qwen3_moe (qwen3-coder), gpt_oss (gpt-oss), mistral3+ministral3 (devstral), qwen3 (qwen3-8b)
 ```
+
+E034 is the single unsupported-architecture message for every command (`run`, `serve`, `pull`;
+referenced by 001 and 010); `(nothing downloaded)` appears only on `pull`.
 
 Curated aliases: `qwen3.6` (default candidate until 005 T012a decides), `qwen3-coder`, `gpt-oss`,
 `devstral`, `qwen3-8b` ([research R4](../research.md#r4-curated-aliases)).

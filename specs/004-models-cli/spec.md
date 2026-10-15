@@ -125,8 +125,11 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
   `qwen3-coder` → Qwen3-Coder-30B-A3B-Instruct 4-bit (`qwen3_moe`), `gpt-oss` → gpt-oss-20b MXFP4
   (`gpt_oss`), `devstral` → Devstral Small 2 24B 4-bit (`mistral`), `qwen3-8b` → Qwen3-8B 4-bit
   (`qwen3`). The default alias (used by `launch` when nothing is pulled) is the winner of 005's
-  agent-suite decision (005 T012a), `qwen3.6` until then. Each alias records its family and the
-  agent-usable context on the user's Mac.
+  agent-suite decision (005 T012a), `qwen3.6` until then. Each alias records its family, syntax,
+  tier and fit numbers and the agent-usable context on the user's Mac. A 0.1 alias whose model
+  fails a Tier 1 gate (incl. 010 SC-002, 5 of 5 client runs) ships with `tier: 2` in its
+  manifest, is labelled as Tier 2 by `mrun show` and `mrun ls`, and cannot be the default
+  (010 FR-016).
 - **FR-003**: `mrun ls`, `mrun rm`, `mrun show <model>` MUST manage and describe local models,
   including disk size, fit in the current memory budget and context capacity (computed with the
   same budget function as feature 001, with the family's bytes per token). `ls` shows each model's
@@ -178,11 +181,12 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
   low-power mode, model integrity, server reachability, port conflicts, free space in the model
   cache, client configuration pitfalls (wrong base URL or wire API, missing context limits, Claude
   Code older than 2.1.273, an `ANTHROPIC_API_KEY` in the environment overriding the gateway token),
+  a template that renders tools after the first user message (`template-tools-late`, 010 FR-014),
   and print fixes. `mrun doctor --agent <client>` additionally runs one tool-call round trip and a request at 95% of capacity
   against the server and reports whether the client can work with it.
 - **FR-008**: `mrun ps` MUST show loaded model, budget breakdown, active and queued requests (with
-  prompt-processing progress), cache size and hit rate, recording state and the most recent miss
-  explanation.
+  prompt-processing progress), cache size and hit rate, recording state, the most recent miss
+  explanation, and the `template-tools-late` warning when the probe set it (010 FR-014).
 - **FR-009**: `mrun serve --detach` MUST run the server in the background with logs in
   `~/.mrun/server.log`, return once `/health` reports the model loaded, and exit 3 or 4 with the
   load error otherwise; `mrun stop` MUST stop it gracefully.
@@ -204,7 +208,8 @@ configuration with a shell `ANTHROPIC_API_KEY` set) and check that `mrun doctor`
 ### Key Entities
 
 - **Model Manifest**: Alias, repository, revision, files with hashes and sizes, license, family,
-  architecture (`model_type`), quantization.
+  architecture (`model_type`), quantization, tier, syntax, fit numbers (state bytes per token,
+  checkpoint bytes, capacity on 48 GB).
 - **Client Profile**: Client name, configuration location, settings to write, cache-stability hints.
 - **Diagnostic**: Check, status, severity, fix.
 

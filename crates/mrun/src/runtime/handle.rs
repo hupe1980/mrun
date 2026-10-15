@@ -176,8 +176,9 @@ fn worker<E: Engine>(
                 // Close the event stream first so a consumer draining it moves on to `Finished`.
                 drop(sink);
                 let done = outcome.unwrap_or_else(|_| {
-                    // A panic left the engine state unknown: start over.
-                    session.clear(engine);
+                    // A panic left the engine state unknown: drop everything it holds.
+                    engine.reset_all();
+                    session = Session::default();
                     Finished {
                         reason: FinishReason::Error("internal error; state reset".into()),
                         prefilled: 0,
@@ -266,9 +267,12 @@ mod tests {
 
     #[test]
     fn a_panic_finishes_with_an_error_and_the_worker_survives() {
-        let (handle, tokenizer) = spawn(|| {
+        let resets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = resets.clone();
+        let (handle, tokenizer) = spawn(move || {
             let mut engine = ScriptedEngine::new(Vec::new(), 100);
             engine.panic_on_forward = true;
+            engine.reset_all_calls = observed;
             engine
         });
         for _ in 0..2 {
@@ -280,6 +284,7 @@ mod tests {
             assert!(matches!(finished.reason, FinishReason::Error(_)));
             assert_eq!(finished.prefilled, 0);
         }
+        assert_eq!(resets.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
 
     #[test]

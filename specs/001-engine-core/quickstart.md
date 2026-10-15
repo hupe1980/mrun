@@ -5,7 +5,9 @@
 - Apple Silicon Mac, macOS 15+, Xcode (or Command Line Tools + `xcodebuild -downloadComponent
   MetalToolchain`), CMake ≥ 3.24; Rust per `rust-toolchain.toml`.
 - Weights in the HF cache (until 004: `hf download <repo>`): `mlx-community/Qwen3-8B-4bit`,
-  `mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit`, a 4-bit MLX conversion of Qwen3.6-35B-A3B.
+  `mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit`, a 4-bit MLX conversion of Qwen3.6-35B-A3B,
+  `mlx-community/gpt-oss-20b-MXFP4-Q8` and `mlx-community/Devstral-Small-2-24B-Instruct-2512-4bit`
+  (pins per 004 T005a).
 - Only to regenerate references or goldens: Python with mlx-lm `ba8a08f` and transformers at the
   pinned version.
 
@@ -15,7 +17,7 @@
 cargo build --release
 cargo test --workspace                          # unit, ScriptedEngine, tiny CPU models
 cargo test -p mrun --no-default-features        # no MLX build
-MRUN_TEST_MODELS=qwen3-8b,qwen3-coder,qwen3.6 cargo test -p mrun-engine --release -- --ignored
+MRUN_TEST_MODELS=qwen3-8b,qwen3-coder,qwen3.6,gpt-oss,devstral cargo test -p mrun-engine --release -- --ignored
 ```
 
 ## Scenarios

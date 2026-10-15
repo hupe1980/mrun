@@ -64,9 +64,7 @@ pub enum LoadError {
 }
 ```
 
-Message form: `unsupported architecture "foo" (text "bar"). Supported: qwen3, qwen3_moe,
-qwen3_5_moe, gpt_oss, mistral (mistral3 + ministral3). Tested models: mrun pull qwen3.6 |
-qwen3-coder | gpt-oss | devstral | qwen3-8b`.
+`UnsupportedArchitecture` message: 004 E034 (supported families with their aliases).
 
 ## Chat syntax (`crates/mrun/src/chat/syntax/{mod.rs, hermes.rs, qwen_xml.rs, harmony.rs, mistral.rs, glm_xml.rs, gemma.rs}`)
 
@@ -113,7 +111,10 @@ pub fn probe(template: &ChatTemplate, vocab: &Vocab, accepted: &[SyntaxId]) -> R
 
 Detected syntax in `accepted` → used; otherwise `LoadError::SyntaxMismatch { family, accepted,
 detected }` (002 FR-032). Runs once at load (and in `mrun pull` for the manifest). Deterministic: fixed messages, fixed
-tool schema, no date dependence (a `strftime_now` call is stubbed to a fixed date in the probe).
+tool schema, no date dependence (a `strftime_now` call is stubbed to a fixed date in the probe;
+at serve time it returns the server start date, OQ-4). The probe also records whether tools render
+after the first user message; if so `ProbeResult.tools_late` is set and `mrun doctor`/`mrun ps`
+warn `template-tools-late` (the prefix changes every turn, so caching is defeated).
 
 ## Locality rule
 

@@ -44,13 +44,19 @@ rendered verbatim in place of the parameter list or JSON, with a `history-args-r
 
 | Field | Hermes JSON | Qwen XML | Harmony | Mistral |
 | --- | --- | --- | --- | --- |
-| families | `qwen3` | `qwen3_moe`, `qwen3_5_moe` | `gpt_oss` | `mistral` |
-| template probe | `<tool_call>` + `"arguments"` | `<function=` | `<\|channel\|>` | `[TOOL_CALLS]` + `[ARGS]` |
+| families | `qwen3`, `qwen3_moe` (2nd) | `qwen3_moe` (1st), `qwen3_5_moe` | `gpt_oss` | `mistral` |
+| template probe | `<tool_call>\n{"name": "mrun_probe"` | `<function=mrun_probe>` | `to=functions.mrun_probe` | `[TOOL_CALLS]mrun_probe[ARGS]` |
+| message_starts | `<\|im_start\|>`, `<tool_response>` | same (ChatML) | `<\|start\|>` | `[INST]`, `[TOOL_RESULTS]`, `[SYSTEM_PROMPT]` |
 | reasoning | `<think>…</think>` (prompt-tail aware) | same (Qwen3.6); none (Qwen3-Coder) | `analysis` channel | none (`[THINK]` recognized) |
 | call opener (`none` bias) | `<tool_call>` | `<tool_call>` | recipient ` to` inside a header | `[TOOL_CALLS]` |
 | arguments | raw JSON, streamed | synthesized, buffered | raw JSON to `<\|call\|>`, streamed | raw JSON, streamed |
 | parallel calls | yes | yes | no (stops at `<\|call\|>`) | yes |
 | thinking control | `enable_thinking` | `enable_thinking` (Qwen3.6) | `reasoning_effort` | none |
+| history (`ChatSyntax::history()`) | arguments verbatim; `reasoning_content` | arguments as object; `reasoning_content`, preserve-thinking (Qwen3.6) | arguments as object, one call per message; `thinking` | arguments verbatim; `thinking` blocks |
+
+Order in `families` = accepted-set order (010 data-model ProbeResult). Template probe: render the
+fixed probe conversation (010 R8) and match the rendered text against the signatures above;
+markers must be added tokens.
 
 Validation (before queuing), configurable: body ≤ 64 MiB (base64 screenshots in agent history; images are dropped before rendering); messages ≤ 4,096; tools ≤ 256; each schema
 ≤ 64 KiB and depth ≤ 16; tool result call ids must match a prior tool call; images/audio/files in
@@ -103,6 +109,5 @@ output_tokens, outcome, body}`. Files mode 0600.
 
 `{tokens, messages: [{start, role, content_hash}], system_tools_end, generation_start}`. Content
 hashes cover role, visible text and tool calls as canonical JSON, never reasoning, so 003 can tell
-an edit from a template re-render. Render once; derive message starts from the token stream
-(`<|im_start|>`, `<tool_response>` special tokens) and check the count against the messages;
+an edit from a template re-render. Render once; message starts are derived from the token stream using the syntax entry's message-start tokens (ChatML `<|im_start|>`/`<tool_response>`; Harmony `<|start|>`; Mistral `[INST]`, `[TOOL_RESULTS]`, `[SYSTEM_PROMPT]`), and the count is checked against the messages;
 prefix rendering only in tests.

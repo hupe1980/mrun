@@ -13,7 +13,7 @@ mrun supports an open set of model families. The first release covers these:
 | `qwen3.6` | Qwen3.6-35B-A3B, 4-bit | Hybrid: 30 linear-attention + 10 attention layers, mixture of experts (3B active) | Qwen XML | ≈20 GB | Full 262K |
 | `qwen3-coder` | Qwen3-Coder-30B-A3B-Instruct, 4-bit | Attention, mixture of experts (3B active) | Qwen XML | 17.2 GB | ≈105K |
 | `gpt-oss` | gpt-oss-20b, MXFP4 | Alternating sliding-window and full attention, mixture of experts | Harmony | ≈13 GB | Full 131K |
-| `devstral` | Devstral Small 2 24B, 4-bit | Attention, dense | Mistral | ≈14 GB | ≈85K |
+| `devstral` | Devstral Small 2 24B, 4-bit | Attention, dense | Mistral | ≈15 GB | ≈78K |
 | `qwen3-8b` | Qwen3-8B, 4-bit | Attention, dense | Hermes JSON | 4.6 GB | Full 40K |
 
 Context figures are estimates from the [memory budget](@/docs/memory.md); `mrun pull` shows the
