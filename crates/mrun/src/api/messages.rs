@@ -25,11 +25,16 @@ use serde_json::{Value, json};
 
 pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiError> {
     obj(body, "body")?;
-    if !body["mcp_servers"].is_null() {
-        return Err(ApiError::invalid(
-            "mcp_servers (server-executed MCP) is not supported; connect MCP servers in the client",
-            "mcp_servers",
-        ));
+    // Server-executed features (FR-029): mrun runs nothing on the client's behalf.
+    for field in ["mcp_servers", "container"] {
+        if !body[field].is_null() {
+            return Err(ApiError::invalid(
+                format!(
+                    "{field} asks the server to run tools, which mrun does not; configure MCP servers in the client"
+                ),
+                field,
+            ));
+        }
     }
     let mut request = ChatRequest::new(ApiKind::Messages);
     request.model = opt_str(body, "model", "body")?
