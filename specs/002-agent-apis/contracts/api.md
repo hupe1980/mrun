@@ -38,6 +38,9 @@ Cross-cutting:
   hints (003 FR-014); they never change responses.
 - **Attribution nonce** (FR-025): the `cch=` value of Claude Code's `x-anthropic-billing-header` system text is fixed before rendering; nothing else is rewritten.
 - **Progress** (FR-026): queued/prefill keepalive comments carry `: mrun {"queued":n}` or `: mrun {"prefill":[done,total]}`.
+- **Codex namespaces** (FR-027): `namespace` tools become functions `<ns>__<tool>`; calls are returned with `name` and `namespace` restored.
+- **Deferred tools** (FR-028): `defer_loading` tools are not rendered upfront; `tool_reference` blocks and `tool_search_output` lists render the definition inline in the tool result. Claude Code needs `ENABLE_TOOL_SEARCH=true` behind a custom base URL (`mrun launch` sets it when the tool definitions exceed 10% of capacity is not knowable upfront, so `launch` sets `ENABLE_TOOL_SEARCH=auto:10`).
+- **Rejected server-side features** (FR-029): `mcp_servers`, `container`, `mcp_toolset`, `tool_search_tool_*`, `tool_addition`/`tool_removal` → 400 naming the field.
 - **Per-request cache off**: request header `x-mrun-cache: off` on all APIs (003 FR-009).
 - **Disconnect**: dropping the connection cancels queued or running work.
 - **Queued and prefilling streams**: headers at once, keepalives every 10 s (Anthropic `ping`, SSE comment for OpenAI APIs) until the first token.

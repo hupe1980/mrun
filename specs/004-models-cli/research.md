@@ -25,7 +25,8 @@
 
 - **Decision**: hf-hub's tokio API downloads into `.incomplete` blobs; mrun adds range-resume when an
   `.incomplete` file exists (HTTP `Range`), checks free disk space before starting (sum of missing
-  file sizes + 5% margin), and deletes partial files on explicit cancel or verify failure.
+  file sizes + 5% margin), and keeps partial `.incomplete` blobs on Ctrl-C, network failure and disk-full (reported with
+  their size); they are deleted only on hash mismatch or `mrun rm`.
 - **Alternatives**: Shelling out to `huggingface-cli` (extra dependency, worse errors).
 
 ## R4: Curated aliases
@@ -82,7 +83,7 @@
   chip/macOS, memory budget and pressure, low-power mode, model integrity (fast checks), server
   reachability, port conflicts, HF cache free space, client config pitfalls (wrong base URL or wire
   API, missing context limits, Claude Code < 2.1.273, a shell `ANTHROPIC_API_KEY`). `--agent <client>`
-  runs a scripted tool-call round trip and a compaction request. Each check is
+  runs a scripted tool-call round trip and a request at 95% of capacity (admitted, output clamped). Each check is
   unit-tested with a fake context. Exit code 8 when any check fails.
 
 ## R7: Config
@@ -109,7 +110,9 @@
 
 ## R10: rm safety in a shared cache
 
-- **Decision**: `rm` deletes the snapshot directory and refs mrun recorded in the manifest, then
-  only blobs no remaining snapshot (of any repo in the cache) links to; it lists shared blobs it
-  kept.
+- **Decision**: HF cache blobs are per repository (`models--org--name/blobs`), so sharing exists
+  only between revisions of the same repository, and the cache records no owner. `rm` deletes the
+  pinned revision's snapshot (as `hf cache delete` does) and the blobs no other revision of that
+  repository links to, removes `refs/*` only when they point to that revision, and warns that other
+  tools using the same repository and revision lose it.
 - **Rationale**: Analysis S7: the HF cache is shared with other tools.

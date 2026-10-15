@@ -31,7 +31,7 @@ All commands accept `--help` (with examples) and `-q/--quiet`; tabular commands 
 | `mrun verify <model>` | 004 | Re-hash every file against the recorded identity |
 | `mrun launch <claude-code\|codex\|opencode> [--model M] [--dry-run] [--yes] [-- client args]` | 004 | Start the client configured for this process only; starts a server and offers a pull when needed (FR-005) |
 | `mrun connect <claude-code\|codex\|opencode> [--write] [--undo]` | 004 | Print persistent config; write with diff + 0600 backup; restore backup |
-| `mrun doctor [--agent <client>]` | 004 | All checks with fixes (exit 8 on failures); `--agent` runs a tool-call and compaction round trip |
+| `mrun doctor [--agent <client>]` | 004 | All checks with fixes (exit 8 on failures); `--agent` runs a tool-call round trip and a request at 95% of capacity |
 | `mrun cache clear` | 003 | Clear the prefix cache of the running server |
 | `mrun config` | 004 | Effective configuration with sources |
 | `mrun bench ...` | 005 | See [005 contract](../../005-bench/contracts/result-schema.md) |

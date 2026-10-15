@@ -212,6 +212,20 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
 - **FR-026**: While a streaming request is queued or its prompt is processed, keepalive comments
   on OpenAI APIs and `/mrun/status` MUST carry progress (`queued` position, or `prefill`
   processed/total tokens); Anthropic streams use plain `ping` events.
+- **FR-027**: Responses `namespace` tools (Codex sends MCP and sub-agent tools this way on every
+  request) MUST be flattened to functions named `<namespace>__<tool>` and calls MUST be returned
+  with `name` and `namespace` restored; history items carrying `namespace` are re-joined the same
+  way.
+- **FR-028**: Tools with `defer_loading: true` MUST NOT be rendered in the tools region. A
+  `tool_reference` block in a tool result (Anthropic) or a `tool_search_output` tool list
+  (Responses) MUST be expanded at that position into the tool's rendered definition, so the prefix
+  stays append-only; expanded tools are callable afterwards. A reference to an undeclared tool, or a
+  request whose tools are all deferred, is 400 with Anthropic's wording.
+- **FR-029**: Mid-conversation system messages (Anthropic `role: "system"` with `cache_control`,
+  Responses `developer`/`system` items) MUST be rendered in place, never hoisted into the first
+  system block. Server-executed features mrun cannot run (`mcp_servers`, `container`,
+  `mcp_toolset`, `tool_search_tool_*`, `tool_addition`/`tool_removal` blocks) MUST be rejected
+  with 400 naming the field, so the model is never told about tools that do not exist.
 - **FR-024**: Anthropic `context_management` (server-side context edits and compaction) MUST be
   accepted and ignored: mrun never rewrites or summarizes client context, and Claude Code sends the
   field by default. Clients that depend on the edits keep working because their own compaction

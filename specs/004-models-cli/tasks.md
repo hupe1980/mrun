@@ -35,7 +35,7 @@ description: "Tasks for 004 Models and CLI Experience"
 
 - [ ] T014 [P] [US3] `cli/doctor.rs` checks registry per FR-007 (incl. Claude Code ≥ 2.1.273, shell `ANTHROPIC_API_KEY`, missing context limits, `--agent <client>` round trip, port conflict, cache free space); fake-context tests for ≥ 10 scenarios (SC-002); exit 8 on failures
 - [ ] T015 [P] [US3] `cli/ps.rs` against `/mrun/status` (002 schema v1)
-- [ ] T016 [US3] `mrun config`, `mrun completions <shell>`, `--help` examples for every command (snapshot tests with a timing assertion: < 200 ms)
+- [ ] T016 [US3] `mrun config`, `mrun completions <shell>`, `--help` examples for every command (snapshot tests; latency measured in the benchmark job)
 
 ## Phase 6: Polish
 

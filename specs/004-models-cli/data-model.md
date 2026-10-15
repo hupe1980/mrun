@@ -41,13 +41,34 @@ States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (has
 ## Config (`~/.mrun/config.toml`)
 
 ```toml
-[server]  host = "127.0.0.1"  port = 8484  queue = 8  queue_wait_s = 600  thinking = "client"
-          max_output = 16384  reject_tool_images = false
-[memory]  fraction = 0.75  reserve_gib = 8
-[engine]  chunk = 2048  default_model = "qwen3-coder"
-[cache]   enabled = true  warmup = true
-[limits]  body_mib = 8  messages = 4096  tools = 256  schema_kib = 64  schema_depth = 16
+[server]
+host = "127.0.0.1"
+port = 8484
+queue = 8
+queue_wait_s = 600
+thinking = "client"
+max_output = 16384
+reject_tool_images = false
+
+[memory]
+fraction = 0.75
+reserve_gib = 8
+
+[engine]
+chunk = 2048
+default_model = "qwen3-coder"
+
+[cache]
+enabled = true
+warmup = true
+
+[limits]
+body_mib = 8
+messages = 4096
+tools = 256
+schema_kib = 64
+schema_depth = 16
 ```
 
 Every key is optional; `mrun config` shows effective values and sources. Environment variables
-are `MRUN_<SECTION>_<KEY>` (for example `MRUN_SERVER_PORT`, `MRUN_MEMORY_RESERVE_GIB`).
+are `MRUN_<SECTION>_<KEY>`; `MRUN_HOME` and `MRUN_API_KEY` are reserved names, not config keys (for example `MRUN_SERVER_PORT`, `MRUN_MEMORY_RESERVE_GIB`).

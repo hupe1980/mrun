@@ -24,7 +24,7 @@ downloads; async by default), reqwest 0.13 (HEAD/range requests, used through hf
 insta 1.49 snapshots for `--help`, `connect` output and error messages
 **Target Platform**: macOS on Apple Silicon (primary); Linux compiles and runs these tests
 **Project Type**: CLI (part of the single `mrun` binary)
-**Performance Goals**: CLI commands other than `pull`, `verify` and `serve` finish in under 200 ms;
+**Performance Goals**: CLI commands other than `pull`, `verify`, `serve`, `launch` and `doctor --agent` finish in under 200 ms (measured in the benchmark job, not asserted in snapshot tests);
 `ls` with 20 models under 500 ms (fast checks only; full hashing only in `verify`)
 **Constraints**: No network except `pull` (FR-013); never overwrite user client config without a
 diff and backup (FR-006); offline-first
