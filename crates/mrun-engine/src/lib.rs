@@ -1,4 +1,5 @@
-//! Engine side of mrun: the primitive [`Engine`] contract and model identity.
+//! Engine side of mrun: the primitive [`Engine`] contract, model identity, the memory budget and
+//! the family registry.
 //!
 //! The MLX implementation will live behind the `mlx` cargo feature.
 

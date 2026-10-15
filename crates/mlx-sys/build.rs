@@ -36,6 +36,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/mlx-c/CMakeLists.txt");
     println!("cargo:rerun-if-changed=vendor/mlx-c/mlx/c");
+    println!("cargo:rerun-if-changed=patches");
     for var in [
         "MLX_SYS_PREBUILT_DIR",
         "MLX_SYS_MLX_TARBALL",
@@ -104,6 +105,7 @@ fn build(out_dir: &Path, target_os: &str) -> PathBuf {
         "{} is empty: run `git submodule update --init crates/mlx-sys/vendor/mlx-c`",
         mlx_c.display()
     );
+    let mlx_c = patched_mlx_c(&mlx_c, out_dir);
     let mlx_src = mlx_source(out_dir);
 
     let build_type = env::var("MLX_SYS_BUILD_TYPE").unwrap_or_else(|_| "Release".into());
@@ -135,6 +137,86 @@ fn build(out_dir: &Path, target_os: &str) -> PathBuf {
         }
     }
     config.build()
+}
+
+/// Copies the mlx-c submodule to `OUT_DIR/mlx-c` and applies `patches/mlx-c-*.patch` (the
+/// submodule itself stays pristine). Skipped when the inputs are unchanged, so CMake does not
+/// recompile mlx-c on every build-script run.
+fn patched_mlx_c(vendor: &Path, out_dir: &Path) -> PathBuf {
+    let manifest_dir = vendor.parent().and_then(Path::parent).expect("crate dir");
+    let mut patches: Vec<PathBuf> = fs::read_dir(manifest_dir.join("patches"))
+        .map(|dir| {
+            dir.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("mlx-c-") && n.ends_with(".patch"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    patches.sort();
+
+    let mut files = Vec::new();
+    collect_files(vendor, vendor, &mut files);
+    files.sort();
+    let mut hasher = Sha256::new();
+    for rel in &files {
+        hasher.update(rel.to_string_lossy().as_bytes());
+        hasher.update(fs::read(vendor.join(rel)).expect("read mlx-c source"));
+    }
+    for patch in &patches {
+        hasher.update(fs::read(patch).expect("read patch"));
+    }
+    let digest = hex(&hasher.finalize());
+
+    let dst = out_dir.join("mlx-c");
+    let stamp = out_dir.join("mlx-c.stamp");
+    if dst.join("CMakeLists.txt").is_file()
+        && fs::read_to_string(&stamp).is_ok_and(|s| s.trim() == digest)
+    {
+        return dst;
+    }
+    let _ = fs::remove_dir_all(&dst);
+    for rel in &files {
+        let to = dst.join(rel);
+        fs::create_dir_all(to.parent().expect("parent")).expect("create mlx-c dir");
+        fs::copy(vendor.join(rel), &to).expect("copy mlx-c source");
+    }
+    for patch in &patches {
+        let file = fs::File::open(patch).expect("open patch");
+        run(Command::new("patch")
+            .args(["-p1", "--forward", "--silent", "-d"])
+            .arg(&dst)
+            .stdin(Stdio::from(file)));
+    }
+    fs::write(&stamp, &digest).expect("write stamp");
+    dst
+}
+
+/// Lists the files under `dir` relative to `root`, skipping VCS metadata and the parts of
+/// mlx-c the build does not use.
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).expect("read mlx-c dir").flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        if dir == root
+            && [".git", "docs", "examples", "python"]
+                .iter()
+                .any(|n| name == *n)
+        {
+            continue;
+        }
+        if path.is_dir() {
+            collect_files(root, &path, out);
+        } else {
+            out.push(path.strip_prefix(root).expect("prefix").to_path_buf());
+        }
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Returns the extracted MLX source directory, fetching and verifying the pinned tarball first.
@@ -250,11 +332,7 @@ fn sha256_file(path: &Path) -> String {
         }
         hasher.update(&buf[..n]);
     }
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex(&hasher.finalize())
 }
 
 /// MLX looks for `mlx.metallib` next to the executable: copy it into `target/<profile>/` and

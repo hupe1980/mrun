@@ -1,0 +1,17 @@
+mlx-c v0.7.0 (a341b49) targets MLX v0.32.2. MLX v0.32.4 inserted a
+`global_scale` parameter into mlx::core::gather_qmm before `sorted_indices`,
+so the unpatched call passes a bool where an optional<array> is expected.
+Pass std::nullopt; the C API is unchanged. Applied by build.rs with `patch -p1`.
+
+diff --git a/mlx/c/ops.cpp b/mlx/c/ops.cpp
+index bf565d1..47f58fc 100644
+--- a/mlx/c/ops.cpp
++++ b/mlx/c/ops.cpp
+@@ -1708,6 +1708,7 @@ extern "C" int mlx_gather_qmm(
+             (bits.has_value ? std::make_optional<int>(bits.value)
+                             : std::nullopt),
+             std::string(mode),
++            std::nullopt, // global_scale (MLX v0.32.4), not exposed by mlx-c v0.7.0
+             sorted_indices,
+             mlx_stream_get_(s)));
+   } catch (std::exception& e) {

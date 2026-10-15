@@ -31,14 +31,14 @@ split: the landed part is ticked, the remainder is a separate open task.
 - [X] T008 [P] `engine.rs` + `identity.rs` (no MLX), first version: `Engine` trait with `reserve(total)`, `prefill`, `decode`, `trim`, `snapshot`/`restore`; ModelInfo, MemoryBudget, CancelToken, Sampling, TokenMask; identity over safetensors + 4 files with `~/.mrun/identity.toml`; tests
 - [X] T008a Reshape `engine.rs` to [contracts/engine.md](contracts/engine.md): `reserve(keep, total)`, `allocated()`, `PrefillPlan`/`Prefilled`, `chunk_len`, `forward`/`sample`/`top_logprobs`, fallible `trim`, `checkpoint`/`restore_checkpoint`/`drop_checkpoint`, `split_off`/`append`/`drop_segment`, `reset`; new errors (`NeedsMemory`, `NotTrimmable`, `NoRecurrentState`, `ReservationExceeded`, …); `Architecture::Qwen35Moe` (replaced by T040a), layer kinds, `recurrent_bytes`; MemoryBudget fields per data-model; remove `snapshot`/`restore`/`KvSegmentId`; unit tests for `chunk_len` (16K→2048, 32K→1024, 64K→512, 128K→256, 256K→128, 262K→128, depth 0); `CancelToken::yield_requested`, `Prefilled.yielded`, `split_off(at, shrink)`
 - [X] T008b [P] `identity.rs`: `generation_config.json` and `special_tokens_map.json` are identifying files; `Sampling::validate` (NaN/negative temperature, top-p ∉ (0, 1], min-p ∉ [0, 1]) with tests
-- [ ] T008c [P] `identity.rs`: `eos_union(dir)` (config + generation_config int/list + tokenizer EOS from `tokenizer_config.json`/`special_tokens_map.json`, plus the family's declared end tokens (010 `eos_extra`, e.g. Harmony `<|call|>`, `<|return|>`)) feeding `ModelInfo.eos_tokens`; tests incl. a changed `generation_config.json`
+- [X] T008c [P] `identity.rs`: `eos_union(dir)` (config + generation_config int/list + tokenizer EOS from `tokenizer_config.json`/`special_tokens_map.json`, plus the family's declared end tokens (010 `eos_extra`, e.g. Harmony `<|call|>`, `<|return|>`)) feeding `ModelInfo.eos_tokens`; tests incl. a changed `generation_config.json`
 - [ ] T009 [P] `load.rs` [mlx]: `qwen3`, `qwen3_moe`, `qwen3_5_moe` (`text_config` or root), quantization overrides (8-bit router/shared gate), mode inference, mlx-lm sanitize (drop vision/`mtp.*`, key remap, `gate_up_proj` split, unconverted conv1d axis + norm +1), `A_log` kept f32, weights estimate from file sizes, named rejections; tests with generated tiny checkpoints
 - [X] T010 [P] `chat/{tokenizer.rs, template.rs, stop.rs}` first version: tokenizers 0.23 without `http`, minijinja + pycompat with `enable_thinking`, UTF-8-safe streaming decode, stop matcher with hold-back; tests
 - [X] T010a [P] Template environment (FR-021): `trim_blocks`, `lstrip_blocks`, `tojson` = Python `json.dumps(ensure_ascii=False, indent)`; hand-written tests (`tojson_matches_python_json_dumps`, `block_tags_trim_like_hugging_face`)
-- [ ] T010e [P] Template environment, rest of T010a (FR-021): `strftime_now(fmt)` returning the server start date; the probe stubs a fixed date; tests
+- [X] T010e [P] Template environment, rest of T010a (FR-021): `strftime_now(fmt)` returning the server start date; the probe stubs a fixed date; tests
 - [ ] T010c Template goldens (SC-009): `scripts/gen_template_golden.py` (pinned transformers); fixtures for the Qwen3, Qwen3-Coder and Qwen3.6 templates (≥ 10 each: tools, tool calls/results, multi-turn, thinking on/off) checked on text and token IDs
 - [ ] T010d [P] Template goldens (SC-009) for the gpt-oss (Harmony; `reasoning_effort` low/medium/high, tool calls and results, analysis dropped from earlier turns) and Devstral Small 2 (`[TOOL_CALLS]…[ARGS]`) templates, ≥ 10 each, text and token IDs (needs the repos pinned by 004 T005)
-- [ ] T010b [P] `chat/limits.rs`: `MAX_PROMPT_BYTES`, `MAX_STOPS`, `MAX_STOP_BYTES` in one place, used by `main.rs` and `stop.rs`
+- [X] T010b [P] `chat/limits.rs`: `MAX_PROMPT_BYTES`, `MAX_STOPS`, `MAX_STOP_BYTES` in one place, used by `main.rs` and `stop.rs`
 - [X] T011 `runtime/{handle.rs, generate.rs, scripted.rs}` first version: worker thread with bounded events (cap 64, stall timeout), generic loop on the old trait (reserve → prefill all but last → decode → stop/UTF-8 → `Finished` → trim to state tokens), output-limit clamping, `ScriptedEngine`; tests for one `Finished`, cancel, stall, clamping, reuse
 - [X] T011a `ScriptedEngine` on the new trait: byte costs per token/checkpoint, lazy allocation in 4,096 steps clamped to reservation and capacity, `NeedsMemory`, `chunk_len` + plan splits with per-chunk cancel and partial-chunk discard, yield after the current whole chunk (`Prefilled.yielded`), one pending pipelined step with rollback, hybrid mode (non-trimmable recurrent state, checkpoints required; `trim(0)`/`reserve(0, …)` reset it to zeros), checkpoints and segments recording token ranges, `split_off` with and without `shrink`
 - [X] T011b Generation loop on the new trait (`generate.rs`, `session.rs`), the single owner of the per-request loop: a reuse-policy parameter (`Session` here; 003's `PrefixStore` plugs in under `serve`, 002's worker only dequeues and calls `generate`); Session `committed` vs `tokens`; trim at every finish (EOS, stop sequence, length, cancel, error) incl. the pending pipelined token; hybrid fallback to the deepest session checkpoint (two newest kept, planned at `generation_start`, the start of the generation header); `NeedsMemory{bytes}` → policy evicts, retry, else error; on `yielded` → policy hook, then prefill the remaining tokens with the same plan; tests per finish path asserting `session.tokens == engine state`, and a yield test with an identical chunk split. (Already landed: TTFT at the first sampled token, `Sampling::validate` → `Rejected`.)
@@ -47,7 +47,7 @@ split: the landed part is ticked, the remainder is a separate open task.
 - [X] T011g Engine-level `reset_all()` that also drops stored segments and checkpoints, called by the worker after a panic (checkpoints captured during the panicked request are otherwise unreachable); test with a panicking ScriptedEngine
 - [X] T011h More than `MAX_PLAN_CHECKPOINTS` planned checkpoints in one `prefill` → `InvalidRange` (contract, ScriptedEngine, test)
 - [X] T011d Dead code removal, part 1: `StopMatcher::held_len`, `EngineHandle::stall_timeout`, `Detokenizer` trait
-- [ ] T011f Dead code removal, part 2: `TokenMask::vocab`, `ScriptedEngine::segment_tokens` (replaced by T011a's range records); clippy clean
+- [X] T011f Dead code removal, part 2: `ScriptedEngine::segment_tokens` gone (replaced by T011a's range records); `TokenMask::vocab` kept (it bounds `allow`/`is_allowed`); clippy clean
 
 ## Phase 3: US1 — Chat in the terminal (P1) 🎯 MVP
 
@@ -61,16 +61,18 @@ split: the landed part is ticked, the remainder is a separate open task.
 ## Phase 4: US2 — Interrupt instantly (P1)
 
 - [ ] T018 [US2] Ctrl-C in `cli/run.rs` (cancel; second within 1 s exits)
-- [ ] T019 [US2] Cancel tests: `crates/mrun/tests/cancel.rs` (ScriptedEngine: each phase, completion race, partial chunk discarded, whole chunks kept, pending step trimmed) and `crates/mrun-engine/tests/cancel_cpu.rs` (tiny models incl. hybrid: state after cancel equals state after the last whole chunk)
+- [X] T019 [US2] Cancel tests `crates/mrun/tests/cancel.rs` (ScriptedEngine: each phase, completion race, partial chunk discarded, whole chunks kept, pending step trimmed)
+- [ ] T019a [US2] [mlx] `crates/mrun-engine/tests/cancel_cpu.rs` (tiny models incl. hybrid: state after cancel equals state after the last whole chunk)
 - [ ] T020 [US2] `examples/bench_engine.rs` (FR-018): prefill/decode tok/s at given contexts; cancel latency, 50 random points per bucket (16K, 64K, max); JSON with machine + identity; `scripts/bench_reference.sh`; run SC-004 per model on the M4 Pro; record in research R5
 
 ## Phase 5: US3 — Never overcommit memory (P1)
 
-- [ ] T021 [P] [US3] `budget.rs`: physical and working set from `device_info` (Linux: `/proc/meminfo`), reserve `clamp(physical ÷ 6, 2 GiB, 8 GiB)`, formula, overrides (`--allow-over`); unit tests incl. 16/48/128 GB
+- [X] T021 [P] [US3] `budget.rs`: physical and working set from `device_info` (Linux: `/proc/meminfo`), reserve `clamp(physical ÷ 6, 2 GiB, 8 GiB)`, formula, overrides (`--allow-over`); unit tests incl. 16/48/128 GB
 - [ ] T022 [US3] Pre-load check (incl. position-bound bytes (`recurrent_bytes`)); probe at two points (R6) incl. growth transient and position-bound rollback, cache key with MLX version and chunk policy; `kv_capacity_tokens ≤ min(max_position, P)`; MLX memory/cache/wired limits; refusal with all numbers (exit 4)
-- [ ] T023 [US3] Admission boundary tests (SC-005) on ScriptedEngine and a tiny model: capacity − 1 → one token "length"; capacity → rejected with both numbers; oversized limit clamped and reported; cached state counted as available
+- [X] T023 [US3] Admission boundary tests (SC-005) on ScriptedEngine (`crates/mrun/tests/admission.rs`): capacity − 1 → one token "length"; capacity → rejected with both numbers; oversized limit clamped and reported; cached state counted as available
+- [ ] T023a [US3] [mlx] The T023 boundary cases on a tiny CPU model
 - [ ] T024 [US3] `mrun run --info` breakdown (weights, scratch, position-bound, state bytes/tokens, probed depth, reserve, free memory); snapshot test
-- [ ] T024a [US3] FR-022 resident model: no idle-unload timer anywhere in `runtime/`; test that the worker keeps the model loaded across a long idle period (paused clock) and only `reset()`s state
+- [X] T024a [US3] FR-022 resident model: no idle-unload timer anywhere in `runtime/`; test that the worker keeps the model loaded across a long idle period (paused clock) and only `reset()`s state
 
 ## Phase 6: US4 — Trustworthy output (P2)
 
@@ -82,7 +84,8 @@ split: the landed part is ticked, the remainder is a separate open task.
 - [ ] T027c [US4] Parity run Qwen3.6-35B-A3B 4-bit (SC-001, after T031); record
 - [ ] T027d [US4] Parity run gpt-oss-20b MXFP4 (SC-001, after T042 + T043a); record whether stock mlx-lm (rotating cache) also matches bit for bit, closing the R16 caveat
 - [ ] T027e [US4] Parity run Devstral Small 2 24B 4-bit (SC-001, after T043); record
-- [ ] T028 [US4] `crates/mrun/tests/sampling.rs`: seeded reproducibility, validation rejections, stop finish reason and trimmed tokens
+- [X] T028 [US4] `crates/mrun/tests/sampling.rs` on ScriptedEngine: validation rejections, stop finish reason and trimmed tokens
+- [ ] T028a [US4] [mlx] Seeded reproducibility on the real sampler (after T014)
 
 ## Phase 7: Hybrid model and state primitives (US1, US4, US5)
 
@@ -99,13 +102,15 @@ Reference sources: mlx-lm `ba8a08f` `mlx_lm/models/{gpt_oss.py, mistral3.py, min
 
 - [ ] T039 [P] `models/blocks/` [mlx] (layout per 010, R15): attention block (optional q/k/v/o bias, q/k RMSNorm, output gate, window `None | Some(w)` as a slice of the full KV plus windowed causal mask, optional sinks to SDPA), rope (default, partial, YaRN via `fast::rope` `freqs`, position-scaled queries), feed-forward (SwiGLU, `swiglu_oai`, routers softmax→top-k and top-k→softmax, SwitchGLU with optional per-expert bias, shared expert with sigmoid gate), RMSNorm; T013, T025 and T031 compose these blocks instead of private copies; tiny CPU tests per block option against mlx-lm fixtures
 - [X] T040a `engine.rs`: `Architecture` enum replaced by `ModelInfo.family: String` (registry name) and `LayerKind::{FullAttention, SlidingAttention{window}, Linear}`; ScriptedEngine and tests updated
-- [ ] T040 `models/registry.rs` + `load.rs`: `model_type` (and wrapped `text_config.model_type`) → family module, `ModelInfo.family`, layer kinds (`FullAttention`, `SlidingAttention{window}`, `Linear`), state kinds, accepted chat syntaxes (002), declared end tokens (010 `eos_extra`, e.g. Harmony `<|call|>`, `<|return|>`) joined to the EOS union; unknown type refused before reading weights (exit 3, message: 004 E034); `sinks`, rope scaling (FR-025); load-refusal fixtures (SC-010)
+- [X] T040 `models/registry.rs` (no MLX): `model_type` (and wrapped `text_config.model_type`) → family entry, `ModelInfo.family`, layer kinds (`FullAttention`, `SlidingAttention{window}`, `Linear`) from `layer_types`/`full_attention_interval`/`sliding_window`, state kinds and byte costs, accepted chat syntaxes (002), declared end tokens (010 `eos_extra`) for the EOS union; unknown type refused with the 004 E034 text; fixture configs per registered family and refused ones
+- [ ] T040b `load.rs` [mlx]: registry → family module, unknown type refused before reading weights (exit 3), `sinks`, rope scaling (FR-025); load-refusal fixtures (SC-010)
 - [ ] T041 [P] [mlx] MXFP4: `quantized_matmul`/`gather_qmm` with `mode = "mxfp4"` (null biases), per-path quantization `mode` from `config.json`; CPU test vs an mlx-lm fixture; Metal timing in the spike (T007)
 - [ ] T042 `models/gpt_oss.rs` [mlx] per R16: sanitize (`gate_up_proj` interleaved split incl. bias, `_blocks`/`_scales`), alternating `layer_types`, attention with bias + sinks + YaRN, sliding layers on the full KV with the window slice, top-k→softmax router, SwitchGLU with biases and `swiglu_oai`; tiny CPU config: chunked prefill vs step-by-step within 1e-3 for prompts shorter and longer than the window
 - [ ] T043 `models/mistral.rs` [mlx] per R17: `mistral3`/`ministral3` config, sanitize (drop vision tower and projector, prefix remap), YaRN + position-scaled queries, dense SwiGLU; refused when `tokenizer.json` or a chat template is missing; tiny CPU config test
 - [ ] T043a `scripts/gen_reference.py`: gpt_oss reference with a temporal-order windowed cache (full KV, window slice) substituted for `RotatingKVCache` in the reference process, plus a stock-mlx-lm token run (R16); references for gpt-oss-20b and Devstral Small 2
 - [ ] T045 [US5] Sliding-window exactness in `tests/exactness.rs` (SC-008): tiny `gpt_oss` CPU model always, gpt-oss-20b `#[ignore]`: `trim`, `split_off`/`append` and continued prefill at positions before, at and beyond the window (incl. within the last 127 positions of a chunk) → bit-identical next-token logits; no checkpoint created (zero-byte)
-- [ ] T046 `ScriptedEngine` profiles and budget fixtures per 0.1 family (bytes per token, position-bound bytes from the data-model table); `--info` shows family, syntax (from the probe) and the per-family numbers
+- [X] T046 `ScriptedEngine` profiles and budget fixtures per 0.1 family (bytes per token, position-bound bytes from the data-model table)
+- [ ] T046a `--info` shows family, syntax (from the probe) and the per-family numbers (with T024)
 
 ## Phase 8: Polish
 
