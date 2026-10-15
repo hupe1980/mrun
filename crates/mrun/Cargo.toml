@@ -30,6 +30,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokenizers.workspace = true
 tokio = { version = "1.53", features = ["rt-multi-thread", "net", "signal", "macros", "sync", "time"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Integration tests are built against the library with `test-support`.

@@ -4,8 +4,12 @@
 //! The server binds loopback only (002 FR-012): there is no `--host` flag in 0.1.
 
 use crate::api;
+use crate::api::decode::DecodeOptions;
+use crate::api::run::Timing;
+use crate::chat::template::ChatTemplate;
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::handle::EngineHandle;
+use mrun_engine::{Sampling, SyntaxId};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,6 +70,13 @@ pub struct Loaded {
     pub model_id: String,
     pub handle: EngineHandle,
     pub tokenizer: Arc<Tokenizer>,
+    pub template: Arc<ChatTemplate>,
+    /// The family's chat syntax (tool calls, reasoning, message framing).
+    pub syntax: SyntaxId,
+    /// The family has a thinking mode that requests can switch on.
+    pub supports_thinking: bool,
+    /// Sampling defaults from the model's generation config.
+    pub defaults: Sampling,
 }
 
 /// Engine readiness, observed by `/health` and the API routes.
@@ -85,6 +96,15 @@ pub struct ServerState {
     pub addr: SocketAddr,
     pub args: Arc<ServeArgs>,
     pub readiness: watch::Receiver<Readiness>,
+    pub timing: Timing,
+}
+
+impl ServerState {
+    pub fn decode_options(&self) -> DecodeOptions {
+        DecodeOptions {
+            reject_tool_images: self.args.reject_tool_images,
+        }
+    }
 }
 
 /// A started server: its address, readiness and a way to stop it.
@@ -128,6 +148,16 @@ impl RunningServer {
 
 /// Binds `127.0.0.1:port` (port 0 picks a free one), starts serving and loads the engine.
 pub async fn start(args: ServeArgs, factory: EngineFactory) -> std::io::Result<RunningServer> {
+    let timing = Timing::from_args(&args);
+    start_with(args, factory, timing).await
+}
+
+/// [`start`] with explicit keepalive and queue timing (tests shorten them).
+pub async fn start_with(
+    args: ServeArgs,
+    factory: EngineFactory,
+    timing: Timing,
+) -> std::io::Result<RunningServer> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, args.port)).await?;
     let addr = listener.local_addr()?;
     let args = Arc::new(args);
@@ -136,7 +166,10 @@ pub async fn start(args: ServeArgs, factory: EngineFactory) -> std::io::Result<R
     let load_args = args.clone();
     tokio::task::spawn_blocking(move || {
         let state = match factory(&load_args) {
-            Ok(loaded) => Readiness::Ready(Arc::new(loaded)),
+            Ok(loaded) => {
+                loaded.handle.queue().set_capacity(load_args.queue);
+                Readiness::Ready(Arc::new(loaded))
+            }
             Err(error) => Readiness::Failed(error),
         };
         let _ = ready_tx.send(state);
@@ -146,6 +179,7 @@ pub async fn start(args: ServeArgs, factory: EngineFactory) -> std::io::Result<R
         addr,
         args,
         readiness: readiness.clone(),
+        timing,
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let app = api::router(state);

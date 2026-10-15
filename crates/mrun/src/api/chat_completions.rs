@@ -6,11 +6,16 @@ use crate::api::decode::{
     DecodeOptions, arr, check_limits, check_schema, check_tool, obj, opt_bool, opt_f32, opt_str,
     opt_u32, stops, str_field, tool_image,
 };
+use crate::api::handler::{self, ApiShape, StreamEncode};
 use crate::api::model::{
     ApiError, ApiKind, AssistantPart, ChatRequest, Effort, ErrorKind, Finish, GenEvent, Message,
     ReasoningCtl, ResponseFormat, ToolChoice, ToolDef, ToolResult, Usage, UserPart,
 };
 use crate::api::sse::{self, new_id};
+use crate::cli::serve::ServerState;
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::response::Response;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -417,9 +422,46 @@ impl StreamEncoder {
             }
         }
     }
+}
 
-    pub fn keepalive(&self) -> String {
+impl StreamEncode for StreamEncoder {
+    fn encode(&mut self, event: &GenEvent) -> Vec<String> {
+        StreamEncoder::encode(self, event)
+    }
+
+    fn keepalive(&mut self) -> String {
         sse::comment("keepalive")
+    }
+}
+
+pub const SHAPE: ApiShape = ApiShape {
+    api: ApiKind::Chat,
+    error_body,
+};
+
+/// `POST /v1/chat/completions`
+pub async fn handle(State(state): State<ServerState>, body: Bytes) -> Response {
+    let request =
+        match handler::parse(&body).and_then(|value| decode(&value, state.decode_options())) {
+            Ok(request) => request,
+            Err(error) => return SHAPE.error(&error),
+        };
+    let stream = request.stream;
+    let include_usage = request.include_usage;
+    let turn = match handler::start(&state, request).await {
+        Ok(turn) => turn,
+        Err(error) => return SHAPE.error(&error),
+    };
+    if stream {
+        let encoder = StreamEncoder::new(&turn.model, include_usage);
+        return handler::stream_response(turn, encoder);
+    }
+    let model = turn.model.clone();
+    match handler::collect(turn).await {
+        Ok((collected, warnings)) => {
+            handler::json_response(response(&model, &collected), &collected, &warnings)
+        }
+        Err(error) => SHAPE.error(&error),
     }
 }
 

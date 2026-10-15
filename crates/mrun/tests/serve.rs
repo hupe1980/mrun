@@ -1,9 +1,11 @@
 //! `mrun serve` skeleton (002 T000/T001): lifecycle, readiness, the loopback guard and probes.
 
+use mrun::chat::template::ChatTemplate;
 use mrun::chat::tokenizer::test_support::byte_tokenizer;
 use mrun::cli::serve::{self, EngineFactory, Loaded, RunningServer, ServeArgs};
 use mrun::runtime::handle::{DEFAULT_STALL_TIMEOUT, EngineHandle};
 use mrun::runtime::scripted::ScriptedEngine;
+use mrun_engine::{Sampling, SyntaxId};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -31,6 +33,10 @@ fn scripted() -> EngineFactory {
             model_id: "scripted".into(),
             handle,
             tokenizer,
+            template: Arc::new(ChatTemplate::new("{{ messages[0].content }}".into()).unwrap()),
+            syntax: SyntaxId::Hermes,
+            supports_thinking: true,
+            defaults: Sampling::GREEDY,
         })
     })
 }

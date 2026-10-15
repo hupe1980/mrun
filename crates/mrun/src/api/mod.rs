@@ -3,17 +3,23 @@
 pub mod chat_completions;
 pub mod collect;
 pub mod decode;
+pub mod handler;
 pub mod model;
+pub mod run;
 pub mod sse;
 
 use crate::cli::serve::{Readiness, ServerState};
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, head};
+use axum::routing::{get, head, post};
 use serde_json::json;
+
+/// Largest request body (base64 screenshots in agent history).
+pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Builds the router. Query strings (`?beta=true`) and `anthropic-beta` headers are accepted on
 /// every route (002 FR-017): nothing rejects them.
@@ -21,6 +27,8 @@ pub fn router(state: ServerState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/hello", head(hello).get(hello))
+        .route("/v1/chat/completions", post(chat_completions::handle))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             loopback_guard,
