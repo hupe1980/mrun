@@ -30,6 +30,7 @@ engineering principles.
 | 004 | [Models and CLI](004-models-cli/spec.md): pull, launch, connect, doctor, ps | 0.1 (M4) | 001; 002 for launch/connect/ps | PR-6 | Planned |
 | 005 | [Benchmark harness](005-bench/spec.md): in-order trace replay, fair comparisons | 0.1 (M5) | 002; 003 for cache cells | PR-7 | Planned |
 | 008 | [Distribution](008-distribution/spec.md): Homebrew, signed binary, launchd service, `/metrics` | 0.1 (M6) | 002, 004 | PR-6 | Planned |
+| 010 | [Model families](010-model-families/spec.md): block library, family registry, syntax registry, tiers; GLM, Gemma 4, Nemotron-H after 0.1 | 0.1 (0.1 families) + after 0.1 | 001, 002, 003 | PR-1 | Planned |
 | 006 | [Speculative decoding](006-speculative-decoding/spec.md): copy-aware n-gram drafts (MTP heads gated on measurement) | After 0.1 | 001, 003, 005 | PR-1 | Planned (measure first) |
 | 007 | [Persistent prefix tier](007-persistent-prefix-tier/spec.md): opt-in SSD branches and checkpoints | After 0.1 | 003, 005 | PR-2, PR-5 | Planned (measure first) |
 | 009 | [Image input](009-image-input/spec.md): screenshots and image tool results for vision-capable models | After 0.1 | 001, 002, 003 | PR-1 | Planned (measure first) |

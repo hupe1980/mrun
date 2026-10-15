@@ -294,8 +294,9 @@ timeouts and that the next request runs normally.
   Session headers are used only for recording (FR-021).
 
 - **FR-032**: Tool-call and reasoning parsing MUST go through a syntax registry
-  (`chat/syntax/`): one streaming parser per syntax, named by the model's family (001 FR-023) and
-  confirmed at load by a template probe; a mismatch MUST refuse the load naming the family and the
+  (`chat/syntax/`): one streaming parser per syntax. A family (001 FR-023) names an ordered set of
+  accepted syntaxes; a template probe at load picks the first that matches (so `qwen3_moe` repos with
+  Hermes or Qwen XML templates both load); no match MUST refuse the load naming the family and the
   template's detected syntax. 0.1 syntaxes: Hermes JSON (Qwen3), Qwen XML (Qwen3-Coder, Qwen3.6),
   Harmony (gpt-oss), Mistral `[TOOL_CALLS]` (Devstral Small 2). No syntax-specific logic outside
   its parser and its registry entry (constitution V).
