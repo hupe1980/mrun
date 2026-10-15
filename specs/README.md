@@ -34,7 +34,8 @@ engineering principles.
 | 007 | [Persistent prefix tier](007-persistent-prefix-tier/spec.md): opt-in SSD branches and checkpoints | After 0.1 | 003, 005 | PR-2, PR-5 | Planned (measure first) |
 | 009 | [Image input](009-image-input/spec.md): screenshots and image tool results for vision-capable models | After 0.1 | 001, 002, 003 | PR-1 | Planned (measure first) |
 
-Order: 001 → 002 → 003; 004, 005 and 008 start once 001 lands and run in parallel with 003. 006, 007
+Order: 001 → 002 → 003; 004 starts once 001 lands, 005 once 002 lands, 008 once 002 and 004
+land; all three run in parallel with 003. 010's 0.1 families land with 001. 006, 007
 and 009 start after 0.1, each only after its measure-first check with `mrun bench` on recorded traces.
 Each feature has a spec, plan, research, data model, contracts, quickstart and tasks, and is
 analyzed with `/speckit-analyze` before implementation.

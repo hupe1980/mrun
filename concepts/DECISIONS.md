@@ -1,6 +1,6 @@
 # Decisions
 
-Architecture decision records. IDs are stable. Superseded early records (D002 llama.cpp shim,
+Architecture decision records. IDs are stable. Superseded early records (D002 llama.cpp shim, D006–D009 retired engine and process notes,
 D003 Candle, D005 local-only planning, D016 evidence gating) are history: see git and
 [candle-capabilities](research/archive/candle-capabilities.md).
 
@@ -13,7 +13,7 @@ D003 Candle, D005 local-only planning, D016 evidence gating) are history: see gi
 | D012 | Memory budgeted by construction, not per-allocation hooks | Accepted |
 | D013 | Specs, concepts and Spec Kit tooling are tracked in git | Accepted |
 | D014 | Ship Anthropic Messages, OpenAI Chat Completions and stateless Responses together | Accepted 2026-10-14 |
-| D015 | Models: MLX safetensors; default Qwen3.6-35B-A3B (hybrid), Qwen3-Coder-30B-A3B, Qwen3-8B reference | Revised 2026-10-15 |
+| D015 | Models: an open set of families (block library + family modules + syntax registry); 0.1: Qwen3.6, Qwen3-Coder, gpt-oss, Devstral, Qwen3-8B reference | Revised 2026-10-15 |
 | D017 | Prefix store: live path plus moved-out branches; checkpoints for hybrids; plain LRU | Revised 2026-10-15 |
 | D018 | One active sequence; FIFO queue; batching only if traces show agents waiting on each other | Accepted 2026-10-15 |
 | D019 | Contiguous per-layer attention arrays, no paging; state moves between live path and branches | Accepted 2026-10-15 |
@@ -44,13 +44,21 @@ defaults to one sixth of physical memory, between 2 and 8 GiB (8 GiB on a 48 GB 
 
 ## D015: Models
 
-- **Default: Qwen3.6-35B-A3B** (released 2026-04-14, Apache-2.0): 40 layers, 30 Gated DeltaNet and
-  10 gated attention, MoE with 256 experts; vendor-reported 73.4% SWE-bench Verified against about
-  51.6% for Qwen3-Coder-30B-A3B. Only 10 attention layers, so ≈20 KiB of attention state per token:
-  its full 262K window fits a 48 GB Mac, about 2.5 times Qwen3-Coder's usable context. The default is
-  confirmed by `mrun bench` before release, and newer releases are re-checked then.
-- **Qwen3-Coder-30B-A3B**: attention-only MoE; simpler cache behaviour; kept as an alternative.
-- **Qwen3-8B**: dense reference for correctness tests and 16–24 GB Macs.
+- **Open architecture.** mrun supports model *families*, not one model. A family is a small module
+  that composes shared blocks (full GQA, sliding-window with sinks and MLA attention; Gated
+  DeltaNet and later Mamba2; dense and mixture-of-experts feed-forward), plus a tool-call and
+  reasoning syntax from a registry (Hermes JSON, Qwen XML, Harmony, Mistral, GLM XML). Each module
+  is a port of the mlx-lm reference with a parity test. Unknown architectures are refused with the
+  list of supported families. No plugin system: adding a family is one module and one test.
+- **Release 0.1** covers every state kind and the most used tool formats: Qwen3.6-35B-A3B (hybrid
+  linear attention; vendor-reported 73.4% SWE-bench Verified; ≈20 KiB per token, so its 262K
+  window fits a 48 GB Mac), Qwen3-Coder-30B-A3B (full attention MoE), gpt-oss-20b (sliding window
+  with sinks, Harmony format), Devstral Small 2 (dense, Mistral tool format), and Qwen3-8B as the
+  dense correctness reference for small Macs.
+- **After 0.1** (spec 010): GLM-4.7-Flash (MLA), Gemma 4 (sliding window + global), Nemotron-H
+  (Mamba2 hybrid), then families by demand.
+- **Default**: whichever 0.1 model wins the agent suite of `mrun bench` on the M4 Pro (task in 005);
+  Qwen3.6 is the expected winner.
 
 ## D017: Prefix store
 

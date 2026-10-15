@@ -23,20 +23,48 @@ by `ScriptedEngine`, a deterministic double that models allocation, growth, pipe
 checkpoints so API, cache and scheduler logic is tested on Linux. It is a test seam, not a plugin
 system.
 
-## Models and sequence state
+## Models: an open set of families
 
-| Model | Layers | Attention state per token | Fixed recurrent state | Role |
+mrun is not tied to one model family. A model is supported when three things exist for its
+architecture, each small and tested on its own:
+
+1. **A family module** (`mrun-engine/src/models/<family>.rs`): maps `config.json` and weight names
+   onto shared building blocks and composes the layer stack. Blocks: attention (full GQA, sliding
+   window with optional sinks, MLA), linear attention (Gated DeltaNet; Mamba2 later), feed-forward
+   (dense SwiGLU/GeGLU, mixture of experts with optional shared experts), norms, RoPE variants.
+   Modules are ports of the mlx-lm reference and pass a parity test against it.
+2. **A chat syntax** (`mrun/src/chat/syntax/`): the model's own Jinja template renders prompts; a
+   registry of tool-call and reasoning parsers covers the formats families use (Hermes JSON in
+   `<tool_call>`, Qwen XML, OpenAI Harmony channels, Mistral `[TOOL_CALLS]`, GLM XML). A family
+   names its syntax; a template probe at load confirms it.
+3. **Its state kinds**, which decide how the prefix cache restores it (below).
+
+An unknown `model_type` is refused at load with the list of supported families. Adding a family is
+one module, one syntax entry if new, and a parity test: no plugin system (Principle VI).
+
+| Model (4-bit) | Family / blocks | Attention state per token | Position-bound state | Release |
 | --- | --- | --- | --- | --- |
-| Qwen3.6-35B-A3B, 4-bit (≈20 GB) | 30 Gated DeltaNet + 10 gated attention, MoE 256 experts | ≈20 KiB | ≈61 MiB per checkpoint | Default (confirmed by `mrun bench` before release) |
-| Qwen3-Coder-30B-A3B, 4-bit (17.2 GB) | 48 attention, MoE 128 experts | 96 KiB | none | Attention-only alternative |
-| Qwen3-8B, 4-bit | 36 attention, dense | 144 KiB | none | Reference for correctness; small Macs |
+| Qwen3.6-35B-A3B (≈20 GB) | `qwen3_5_moe`: 30 Gated DeltaNet + 10 gated attention, MoE | ≈20 KiB | ≈61 MiB per checkpoint | 0.1, default candidate |
+| Qwen3-Coder-30B-A3B (17.2 GB) | `qwen3_moe`: full attention, MoE | 96 KiB | none | 0.1 |
+| gpt-oss-20b (MXFP4, ≈13 GB) | `gpt_oss`: alternating sliding-window (128) and full attention with sinks, MoE; Harmony format | ≈48 KiB | none (full KV kept) | 0.1 |
+| Devstral Small 2 24B (≈14 GB) | `mistral`: dense full attention; Mistral tool format | ≈160 KiB | none | 0.1 |
+| Qwen3-8B (4.6 GB) | `qwen3`: dense full attention | 144 KiB | none | 0.1, correctness reference |
+| GLM-4.7-Flash, Gemma 4, Nemotron-H | MLA; sliding window + global; Mamba2 hybrid | — | — | After 0.1 (spec 010) |
 
-The **sequence state** of the active conversation is the attention KV of every attention layer
-(contiguous per-layer arrays; `offset` marks the valid length) plus, for hybrid models, the
-recurrent state of every linear-attention layer (convolution and delta-rule state at the current
-position). Attention KV can be cut at any position. Recurrent state exists only at the position it
-was computed for, so a hybrid model resumes from a **checkpoint**: a copy of all recurrent state
-taken at a planned position during prefill.
+The default model is chosen by `mrun bench` among the 0.1 models before release.
+
+## Sequence state
+
+The **sequence state** of the active conversation has two kinds of parts:
+
+- **Positional state**: attention KV of every attention layer (contiguous per-layer arrays; `offset`
+  marks the valid length). It can be cut at any position. Sliding-window layers keep their full KV
+  and apply the window as a mask, so they stay cuttable too; the memory cost is small for the
+  families above, and a rotating buffer would make earlier positions unrecoverable.
+- **Position-bound state**: the recurrent state of linear-attention layers (convolution and
+  delta-rule or SSM state). It exists only for the position it was computed at, so these models
+  resume from a **checkpoint**: a copy of all position-bound state taken at a planned position
+  during prefill.
 
 Worked budget on the target (M4 Pro, 48 GB): `min(0.75 × 48, 36) − 8 = 28 GiB`. Qwen3.6 4-bit
 leaves ≈6–7 GiB after weights and scratch, more than its 262K window needs (≈5 GiB). Qwen3-Coder
@@ -100,9 +128,10 @@ hanging off it.
   prefix stays in place. The old tail is **moved** out into a branch segment, one layer at a time
   (copy the tail, then free that layer's slack), and the requested branch is moved in the same way.
   State is never held twice, so a 90K-token conversation survives a subagent on a 105K-token
-  machine; moving its 8.2 GiB tail out and back costs ≈ 0.15–0.2 s of bandwidth. Tiny tails
+  machine; moving its 8.2 GiB tail out and back costs an estimated ≈ 0.15–0.2 s on the M4 Pro
+  (memory bandwidth; to be measured by `mrun bench`). Tiny tails
   (under 256 tokens) are discarded instead.
-- **Hybrid models**: checkpoints are captured during prefill at the end of system+tools, at the
+- **Models with position-bound state** (linear-attention hybrids): checkpoints are captured during prefill at the end of system+tools, at the
   start of the last user or tool message, and at the end of the prompt's messages, before the
   generation header (`generation_start`, where the next turn's re-rendered reply diverges). At
   most 8 per conversation (≈ 0.5 GiB); the first, the two deepest and the newest at a user message
@@ -123,8 +152,8 @@ runs that use the same chunk split, so results must match bit for bit.
 - Tokenizer: `tokenizers` (HF `tokenizer.json`). Templates: `minijinja` configured like HF
   (`trim_blocks`, `lstrip_blocks`, a `tojson` without HTML escaping), golden-tested against HF
   renderings with tools.
-- Tool calls: streaming parsers for the model's native syntax (Qwen3 JSON, Qwen3-Coder and Qwen3.6
-  XML). Values end only at the full closing sequence, are never coerced or evaluated, and code
+- Tool calls and reasoning: streaming parsers from the syntax registry (Hermes JSON, Qwen XML,
+  Harmony, Mistral, GLM XML). Values end only at the full closing sequence, are never coerced or evaluated, and code
   containing the syntax's own tags round-trips. Strict tools and JSON response formats use
   `llguidance` masks computed between forward and sample.
 - One internal `ChatRequest` / event model; three thin encoders.

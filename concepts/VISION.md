@@ -24,7 +24,7 @@ clients that time out during long prefills, and slow interruption.
 - **Secondary**: tool builders who need a fast, predictable local endpoint speaking the OpenAI and
   Anthropic APIs.
 
-## What makes mrun best-in-class
+## Where mrun must win (proved by `mrun bench`)
 
 Competitors ship prefix caching too: llama.cpp server, Ollama's MLX engine, oMLX, mlx-lm, LM
 Studio, and SGLang's MLX backend with a radix cache. oMLX even reports divergence points. mrun has
@@ -38,15 +38,18 @@ to win on what agents feel, and prove it with a published, fair benchmark:
 3. **Predictable memory.** Weights, attention state and cache live inside a budget fixed at
    startup. Prompts that cannot fit are refused with the numbers; output limits are clamped, never
    silently truncated; memory pressure sheds cache first.
-4. **Interruption that keeps progress.** Cancellation takes effect within a few hundred
-   milliseconds at any context length, and work already done is kept for the retry.
+4. **Interruption that keeps progress.** Cancellation target: ready for the next prompt within
+   300 ms (p95) on the M4 Pro, 48 GB (001 SC-004; the maximum-depth bucket is at risk and recorded
+   either way). Work already done is kept for the retry.
 5. **All three agent APIs, faithfully.** Anthropic Messages, OpenAI Chat Completions and stateless
    Responses, including MCP tools, Codex namespaces and deferred tool loading, from one binary.
 6. **Delightful DX.** `mrun launch claude-code` takes a fresh install to a working agent: it offers
    to pull the model and start the server, then configures the client for that process.
-7. **The best model that fits.** Default: Qwen3.6-35B-A3B (hybrid MoE, about 20 KiB of attention
-   state per token, so its full 262K context fits a 48 GB Mac); Qwen3-Coder-30B-A3B as the
-   attention-only alternative.
+7. **Open to the best models that fit.** Model support is an open set of families built from shared
+   blocks (full, sliding-window and compressed attention; linear attention; dense and
+   mixture-of-experts layers) with a registry of tool-call formats. Release 0.1 covers Qwen3.6
+   (hybrid), Qwen3-Coder, gpt-oss and Devstral; GLM, Gemma and Nemotron follow. The default is the
+   model that wins `mrun bench` on the target Mac.
 
 ## Non-goals
 

@@ -4,7 +4,7 @@ Design notes behind mrun. Specs own requirements; these pages explain direction 
 
 | Page | What it covers |
 | --- | --- |
-| [VISION](VISION.md) | Problem, users, what best-in-class means, non-goals |
+| [VISION](VISION.md) | Problem, users, where mrun must win, non-goals |
 | [ARCHITECTURE](ARCHITECTURE.md) | Components, data flow, KV and prefix store, memory model, threading |
 | [DECISIONS](DECISIONS.md) | Architecture decision records |
 | [ROADMAP](ROADMAP.md) | Milestones and gates |
