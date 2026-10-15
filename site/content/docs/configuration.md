@@ -30,10 +30,9 @@ reject_tool_images = false
 
 [memory]
 fraction = 0.75
-# reserve_gib: 15% of physical memory, between 2 and 8 GiB
+# reserve_gib: one sixth of physical memory, between 2 and 8 GiB
 
 [engine]
-chunk = 2048
 default_model = "qwen3.6"
 
 [cache]

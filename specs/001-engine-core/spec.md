@@ -197,7 +197,7 @@ uninterrupted run that used the same chunk split.
   processed. Generation MUST check cancellation after every token.
 - **FR-006**: At startup the engine MUST compute `budget = min(fraction × physical,
   recommended working set) − reserve`, with fraction 0.75 and reserve
-  `clamp(15% of physical, 2 GiB, 8 GiB)` by default, physical memory and working set read from the
+  `clamp(physical ÷ 6, 2 GiB, 8 GiB)` by default, physical memory and working set read from the
   MLX device info (`memory_size`, `max_recommended_working_set_size`). Users may lower the budget,
   and raise it only with an explicit flag.
 - **FR-007**: Before loading weights the engine MUST estimate weights from file sizes and refuse a

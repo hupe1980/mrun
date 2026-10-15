@@ -12,7 +12,7 @@ everything slows down. mrun fixes a budget at startup and never exceeds it.
 
 ```text
 budget  = min(75% of physical memory, GPU recommended working set) − reserve
-reserve = 15% of physical memory, between 2 and 8 GiB
+reserve = one sixth of physical memory, between 2 and 8 GiB
 context = (budget − weights − scratch) ÷ attention bytes per token
 ```
 
@@ -51,7 +51,7 @@ what the request reserved.
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `--memory-fraction` / `memory.fraction` | 0.75 | Share of physical memory mrun may plan for |
-| `--reserve-gib` / `memory.reserve_gib` | 15% of RAM, 2–8 GiB | Memory left for other applications |
+| `--reserve-gib` / `memory.reserve_gib` | ⅙ of RAM, 2–8 GiB | Memory left for other applications |
 | `--allow-over` | off | Start even when the model does not fit the budget (at your own risk) |
 
 Raising the fraction above 0.75 lets the GPU use more memory than macOS recommends and risks swap.

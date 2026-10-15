@@ -55,12 +55,10 @@ fraction = 0.75
 reserve_gib = 8
 
 [engine]
-chunk = 2048
 default_model = "qwen3.6"
 
 [cache]
 enabled = true
-warmup = true
 
 [limits]
 body_mib = 8

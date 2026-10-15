@@ -20,8 +20,8 @@ All commands accept `--help` (with examples) and `-q/--quiet`; tabular commands 
 
 | Command | Owner | Behavior |
 | --- | --- | --- |
-| `mrun run <model> [sampling flags] [--think] [--chunk N] [--memory-fraction F] [--reserve-gib N] [--allow-over] [--info] [--check]` | 001 | Interactive chat; see [001 contract](../../001-engine-core/contracts/engine.md) |
-| `mrun serve [--model M] [--host H] [--port P] [--api-key-file F] [--thinking client\|off\|on] [--max-output N] [--queue N] [--queue-wait-s N] [--chunk N] [--memory-fraction F] [--reserve-gib N] [--allow-over] [--no-cache] [--no-warmup] [--debug-cache] [--reject-tool-images] [--record DIR] [--detach]` | 001/002/003/004 | Start the server (default `127.0.0.1:8484`); prints URL and a `mrun launch` hint |
+| `mrun run <model> [sampling flags] [--think] [--memory-fraction F] [--reserve-gib N] [--allow-over] [--info] [--check]` | 001 | Interactive chat; see [001 contract](../../001-engine-core/contracts/engine.md) |
+| `mrun serve [--model M] [--host H] [--port P] [--api-key-file F] [--thinking client\|off\|on] [--max-output N] [--queue N] [--queue-wait-s N] [--memory-fraction F] [--reserve-gib N] [--allow-over] [--no-cache] [--debug-cache] [--reject-tool-images] [--record DIR] [--detach]` | 001/002/003/004 | Start the server (default `127.0.0.1:8484`); prints URL and a `mrun launch` hint |
 | `mrun stop` | 004 | Stop a detached server gracefully |
 | `mrun ps` | 004 | Model, budget, active (with progress) and queued requests, cache stats, recording flag, last miss |
 | `mrun pull <alias\|org/name[@rev]> [--yes]` | 004 | Size, license, fit; confirm if it won't fit; resumable download; verify; manifest |

@@ -38,8 +38,7 @@ Every command accepts `--help` (with examples) and `-q/--quiet`. Commands that p
 | `--thinking` | `client` | `client`, `on` or `off` |
 | `--max-output` | 16384 | Default output limit |
 | `--queue`, `--queue-wait-s` | 16, 600 | Queue length and maximum wait |
-| `--chunk` | 2048 | Largest prefill chunk in tokens (smaller at depth so cancellation stays fast) |
-| `--memory-fraction`, `--reserve-gib` | 0.75, 15% of RAM (2–8) | Memory budget (see [Memory](@/docs/memory.md)) |
+| `--memory-fraction`, `--reserve-gib` | 0.75, ⅙ of RAM (2–8 GiB) | Memory budget (see [Memory](@/docs/memory.md)) |
 | `--allow-over` | off | Start even if the model exceeds the budget |
 | `--no-cache` | off | Disable the prefix cache |
 | `--debug-cache` | off | Print divergence excerpts on the terminal |

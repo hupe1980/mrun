@@ -23,7 +23,7 @@
 | Field | Rule |
 | --- | --- |
 | physical, recommended | `device_info` `memory_size`, `max_recommended_working_set_size` |
-| fraction, reserve | 0.75; `clamp(0.15 × physical, 2 GiB, 8 GiB)` |
+| fraction, reserve | 0.75; `clamp(physical ÷ 6, 2 GiB, 8 GiB)` |
 | budget | `min(fraction × physical, recommended) − reserve` |
 | weights | file sizes before load; measured after |
 | scratch | probed peak (two points) + one attention layer at P, × 1.25; cached per key (R6) |

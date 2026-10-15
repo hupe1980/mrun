@@ -73,7 +73,7 @@ client ──HTTP──▶ api (Chat | Messages | Responses ─▶ ChatRequest; 
 - One engine thread owns the device, weights, sequence state, prefix store and one GPU stream.
   Competing servers that drive MLX from several threads have hit stream errors and kernel panics.
 - **Budget by construction**: `budget = min(fraction × physical, recommended working set) −
-  reserve`, with the reserve defaulting to `clamp(15% of physical, 2 GiB, 8 GiB)`. Weights are
+  reserve`, with the reserve defaulting to `clamp(physical ÷ 6, 2 GiB, 8 GiB)`. Weights are
   measured after load; scratch is measured by one probe chunk at the deepest admissible position
   (cached per model, machine, MLX version and chunk size); capacity is sized from the remainder
   and never exceeds the probed depth. MLX memory and cache limits back the budget.

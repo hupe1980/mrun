@@ -37,7 +37,7 @@ Per-allocation enforcement inside third-party code is not achievable
 weights and scratch, sizes attention-state capacity from the remainder, admits requests by their
 prompt, clamps output limits to what remains, keeps every allocation within the request's
 reservation, and caps inputs so host-side work stays bounded. The reserve for other applications
-defaults to 15% of physical memory, between 2 and 8 GiB.
+defaults to one sixth of physical memory, between 2 and 8 GiB (8 GiB on a 48 GB Mac).
 
 ## D015: Models
 
