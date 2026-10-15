@@ -6,6 +6,7 @@ pub mod engine;
 pub mod identity;
 
 pub use engine::{
-    Architecture, CancelToken, Engine, EngineError, KvSegmentId, MemoryBudget, ModelInfo, Sampling,
-    Segment, TokenMask,
+    Architecture, CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind,
+    MAX_PLAN_CHECKPOINTS, MemoryBudget, ModelInfo, PrefillPlan, Prefilled, Sampling, Segment,
+    SegmentId, Step, TokenMask, chunk_len,
 };

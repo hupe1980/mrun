@@ -13,7 +13,7 @@ eviction re-prefill is ≥ 10% of prefill time in maintainer recordings and SC-0
 
 ### Session 2026-10-15
 
-- Q: Is the tier on by default? → A: No. Constitution IV (v3.1.0) requires an explicit opt-in: `mrun serve --persist`, `[cache] persist = true` or `MRUN_CACHE_PERSIST=1`. `mrun launch` does not enable it.
+- Q: Is the tier on by default? → A: No. Constitution IV (v3.2.0) requires an explicit opt-in: `mrun serve --persist`, `[cache] persist = true` or `MRUN_CACHE_PERSIST=1`. `mrun launch` does not enable it.
 - Q: What is written, and when? → A: Exact sequence-state bytes of branches (attention state for a token range) and hybrid checkpoints, written by a background writer: when a branch is moved out of the live path, and for the live path's committed tokens once the server is idle for 2 s after a turn. Hybrids persist per turn only the end-of-prompt checkpoint (plus the system+tools checkpoint once). Eviction from memory waits at most for one in-flight 4 MiB block.
 - Q: What binds an entry to a model? → A: The full cache key of 003 (weights, tokenizer, template, state format) plus the on-disk format version and the MLX version (decided 2026-10-15: mrun patch releases keep entries). Any difference means the entry is invisible; it is never converted.
 - Q: Default size cap? → A: 32 GiB, capped further so the volume keeps at least 10% free; LRU by last use; entries unused for 30 days are deleted. All three are configurable.

@@ -47,7 +47,7 @@ Cross-cutting:
 - **Deferred tools** (FR-028): `defer_loading` tools are not rendered upfront; `tool_reference` blocks and `tool_search_output` lists render the definition inline in the tool result. Behind a custom base URL Claude Code's tool search is off unless `ENABLE_TOOL_SEARCH` is set; `mrun launch` sets `ENABLE_TOOL_SEARCH=auto:10` (defer when tool definitions exceed 10% of the context window).
 - **Rejected server-side features** (FR-029): `mcp_servers`, `container`, `mcp_toolset`, `tool_search_tool_*`, `tool_addition`/`tool_removal` → 400 naming the field.
 - **Benchmark control**: `x-mrun-ignore-eos: on` (honored on loopback only) makes generation run to the output limit, so `mrun bench` gives every system the same decode work (005 FR-007).
-- **Per-request cache off**: request header `x-mrun-cache: off` on all APIs (003 FR-009).
+- **Per-request cache off**: request header `x-mrun-cache: off` on all APIs (003 FR-012).
 - **Strict schemas** (FR-004/005): a schema llguidance cannot compile runs unconstrained with warning `strict-unsupported`.
 - **`tool_choice: none`**: tools stay rendered; a fixed −inf logit bias on tool-call opener tokens prevents calls (decode stays pipelined).
 - **Disconnect** (FR-011): a per-connection close watcher cancels the request in any phase (queued, prefilling, generating, non-streaming) within 300 ms.

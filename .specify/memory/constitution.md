@@ -13,7 +13,8 @@ label.
 ### II. Exactness Before Speed
 
 Reused inference state MUST be exact: same model, tokenizer, template, KV format and token prefix.
-Hash lookups MUST be confirmed by token comparison. Lossy techniques (KV eviction or compression,
+Hash lookups MUST be confirmed by token comparison, or for media (images) by comparing the full
+digest of the preprocessed input. Lossy techniques (KV eviction or compression,
 KV quantization, lossy speculation, approximate or position-independent prefix reuse) MUST be
 opt-in, separately identified in cache keys, and gated by a measured quality check. Lossless
 speculative decoding (target-verified) is exact within the same tolerance as chunked prefill. Silent context truncation,
@@ -40,8 +41,9 @@ name alone.
 ### V. Own the Runtime, Reuse the Kernels
 
 mrun owns scheduling, KV state, memory, APIs and model execution order, built on Apple MLX arrays
-and kernels called from Rust. Model graphs are ports of reference implementations (mlx-lm) and are
-tested against them. New GPU kernels or forks of upstream libraries require a profile showing the
+and kernels called from Rust. Model graphs are ports of reference implementations (mlx-lm; mlx-vlm for vision
+components) and are tested against them. Model support is an open set of families composed from
+shared blocks; no family-specific logic outside its module and its chat syntax. New GPU kernels or forks of upstream libraries require a profile showing the
 bottleneck, a reference implementation for correctness tests, and a measured end-to-end win.
 Prefer small, upstreamable patches. Engine types MUST NOT leak into the public API.
 
@@ -78,4 +80,4 @@ removed or redefined; minor: principle added; patch: wording) and reconcile affe
 Numerical targets in specs are acceptance gates; changing one after a failed run requires a note
 in the spec explaining why.
 
-**Version**: 3.1.0 | **Ratified**: 2026-10-13 | **Last Amended**: 2026-10-15
+**Version**: 3.2.0 | **Ratified**: 2026-10-13 | **Last Amended**: 2026-10-15

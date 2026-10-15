@@ -70,4 +70,4 @@ schema_depth = 16
 ```
 
 Every key is optional; `mrun config` shows effective values and sources. Environment variables
-are `MRUN_<SECTION>_<KEY>`; `MRUN_HOME` and `MRUN_API_KEY` are reserved names, not config keys (for example `MRUN_SERVER_PORT`, `MRUN_MEMORY_RESERVE_GIB`).
+are `MRUN_<SECTION>_<KEY>`; `MRUN_HOME`, `MRUN_API_KEY` and (007) `MRUN_CACHE_DIR` are reserved names, not config keys (for example `MRUN_SERVER_PORT`, `MRUN_MEMORY_RESERVE_GIB`).

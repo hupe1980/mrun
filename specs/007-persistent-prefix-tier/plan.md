@@ -42,7 +42,7 @@ budget; no request fails because of disk errors
 | I Agent latency | Restart/eviction misses become ≈ 1 s restores; no warm-path regression (SC-003); numbers from `mrun bench` | Pass |
 | II Exactness | Exact bytes; full cache key + format + MLX version; token comparison before use; checksums; mutation suite (SC-002) | Pass |
 | III Memory budget | Restores allocate inside the budget via 003 admission | Pass |
-| IV Local, private | Opt-in only (v3.1.0 "persistence of inference state requires an explicit opt-in and is bound to the model identity"); 0700/0600; no request text stored; `x-mrun-cache: off` never persisted; no network | Pass |
+| IV Local, private | Opt-in only (v3.2.0 "persistence of inference state requires an explicit opt-in and is bound to the model identity"); 0700/0600; no request text stored; `x-mrun-cache: off` never persisted; no network | Pass |
 | V Own runtime | Own format, no third-party cache layer; MLX touched only on the engine thread | Pass |
 | VI Simple | One file per entry, index rebuilt from headers, plain LRU, three settings | Pass |
 

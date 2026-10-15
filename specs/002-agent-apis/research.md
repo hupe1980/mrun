@@ -461,7 +461,7 @@ enum Finish { Stop, StopSequence, Length, ContextFull, ToolCalls, Cancelled }
 - **cross-cutting:**
   - `xapi_same_prompt_same_tokens_all_apis`, `xapi_qwen3_coder_missing_tool_call_tag_recovered`, `xapi_qwen3_coder_param_types_by_schema`
   - `xapi_thinking2507_bare_close_think`, `xapi_queue_full_immediate_error`, `xapi_queue_deadline_timeout`, `xapi_disconnect_cancels_within_one_token`
-  - `xapi_disconnect_while_queued_releases_slot`, `xapi_body_over_8mib_413`, `xapi_schema_depth_limit`, `xapi_tool_count_limit`
+  - `xapi_disconnect_while_queued_releases_slot`, `xapi_body_over_64mib_413`, `xapi_schema_depth_limit`, `xapi_tool_count_limit`
   - `xapi_nonloopback_requires_key`, `xapi_no_prompt_content_in_logs`
   - `xapi_disconnect_while_queued_prefilling_nonstream_cancels_300ms`, `xapi_strict_schema_uncompilable_unconstrained_warning`, `xapi_tool_choice_none_bias_pipelined`
   - `xapi_qwen3_raw_args_rerender_byte_stable`, `xapi_qwen_xml_rerender_template_miss_reported`, `xapi_qwen_xml_history_args_nonobject_raw_warning`, `xapi_cached_tokens_resume_p_minus_1`, `xapi_cached_tokens_hybrid_checkpoint_resume`, `xapi_max_tokens_clamped_reported`, `xapi_record_fields_and_session_headers`

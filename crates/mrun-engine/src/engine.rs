@@ -1,7 +1,6 @@
 //! The engine contract: primitives the runtime drives. No MLX types appear here.
 
 use std::fmt;
-use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -10,6 +9,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub enum Architecture {
     Qwen3,
     Qwen3Moe,
+    Qwen35Moe,
+}
+
+/// Kind of a decoder layer: attention (K/V cut at any position) or linear (recurrent state).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LayerKind {
+    Attention,
+    Linear,
 }
 
 /// What the runtime needs to know about the loaded model.
@@ -18,14 +25,27 @@ pub struct ModelInfo {
     /// Content identity (see [`crate::identity`]).
     pub identity: String,
     pub architecture: Architecture,
-    pub layers: u32,
+    pub layer_kinds: Vec<LayerKind>,
     pub kv_heads: u32,
     pub head_dim: u32,
     pub vocab: u32,
     pub max_position: u32,
-    /// Bytes of K and V for one token across all layers.
+    /// Bytes of K and V for one token across all attention layers.
     pub kv_bytes_per_token: u64,
+    /// Bytes of recurrent state across all linear layers; 0 for attention-only models.
+    pub recurrent_bytes: u64,
     pub eos_tokens: Vec<u32>,
+}
+
+impl ModelInfo {
+    pub fn layers(&self) -> u32 {
+        self.layer_kinds.len() as u32
+    }
+
+    /// Whether the model has recurrent state, which cannot be cut to an earlier position.
+    pub fn is_hybrid(&self) -> bool {
+        self.layer_kinds.contains(&LayerKind::Linear)
+    }
 }
 
 /// Memory budget computed at startup: what mrun may use and how it is split.
@@ -34,9 +54,14 @@ pub struct MemoryBudget {
     pub physical: u64,
     pub recommended_working_set: u64,
     pub reserve: u64,
+    /// `min(fraction × physical, recommended) − reserve`.
     pub budget: u64,
     pub weights: u64,
     pub scratch: u64,
+    /// Depth at which scratch was probed; token capacity never exceeds it.
+    pub probed_depth: u32,
+    /// `budget − weights − scratch`: the bound on [`Engine::allocated`].
+    pub state_capacity_bytes: u64,
     pub kv_capacity_tokens: u32,
 }
 
@@ -111,15 +136,17 @@ impl TokenMask {
     pub fn is_allowed(&self, token: u32) -> bool {
         token < self.vocab && self.bits[(token / 64) as usize] & (1 << (token % 64)) != 0
     }
-
-    pub fn vocab(&self) -> u32 {
-        self.vocab
-    }
 }
 
-/// Shared cancellation flag, checked by the engine between layers and tokens.
+#[derive(Debug, Default)]
+struct Flags {
+    cancel: AtomicBool,
+    yield_: AtomicBool,
+}
+
+/// Shared cancellation and yield flags, checked by the engine after every layer and token.
 #[derive(Clone, Debug, Default)]
-pub struct CancelToken(Arc<AtomicBool>);
+pub struct CancelToken(Arc<Flags>);
 
 impl CancelToken {
     pub fn new() -> Self {
@@ -127,71 +154,210 @@ impl CancelToken {
     }
 
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancel.store(true, Ordering::Release);
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancel.load(Ordering::Acquire)
+    }
+
+    /// Asks `prefill` to return after the current whole chunk (memory pressure).
+    pub fn request_yield(&self) {
+        self.0.yield_.store(true, Ordering::Release);
+    }
+
+    pub fn yield_requested(&self) -> bool {
+        self.0.yield_.load(Ordering::Acquire)
+    }
+
+    /// Withdraws a yield request once the caller has acted on it.
+    pub fn clear_yield(&self) {
+        self.0.yield_.store(false, Ordering::Release);
     }
 }
 
-/// Handle to an owned deep copy of a token range of the active cache.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct KvSegmentId(pub u64);
+/// Prefill chunk length at `depth`: `clamp(2048 × 16384 / max(depth, 1), 128, 2048)`.
+pub fn chunk_len(depth: u32) -> u32 {
+    (2048 * 16384 / u64::from(depth.max(1))).clamp(128, 2048) as u32
+}
 
-/// A snapshot together with its size.
+/// Checkpoints one `prefill` call may capture.
+pub const MAX_PLAN_CHECKPOINTS: usize = 3;
+
+/// Absolute, ascending positions where prefill chunks must end; recurrent state is also
+/// checkpointed at each `checkpoints` position.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PrefillPlan<'a> {
+    pub boundaries: &'a [u32],
+    pub checkpoints: &'a [u32],
+}
+
+impl PrefillPlan<'_> {
+    /// End of the chunk starting at `start` in a call ending at `end`. Depends only on `start`
+    /// and the plan, so equal inputs always produce equal splits.
+    pub fn chunk_end(&self, start: u32, end: u32) -> u32 {
+        let planned = self
+            .boundaries
+            .iter()
+            .chain(self.checkpoints)
+            .copied()
+            .filter(|&at| at > start);
+        planned
+            .chain([end, start.saturating_add(chunk_len(start))])
+            .min()
+            .unwrap_or(end)
+    }
+
+    /// Planned checkpoint positions in `(start, end]`.
+    pub fn checkpoints_in(&self, start: u32, end: u32) -> impl Iterator<Item = u32> + '_ {
+        self.checkpoints
+            .iter()
+            .copied()
+            .filter(move |&at| at > start && at <= end)
+    }
+}
+
+/// Result of one `prefill` call.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Prefilled {
+    /// Tokens processed in whole chunks; the rest was not processed.
+    pub committed: u32,
+    /// Checkpoints captured at planned positions.
+    pub checkpoints: Vec<Checkpoint>,
+    /// Returned early after a whole chunk because a yield was requested.
+    pub yielded: bool,
+}
+
+/// Logits of one forward pass, consumed by `sample`.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Step(u64);
+
+impl Step {
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    pub fn id(&self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct CheckpointId(pub u64);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SegmentId(pub u64);
+
+/// Stored deep copy of all recurrent state at `position`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Checkpoint {
+    pub id: CheckpointId,
+    pub position: u32,
+    pub bytes: u64,
+}
+
+/// State for positions `[start, end)` moved out of the live sequence (plus, for hybrids, the
+/// recurrent state at `end`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Segment {
-    pub id: KvSegmentId,
+    pub id: SegmentId,
+    pub start: u32,
+    pub end: u32,
     pub bytes: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum EngineError {
-    #[error("request needs {requested} tokens of attention state but only {available} fit")]
+    #[error("request needs {requested} tokens of sequence state but only {available} fit")]
     Capacity { requested: u32, available: u32 },
-    #[error("unknown KV segment {0:?}")]
-    UnknownSegment(KvSegmentId),
-    #[error("invalid range {start}..{end} for an active cache of {len} tokens")]
+    #[error("{bytes} more bytes of sequence-state memory are needed")]
+    NeedsMemory { bytes: u64 },
+    #[error("recurrent state at {active} cannot be cut to {len}")]
+    NotTrimmable { len: u32, active: u32 },
+    #[error("the live sequence has no recurrent state")]
+    NoRecurrentState,
+    #[error("growth to {needed} tokens exceeds the reservation of {reserved}")]
+    ReservationExceeded { needed: u32, reserved: u32 },
+    #[error("invalid range {start}..{end} for a sequence of {len} tokens")]
     InvalidRange { start: u32, end: u32, len: u32 },
+    #[error("unknown segment {0:?}")]
+    UnknownSegment(SegmentId),
+    #[error("unknown checkpoint {0:?}")]
+    UnknownCheckpoint(CheckpointId),
+    #[error("step is not the current one")]
+    InvalidStep,
     #[error("engine failure: {0}")]
     Backend(String),
 }
 
-/// Primitive operations on the single active sequence plus owned snapshots.
+/// Primitive operations on the single live sequence plus stored checkpoints and segments.
 ///
-/// Engines are created on the worker thread and never move, so no `Send` bound is required.
+/// Every allocating call checks `budget().state_capacity_bytes − allocated()` first and returns
+/// `NeedsMemory` with nothing changed. At most one pipelined step is pending; `trim`, `reserve`,
+/// `checkpoint` and `split_off` roll it back first. Engines are created on the worker thread and
+/// never move, so no `Send` bound is required.
 pub trait Engine {
     fn info(&self) -> &ModelInfo;
     fn budget(&self) -> &MemoryBudget;
-    /// Tokens currently held in the active cache.
+
+    /// Positions held by the live state, including a pending pipelined token.
     fn active_len(&self) -> u32;
-    /// Ensure the active cache can grow to `total_tokens`. Evicting cached segments is the
-    /// caller's job; this fails only when even an empty cache cannot hold `total_tokens`.
-    fn reserve(&mut self, total_tokens: u32) -> Result<(), EngineError>;
-    /// Append `tokens` to the active cache. Returns how many were processed, fewer than
-    /// `tokens.len()` only when cancelled.
+    /// Bytes held: live allocation + segments + checkpoints.
+    fn allocated(&self) -> u64;
+
+    /// Trims the live state to `keep` (rules of `trim`) and records `total` as the ceiling for
+    /// later growth. Allocates nothing. `Capacity` if `total` exceeds the token capacity;
+    /// `reserve(0, …)` always succeeds otherwise and zeroes recurrent state.
+    fn reserve(&mut self, keep: u32, total: u32) -> Result<(), EngineError>;
+
+    /// Appends `tokens` at `active_len()` in chunks split by [`PrefillPlan::chunk_end`],
+    /// checkpointing at planned positions. Memory for the whole call is checked first. A cancel
+    /// discards the partial chunk; a yield request returns after the current whole chunk.
     fn prefill(
         &mut self,
         tokens: &[u32],
+        plan: &PrefillPlan,
         cancel: &CancelToken,
         progress: &mut dyn FnMut(u32),
-    ) -> Result<u32, EngineError>;
-    /// Feed `last` and return the next sampled token.
-    fn decode(
+    ) -> Result<Prefilled, EngineError>;
+
+    /// Feeds `last` and computes the logits for the next position. A pending step that fed
+    /// exactly `last` is returned without recomputation; any other pending step is rolled back.
+    fn forward(&mut self, last: u32) -> Result<Step, EngineError>;
+    /// Samples from `step`. With `pipeline` and room in the current allocation, the sampled
+    /// token is fed at once as a pending step.
+    fn sample(
         &mut self,
-        last: u32,
+        step: Step,
         sampling: &Sampling,
         mask: Option<&TokenMask>,
+        pipeline: bool,
     ) -> Result<u32, EngineError>;
-    /// Shrink the active cache to `len` tokens (no-op if already shorter).
-    fn trim(&mut self, len: u32);
-    /// Owned deep copy of active tokens `range`.
-    fn snapshot(&mut self, range: Range<u32>) -> Result<Segment, EngineError>;
-    /// Replace the active cache with `segments` (contiguous from position 0), then trim to `keep`.
-    fn restore(&mut self, segments: &[KvSegmentId], keep: u32) -> Result<(), EngineError>;
-    fn drop_segment(&mut self, id: KvSegmentId);
-    /// Empty the active cache.
+    /// Top-`n` log-probabilities of `step`.
+    fn top_logprobs(&mut self, step: &Step, n: usize) -> Result<Vec<(u32, f32)>, EngineError>;
+
+    /// Cuts the live state to `len`. Recurrent state allows only `len == active_len()`,
+    /// `active_len() − 1` with a pending step, or 0 (zeroes it); otherwise `NotTrimmable`.
+    fn trim(&mut self, len: u32) -> Result<(), EngineError>;
+
+    /// Deep copy of the recurrent state at `active_len()` (zero bytes for attention-only models).
+    fn checkpoint(&mut self) -> Result<Checkpoint, EngineError>;
+    /// Copies checkpoint `id` into the live recurrent state and cuts attention to its position
+    /// (which must be `<= active_len()`). The checkpoint stays stored.
+    fn restore_checkpoint(&mut self, id: CheckpointId) -> Result<(), EngineError>;
+    fn drop_checkpoint(&mut self, id: CheckpointId);
+
+    /// Moves positions `[at, active_len())` out into a segment. With `shrink` the live
+    /// allocation is reduced to `round_up(at, 256)`; without it (an `append` follows) it is
+    /// kept. Hybrids move the live recurrent state into the segment; `prefill` and `forward`
+    /// then fail with `NoRecurrentState` until `restore_checkpoint` or `append`.
+    fn split_off(&mut self, at: u32, shrink: bool) -> Result<Segment, EngineError>;
+    /// Copies segment `id` back in at its start (`active_len()` must equal it). With `consume`
+    /// the segment is freed as it is copied; otherwise it stays stored.
+    fn append(&mut self, id: SegmentId, consume: bool) -> Result<(), EngineError>;
+    fn drop_segment(&mut self, id: SegmentId);
+
+    /// Empties the live state and releases its allocation; segments and checkpoints stay.
     fn reset(&mut self);
 }
 
@@ -200,6 +366,7 @@ impl fmt::Display for Architecture {
         f.write_str(match self {
             Self::Qwen3 => "qwen3",
             Self::Qwen3Moe => "qwen3_moe",
+            Self::Qwen35Moe => "qwen3_5_moe",
         })
     }
 }
@@ -207,6 +374,37 @@ impl fmt::Display for Architecture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunk_len_follows_depth() {
+        for (depth, len) in [
+            (0, 2048),
+            (1, 2048),
+            (16_384, 2048),
+            (32_768, 1024),
+            (65_536, 512),
+            (131_072, 256),
+            (262_144, 128),
+            (262_000, 128),
+            (u32::MAX, 128),
+        ] {
+            assert_eq!(chunk_len(depth), len, "depth {depth}");
+        }
+    }
+
+    #[test]
+    fn chunks_end_at_plan_positions() {
+        let plan = PrefillPlan {
+            boundaries: &[100, 5000],
+            checkpoints: &[300],
+        };
+        assert_eq!(plan.chunk_end(0, 4000), 100);
+        assert_eq!(plan.chunk_end(100, 4000), 300);
+        assert_eq!(plan.chunk_end(300, 4000), 2348);
+        assert_eq!(plan.chunk_end(2348, 4000), 4000);
+        assert_eq!(plan.checkpoints_in(0, 299).count(), 0);
+        assert_eq!(plan.checkpoints_in(0, 300).collect::<Vec<_>>(), [300]);
+    }
 
     #[test]
     fn token_mask_allows_only_set_tokens() {
@@ -221,10 +419,14 @@ mod tests {
     }
 
     #[test]
-    fn cancel_token_is_shared() {
+    fn cancel_and_yield_are_shared() {
         let token = CancelToken::new();
         let clone = token.clone();
-        assert!(!token.is_cancelled());
+        assert!(!token.is_cancelled() && !token.yield_requested());
+        clone.request_yield();
+        assert!(token.yield_requested());
+        token.clear_yield();
+        assert!(!clone.yield_requested());
         clone.cancel();
         assert!(token.is_cancelled());
     }

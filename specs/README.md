@@ -5,7 +5,7 @@ foundation of 001.
 
 mrun is a local inference server for coding agents on Apple Silicon. See
 [concepts/VISION](../concepts/VISION.md) for the product, [concepts/ROADMAP](../concepts/ROADMAP.md)
-for direction and gates, and the [constitution](../.specify/memory/constitution.md) (v3.1.0) for
+for direction and gates, and the [constitution](../.specify/memory/constitution.md) (v3.2.0) for
 engineering principles.
 
 ## Product requirements
