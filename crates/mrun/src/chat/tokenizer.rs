@@ -27,10 +27,7 @@ impl Tokenizer {
     }
 
     /// Like [`Self::encode`], with each token's byte range in `text`.
-    pub fn encode_with_offsets(
-        &self,
-        text: &str,
-    ) -> Result<(Vec<u32>, Vec<Span>), TokenizerError> {
+    pub fn encode_with_offsets(&self, text: &str) -> Result<(Vec<u32>, Vec<Span>), TokenizerError> {
         self.inner
             .encode(text, false)
             .map(|encoding| (encoding.get_ids().to_vec(), encoding.get_offsets().to_vec()))

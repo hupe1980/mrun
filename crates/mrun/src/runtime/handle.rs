@@ -9,6 +9,7 @@ use crate::runtime::generate::{
     self, Event, EventSink, FinishReason, Finished, GenerateRequest, PressureGauge, ReusePolicy,
     Stats,
 };
+use crate::runtime::queue::{QueueFull, QueueGauge};
 use crate::runtime::session::Session;
 use flume::{Receiver, Sender, bounded, unbounded};
 use mrun_engine::{Engine, MemoryBudget, ModelInfo};
@@ -46,6 +47,16 @@ pub struct EngineHandle {
     info: ModelInfo,
     budget: MemoryBudget,
     pressure: Arc<PressureGauge>,
+    queue: Arc<QueueGauge>,
+}
+
+/// Why a request was not queued.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SubmitError {
+    #[error("the queue is full; retry after {} s", .0.retry_after)]
+    QueueFull(QueueFull),
+    #[error("the engine thread has stopped")]
+    Stopped,
 }
 
 /// Receivers of one request: drain `events` (closed at the finish), then read `finished`.
@@ -82,6 +93,8 @@ impl EngineHandle {
         let (ready_tx, ready_rx) = bounded(1);
         let pressure = Arc::new(PressureGauge::default());
         let gauge = pressure.clone();
+        let queue = Arc::new(QueueGauge::default());
+        let worker_queue = queue.clone();
         thread::Builder::new()
             .name("mrun-engine".into())
             .spawn(move || {
@@ -93,7 +106,14 @@ impl EngineHandle {
                     }
                 };
                 let _ = ready_tx.send(Ok((engine.info().clone(), *engine.budget())));
-                worker(&mut engine, &tokenizer, &inbox, stall_timeout, &gauge);
+                worker(
+                    &mut engine,
+                    &tokenizer,
+                    &inbox,
+                    stall_timeout,
+                    &gauge,
+                    &worker_queue,
+                );
             })
             .map_err(|error| format!("cannot start engine thread: {error}"))?;
         let (info, budget) = ready_rx
@@ -104,7 +124,13 @@ impl EngineHandle {
             info,
             budget,
             pressure,
+            queue,
         })
+    }
+
+    /// Waiting requests and the running flag; the capacity is set with `--queue`.
+    pub fn queue(&self) -> &Arc<QueueGauge> {
+        &self.queue
     }
 
     pub fn info(&self) -> &ModelInfo {
@@ -120,17 +146,24 @@ impl EngineHandle {
         &self.pressure
     }
 
-    /// Queues a request.
-    pub fn generate(&self, request: GenerateRequest) -> Result<Generation, String> {
+    /// Queues a request, or refuses at once when the queue is full. A request whose cancel
+    /// token fires while it waits finishes `Cancelled` without reaching the engine.
+    pub fn generate(&self, request: GenerateRequest) -> Result<Generation, SubmitError> {
+        self.queue.admit().map_err(SubmitError::QueueFull)?;
         let (events, events_rx) = bounded(EVENT_CAPACITY);
         let (finished, finished_rx) = bounded(1);
-        self.commands
+        if self
+            .commands
             .send(Command::Generate {
                 request,
                 events,
                 finished,
             })
-            .map_err(|_| "the engine thread has stopped".to_string())?;
+            .is_err()
+        {
+            self.queue.release();
+            return Err(SubmitError::Stopped);
+        }
         Ok(Generation {
             events: events_rx,
             finished: finished_rx,
@@ -167,6 +200,7 @@ fn worker<E: Engine>(
     inbox: &Receiver<Command>,
     stall_timeout: Duration,
     pressure: &PressureGauge,
+    queue: &QueueGauge,
 ) {
     let mut session = Session::default();
     for command in inbox {
@@ -176,6 +210,18 @@ fn worker<E: Engine>(
                 events,
                 finished,
             } => {
+                queue.dequeued();
+                if request.cancel.is_cancelled() {
+                    // Cancelled or expired while waiting: never reaches the engine.
+                    drop(events);
+                    let _ = finished.try_send(Finished {
+                        reason: FinishReason::Cancelled,
+                        prefilled: 0,
+                        stats: Stats::default(),
+                    });
+                    continue;
+                }
+                queue.set_running(true);
                 let mut sink = ChannelSink {
                     events,
                     stall_timeout,
@@ -204,6 +250,7 @@ fn worker<E: Engine>(
                         stats: Stats::default(),
                     }
                 });
+                queue.set_running(false);
                 // The slot is empty and never waited on; this fails only if the consumer left.
                 let _ = finished.try_send(done);
             }
@@ -242,6 +289,49 @@ mod tests {
 
     fn long_script(tokenizer: &Tokenizer) -> Vec<u32> {
         tokenizer.encode(&"z".repeat(200)).unwrap()
+    }
+
+    #[test]
+    fn xapi_queue_full_immediate_error_and_cancel_while_queued() {
+        let tokenizer = Arc::new(byte_tokenizer());
+        let script = long_script(&tokenizer);
+        let handle = EngineHandle::spawn(
+            move || Ok(ScriptedEngine::new(script, 10_000)),
+            tokenizer.clone(),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        handle.queue().set_capacity(1);
+        // The first request blocks the worker: its consumer reads nothing.
+        let busy = handle.generate(request(&tokenizer, "busy")).unwrap();
+        while handle.queue().waiting() > 0 || !handle.queue().running() {
+            thread::yield_now();
+        }
+        let waiting = request(&tokenizer, "waiting");
+        let cancel = waiting.cancel.clone();
+        let queued = handle.generate(waiting).unwrap();
+        assert_eq!(handle.queue().waiting(), 1);
+        let refused = handle.generate(request(&tokenizer, "third")).unwrap_err();
+        assert!(
+            matches!(refused, SubmitError::QueueFull(full) if (1..=60).contains(&full.retry_after))
+        );
+
+        cancel.cancel();
+        drop(busy);
+        let (events, finished) = queued.wait().unwrap();
+        assert!(events.is_empty());
+        assert_eq!(
+            (finished.reason, finished.prefilled),
+            (FinishReason::Cancelled, 0)
+        );
+        assert_eq!(handle.queue().waiting(), 0);
+        // Order is kept and the worker serves the next request.
+        let (_, next) = handle
+            .generate(request(&tokenizer, "next"))
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(next.reason, FinishReason::Length);
     }
 
     #[test]

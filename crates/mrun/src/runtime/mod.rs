@@ -2,6 +2,7 @@
 
 pub mod generate;
 pub mod handle;
+pub mod queue;
 #[cfg(any(test, feature = "test-support"))]
 pub mod scripted;
 pub mod session;
