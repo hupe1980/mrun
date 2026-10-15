@@ -5,6 +5,7 @@
 
 use crate::api;
 use crate::api::decode::DecodeOptions;
+use crate::api::record::Recorder;
 use crate::api::run::Timing;
 use crate::api::status::Tracker;
 use crate::chat::template::ChatTemplate;
@@ -99,6 +100,8 @@ pub struct ServerState {
     pub readiness: watch::Receiver<Readiness>,
     pub timing: Timing,
     pub tracker: Arc<Tracker>,
+    /// `--record`: request bodies written for trace replay.
+    pub recorder: Option<Arc<Recorder>>,
 }
 
 impl ServerState {
@@ -160,6 +163,10 @@ pub async fn start_with(
     factory: EngineFactory,
     timing: Timing,
 ) -> std::io::Result<RunningServer> {
+    let recorder = match &args.record {
+        Some(dir) => Some(Arc::new(Recorder::create(dir)?)),
+        None => None,
+    };
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, args.port)).await?;
     let addr = listener.local_addr()?;
     let args = Arc::new(args);
@@ -183,6 +190,7 @@ pub async fn start_with(
         readiness: readiness.clone(),
         timing,
         tracker: Arc::new(Tracker::default()),
+        recorder,
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let app = api::router(state);
@@ -253,6 +261,7 @@ pub fn run(args: ServeArgs, factory: EngineFactory) -> u8 {
     };
     runtime.block_on(async move {
         let port = args.port;
+        let record = args.record.clone();
         let mut server = match start(args, factory).await {
             Ok(server) => server,
             Err(error) => {
@@ -263,6 +272,12 @@ pub fn run(args: ServeArgs, factory: EngineFactory) -> u8 {
             }
         };
         let url = format!("http://{}", server.addr);
+        if let Some(dir) = &record {
+            eprintln!(
+                "warning: recording every request body to {} (--record); prompts are written to disk",
+                dir.display()
+            );
+        }
         eprintln!("mrun listening on {url} (loading model)");
         match server.loaded().await {
             Ok(loaded) => {

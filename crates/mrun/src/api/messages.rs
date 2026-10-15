@@ -19,6 +19,7 @@ use crate::chat::reasoning;
 use crate::cli::serve::ServerState;
 use axum::body::Bytes;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
@@ -36,12 +37,15 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
         .to_string();
     match &body["system"] {
         Value::Null => {}
-        Value::String(s) => request.system.push(s.clone()),
+        Value::String(s) => request.system.push(normalize_billing_nonce(s)),
         Value::Array(blocks) => {
             for (i, block) in blocks.iter().enumerate() {
-                request
-                    .system
-                    .push(str_field(block, "text", &format!("system[{i}]"))?.to_string());
+                let text = str_field(block, "text", &format!("system[{i}]"))?;
+                request.system.push(if i == 0 {
+                    normalize_billing_nonce(text)
+                } else {
+                    text.to_string()
+                });
             }
         }
         _ => {
@@ -149,6 +153,29 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
     request.stream = opt_bool(body, "stream")?.unwrap_or(false);
     check_limits(&request)?;
     Ok(request)
+}
+
+/// FR-025: Claude Code's attribution block carries a per-request nonce (`cch=`) that would
+/// defeat all prefix reuse. Its value is replaced by zeros of the same length; nothing else
+/// changes, and only a leading system text starting with the attribution header qualifies.
+pub fn normalize_billing_nonce(text: &str) -> String {
+    const HEADER: &str = "x-anthropic-billing-header:";
+    if !text.starts_with(HEADER) {
+        return text.to_string();
+    }
+    let line_end = text.find('\n').unwrap_or(text.len());
+    let Some(at) = text[..line_end].find("cch=") else {
+        return text.to_string();
+    };
+    let start = at + "cch=".len();
+    let end = text[start..line_end]
+        .find(|c: char| c == ';' || c.is_whitespace())
+        .map_or(line_end, |i| start + i);
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..start]);
+    out.extend(std::iter::repeat_n('0', text[start..end].chars().count()));
+    out.push_str(&text[end..]);
+    out
 }
 
 /// `thinking`: enabled (with a budget) or adaptive turn reasoning on; disabled or absent off.
@@ -598,12 +625,14 @@ pub const SHAPE: ApiShape = ApiShape {
 };
 
 /// `POST /v1/messages`
-pub async fn handle(State(state): State<ServerState>, body: Bytes) -> Response {
-    let request =
+pub async fn handle(State(state): State<ServerState>, headers: HeaderMap, body: Bytes) -> Response {
+    let flags = handler::observe(&state, ApiKind::Messages, &headers, &body);
+    let mut request =
         match handler::parse(&body).and_then(|value| decode(&value, state.decode_options())) {
             Ok(request) => request,
             Err(error) => return SHAPE.error(&error),
         };
+    request.ignore_eos = flags.ignore_eos;
     let stream = request.stream;
     let turn = match handler::start(&state, request).await {
         Ok(turn) => turn,
@@ -660,6 +689,28 @@ mod tests {
                 (name, serde_json::from_str(data).unwrap())
             })
             .collect()
+    }
+
+    #[test]
+    fn billing_nonce_is_normalized_and_nothing_else() {
+        let a = "x-anthropic-billing-header: cc_version=2.1.300.a1; cc_entrypoint=cli; cch=9f3c1;\nYou are Claude Code.";
+        let b = "x-anthropic-billing-header: cc_version=2.1.300.a1; cc_entrypoint=cli; cch=0b7e2;\nYou are Claude Code.";
+        let (na, nb) = (normalize_billing_nonce(a), normalize_billing_nonce(b));
+        assert_eq!(na, nb);
+        assert_eq!(na.len(), a.len());
+        assert!(na.contains("cch=00000;"));
+        // Any other change stays visible; texts without the header are untouched.
+        let c = b.replace("cli", "sdk");
+        assert_ne!(normalize_billing_nonce(&c), na);
+        let plain = "cch=12345 in a normal prompt";
+        assert_eq!(normalize_billing_nonce(plain), plain);
+        // Two requests differing only in the nonce share the whole system text.
+        let decode_system = |text: &str| {
+            decode_ok(json!({"system": [{"type": "text", "text": text}, {"type": "text", "text": "cch=1"}],
+                "messages": [{"role": "user", "content": "hi"}]})).system
+        };
+        assert_eq!(decode_system(a), decode_system(b));
+        assert_eq!(decode_system(a)[1], "cch=1");
     }
 
     #[test]

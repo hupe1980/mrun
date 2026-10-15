@@ -321,3 +321,28 @@ async fn status_and_models_report_the_machine() {
         .unwrap();
     assert!(after["active"].is_null());
 }
+
+#[tokio::test]
+async fn xapi_ignore_eos_runs_to_the_limit() {
+    let server = common::start(&["ab", "never used"]).await;
+    let mut body = user("go");
+    body["max_tokens"] = json!(6);
+    let reply = server
+        .post_with("/v1/messages", &body, &[("x-mrun-ignore-eos", "on")])
+        .await
+        .json();
+    assert_eq!(reply["stop_reason"], "max_tokens");
+    assert_eq!(reply["usage"]["output_tokens"], 6);
+}
+
+#[tokio::test]
+async fn msg_diagnostics_and_context_management_ignored() {
+    let server = common::start(&["ok"]).await;
+    let mut body = user("hi");
+    body["diagnostics"] = json!({"cache_misses": true});
+    body["context_management"] = json!({"edits": [{"type": "clear_tool_uses_20250919"}]});
+    body["metadata"] = json!({"user_id": "u"});
+    body["system"] = json!([{"type": "text", "text": "S", "cache_control": {"type": "ephemeral"}}]);
+    let reply = server.post("/v1/messages", &body).await;
+    assert_eq!(reply.status, 200, "{}", reply.text);
+}

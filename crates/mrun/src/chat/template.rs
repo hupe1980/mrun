@@ -206,6 +206,13 @@ impl Date {
         }
     }
 
+    /// The UTC date of a Unix timestamp.
+    pub fn from_unix_secs(secs: u64) -> Self {
+        Self {
+            days: (secs / 86_400) as i64,
+        }
+    }
+
     /// The UTC date when this process first asked, fixed for its lifetime.
     pub fn server_start() -> Self {
         static START: OnceLock<Date> = OnceLock::new();

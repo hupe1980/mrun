@@ -7,7 +7,7 @@ use crate::api::run::{self, Tick, Turn};
 use crate::api::sse;
 use crate::cli::serve::{Loaded, Readiness, ServerState};
 use axum::body::{Body, Bytes};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -50,6 +50,29 @@ pub fn ready(state: &ServerState) -> Result<Arc<Loaded>, ApiError> {
         }
         Readiness::Failed(error) => Err(ApiError::new(ErrorKind::NotReady, error.clone())),
     }
+}
+
+/// Records the request when `--record` is on, and applies mrun's own request headers.
+pub fn observe(
+    state: &ServerState,
+    api: ApiKind,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> RequestFlags {
+    if let Some(recorder) = &state.recorder {
+        recorder.record(api, headers, body);
+    }
+    RequestFlags {
+        ignore_eos: headers
+            .get("x-mrun-ignore-eos")
+            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"on")),
+    }
+}
+
+/// Request options carried in mrun headers.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RequestFlags {
+    pub ignore_eos: bool,
 }
 
 pub fn parse(body: &Bytes) -> Result<Value, ApiError> {

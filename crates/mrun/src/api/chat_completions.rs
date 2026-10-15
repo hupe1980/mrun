@@ -15,6 +15,7 @@ use crate::api::sse::{self, new_id};
 use crate::cli::serve::ServerState;
 use axum::body::Bytes;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::Response;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -440,12 +441,14 @@ pub const SHAPE: ApiShape = ApiShape {
 };
 
 /// `POST /v1/chat/completions`
-pub async fn handle(State(state): State<ServerState>, body: Bytes) -> Response {
-    let request =
+pub async fn handle(State(state): State<ServerState>, headers: HeaderMap, body: Bytes) -> Response {
+    let flags = handler::observe(&state, ApiKind::Chat, &headers, &body);
+    let mut request =
         match handler::parse(&body).and_then(|value| decode(&value, state.decode_options())) {
             Ok(request) => request,
             Err(error) => return SHAPE.error(&error),
         };
+    request.ignore_eos = flags.ignore_eos;
     let stream = request.stream;
     let include_usage = request.include_usage;
     let turn = match handler::start(&state, request).await {

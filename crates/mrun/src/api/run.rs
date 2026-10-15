@@ -9,6 +9,7 @@ use crate::api::model::{
     ApiError, ApiKind, ChatRequest, ErrorKind, Finish, GenEvent, Usage, Warning,
 };
 use crate::api::status::{Active, Tracker};
+use crate::chat::hook::RequestHook;
 use crate::chat::render::{self, RenderContext, RenderLog};
 use crate::chat::syntax::registry::ChatSyntax;
 use crate::chat::syntax::{ParseEnd, ParseLog, ParseOut, ParserConfig};
@@ -99,6 +100,10 @@ pub async fn start(
     let mut generate = GenerateRequest::new(rendering.prompt, requested_max.max(1));
     generate.sampling = request.sampling.resolve(loaded.defaults);
     generate.stop = request.stop.clone();
+    generate.hook = RequestHook {
+        ignore_eos: request.ignore_eos,
+    }
+    .boxed();
     let cancel = generate.cancel.clone();
     let generation = loaded.handle.generate(generate).map_err(|e| match e {
         SubmitError::QueueFull(full) => {

@@ -48,6 +48,8 @@ pub struct ChatRequest {
     pub stream: bool,
     /// Chat `stream_options.include_usage`.
     pub include_usage: bool,
+    /// `x-mrun-ignore-eos: on` (FR-031): generate to the output limit.
+    pub ignore_eos: bool,
 }
 
 impl ChatRequest {
@@ -69,6 +71,7 @@ impl ChatRequest {
             prefill: false,
             stream: false,
             include_usage: false,
+            ignore_eos: false,
         }
     }
 

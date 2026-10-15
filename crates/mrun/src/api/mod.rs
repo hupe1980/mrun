@@ -6,6 +6,7 @@ pub mod decode;
 pub mod handler;
 pub mod messages;
 pub mod model;
+pub mod record;
 pub mod run;
 pub mod sse;
 pub mod status;
