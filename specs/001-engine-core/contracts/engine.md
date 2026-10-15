@@ -17,6 +17,7 @@ pub trait Engine {
     /// Lazy admission for one request: trim the live state to `keep` (same rules as `trim`) and
     /// record `total` (= prompt + clamped output limit) as the ceiling for every later
     /// allocation. Allocates nothing. Err(Capacity) if total > kv_capacity_tokens.
+    /// `reserve(0, …)` always succeeds and resets recurrent state to zeros.
     fn reserve(&mut self, keep: u32, total: u32) -> Result<(), EngineError>;
 
     /// Append `tokens` at active_len(). Chunks follow `chunk_len(depth)` and end at every
@@ -24,7 +25,10 @@ pub trait Engine {
     /// `plan.checkpoints` position. Memory for the whole call (growth + checkpoints) is checked
     /// first: Err(NeedsMemory{bytes}) before any work. One layer in flight; `cancel` checked after
     /// every layer. Returns only whole committed chunks: on cancel, the partial chunk is
-    /// discarded (attention offset and recurrent state back to its start).
+    /// discarded (attention offset and recurrent state back to its start). When
+    /// `cancel.yield_requested()` is set (read at the same per-layer points), it returns early
+    /// after the current whole chunk with `yielded = true`; the caller evicts and calls `prefill`
+    /// again with the remaining tokens and the same plan (same chunk ends).
     fn prefill(
         &mut self,
         tokens: &[u32],
@@ -52,6 +56,7 @@ pub trait Engine {
 
     /// Cut the live state to `len`. Attention: offset. Recurrent: only len == active_len() or
     /// active_len() - 1 with a pending step; otherwise Err(NotTrimmable) and nothing changes.
+    /// `trim(0)` always succeeds and resets recurrent state to zeros.
     fn trim(&mut self, len: u32) -> Result<(), EngineError>;
 
     /// Deep copy of all recurrent state at active_len() (no pending step). Attention-only models
@@ -63,10 +68,13 @@ pub trait Engine {
     fn drop_checkpoint(&mut self, id: CheckpointId);
 
     /// Move positions [at, active_len()) out, layer by layer: copy the tail into a compact owned
-    /// buffer, reallocate the live layer to round_up(at, 256), release the old buffer. Hybrids:
-    /// the live recurrent state moves into the segment, and prefill/forward return
-    /// Err(NoRecurrentState) until restore_checkpoint or append supplies one.
-    fn split_off(&mut self, at: u32) -> Result<Segment, EngineError>;
+    /// buffer, then (with `shrink`) reallocate the live layer to round_up(at, 256) and release the
+    /// old buffer. `shrink = false` when an `append` follows at once (a switch): the live layers
+    /// keep their allocation for the append, the prefix copy is skipped, and the segment's bytes
+    /// are checked first (NeedsMemory). Hybrids: the live recurrent state (the tail's end state)
+    /// moves into the segment, and prefill/forward return Err(NoRecurrentState) until
+    /// restore_checkpoint or append supplies one.
+    fn split_off(&mut self, at: u32, shrink: bool) -> Result<Segment, EngineError>;
     /// Requires active_len() == segment.start. Copies the segment in layer by layer (growth
     /// reported first); with `consume` each segment layer is freed as soon as it is copied and the
     /// segment's recurrent state is moved, otherwise both are copied and the segment stays.
@@ -77,11 +85,12 @@ pub trait Engine {
     fn reset(&mut self);
 }
 
-pub fn chunk_len(depth: u32) -> u32; // clamp(2048 * 16384 / max(depth, 1), 256, 2048)
+pub fn chunk_len(depth: u32) -> u32; // clamp(2048 * 16384 / max(depth, 1), 128, 2048)
+/// Per prefill call. Stored checkpoints beyond the live state + 3 are evictable cache (003).
 pub const MAX_PLAN_CHECKPOINTS: usize = 3;
 
 pub struct PrefillPlan<'a> { pub boundaries: &'a [u32], pub checkpoints: &'a [u32] } // absolute, ascending
-pub struct Prefilled { pub committed: u32, pub checkpoints: Vec<Checkpoint> }
+pub struct Prefilled { pub committed: u32, pub checkpoints: Vec<Checkpoint>, pub yielded: bool }
 pub struct Step { /* opaque id; at most one current and one pipelined */ }
 pub struct Checkpoint { pub id: CheckpointId, pub position: u32, pub bytes: u64 }
 pub struct Segment { pub id: SegmentId, pub start: u32, pub end: u32, pub bytes: u64 }
@@ -104,9 +113,11 @@ pub enum EngineError {
   segments or checkpoints and retries. Allocations are clamped to `min(reserved total,
   kv_capacity_tokens)`; the first growth of a request covers the input plus up to 4,096 tokens,
   later growth adds 4,096. The one-layer copy transient of growth, `split_off` and `append` lies
-  inside the scratch envelope.
-- **Cancellation**: at most one layer in flight during prefill; cancel checked after each layer and
-  each decode token. `Prefilled.committed` counts whole chunks only.
+  inside the scratch envelope, so callers never budget it separately (003 `initial_need` does
+  not).
+- **Cancellation and yield**: at most one layer in flight during prefill; cancel and yield checked
+  after each layer and each decode token. A cancel discards the partial chunk; a yield finishes it.
+  `Prefilled.committed` counts whole chunks only.
 - **Pipelining**: at most one pending step. `trim`, `reserve`, `checkpoint`, `split_off` roll a
   pending step back first (hybrids keep the pre-step recurrent state until the step is confirmed).
 - **Exactness**: chunk ends depend only on depth and the plan, so two runs with the same tokens and
@@ -133,20 +144,26 @@ decoding (`forward_draft`, `accept`, `draft_mtp`, `spec_caps`;
 
 ## Generation loop (`crates/mrun/src/runtime/generate.rs`)
 
-Generic over `Engine`:
+The single owner of the per-request loop, generic over `Engine` and over a reuse policy:
+`Session` (001, `mrun run`) or the 003 `PrefixStore` (under `serve`, unless `--no-cache`).
+002's `runtime/worker.rs` only dequeues and calls `generate`.
 
 1. Validate (empty prompt, limit 0, sampling, stop caps) → `Rejected`.
 2. Admission (FR-009): reject unless `prompt + 1 ≤ kv_capacity_tokens`; clamp the limit.
-3. Reuse: common prefix of `session.tokens` and prompt (≤ prompt − 1). Hybrids: if the state
-   cannot be trimmed there, restore the deepest session checkpoint ≤ common.
-   `reserve(keep, prompt + limit)`.
-4. Prefill all but the last prompt token; hybrids plan a checkpoint at prompt − 1 (session keeps
-   the two newest). On `NeedsMemory`, evict (001: drop the older session checkpoint, then fail with
-   an error; 003 supplies a store) and retry.
+3. Reuse (policy): `Session` takes the common prefix of `session.tokens` and prompt
+   (≤ prompt − 1); hybrids that cannot trim there restore the deepest session checkpoint ≤ common.
+   `PrefixStore` runs its lookup and switch (003). Then `reserve(keep, prompt + limit)`.
+4. Prefill all but the last prompt token; hybrids plan a checkpoint at `generation_start` (the
+   start of the generation header; the session keeps the two newest). On `NeedsMemory{bytes}` the
+   policy evicts (`Session`: drop the older session checkpoint, else fail with an error;
+   `PrefixStore`: `evict(bytes)`) and the call is retried. On `yielded` the policy acts on memory
+   pressure (and 003 applies pending soft pins), then `prefill` is called again with the remaining
+   tokens and the same plan.
 5. Decode: `forward(last)` → optional mask → `sample(step, …, pipeline = remaining > 1)`;
    detokenize, stop-match, emit. TTFT = first sampled token.
 6. Finish: committed = prompt + tokens whose text was fully emitted; trim the state to the longest
-   committed prefix it holds (hybrids fall back to a checkpoint); `session.tokens` = state tokens.
+   committed prefix it holds (hybrids fall back to a checkpoint); the policy records the state
+   tokens (`session.tokens`, or 003 `commit`).
 
 Events go through `flume::bounded(64)`; the worker sends with a stall timeout, then stops sending
 `Token`/`Progress` to that consumer and cancels. The event sender is dropped at finish and
