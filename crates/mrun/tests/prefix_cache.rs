@@ -414,3 +414,63 @@ fn a_new_cache_key_discards_the_tree_and_reports_model() {
     let (miss, _, _) = rig.run(&p, 50);
     assert_eq!((miss.cause, miss.cached), (Some(Cause::Model), 0));
 }
+
+#[test]
+fn an_80k_main_conversation_survives_subagents_and_titles_at_105k_capacity() {
+    // Qwen3-Coder on a 48 GB Mac holds about 105K tokens: a subagent or a title request must not
+    // cost the main conversation (SC-002, structural part).
+    let r_main = reply(40);
+    let mut rig = Rig::new(
+        ScriptedEngine::new(
+            script(&[r_main.clone(), reply(20), reply(30), reply(5), reply(5)]),
+            105_000,
+        ),
+        CacheMode::Cached,
+    );
+    let main = conv(&[(Role::System, 2_000, 1), (Role::User, 80_000, 2)]);
+    rig.run(&main, 100);
+    let sub = conv(&[(Role::System, 2_000, 1), (Role::User, 3_000, 3)]);
+    rig.run(&sub, 100);
+    let main2 = next_turn(&main, &r_main, (50, 4));
+    let (miss, processed, _) = rig.run(&main2, 100);
+    assert_eq!(
+        (miss.cause, miss.cached),
+        (None, main.len() + r_main.len() as u32)
+    );
+    assert!(processed < 100, "{processed}");
+    // And a title request in between keeps it too.
+    let title = conv(&[(Role::User, 500, 5)]);
+    rig.run(&title, 100);
+    let (miss, _, _) = rig.run(&main2, 100);
+    assert_eq!(miss.cached, main2.len() - 1, "{miss:?}");
+}
+
+#[test]
+fn hybrid_tool_loop_then_a_new_user_turn_resumes_near_the_end() {
+    const RB: u64 = 1_000;
+    let replies: Vec<Vec<u32>> = (0..16).map(|i| reply(8 + i)).collect();
+    let mut rig = Rig::new(
+        ScriptedEngine::new_hybrid(script(&replies), 20_000, RB),
+        CacheMode::Cached,
+    );
+    let mut p = conv(&[(Role::System, 300, 1), (Role::User, 100, 2)]);
+    // Ten tool turns: each appends the model's call and a tool result.
+    for (turn, reply) in replies.iter().take(11).enumerate() {
+        let (miss, _, _) = rig.run(&p, 50);
+        if turn > 0 {
+            assert_eq!((miss.cause, miss.gap), (None, 0), "turn {turn}: {miss:?}");
+        }
+        let mut next = next_turn(&p, reply, (60, 10 + turn as u32));
+        next.messages.last_mut().unwrap().role = Role::Tool;
+        p = next;
+    }
+    // A tool result retried with different content resumes at its start (checkpoint).
+    let (miss, _, _) = rig.run(&p, 50);
+    assert_eq!((miss.cause, miss.gap), (None, 0), "{miss:?}");
+    let mut retried = p.clone();
+    let tool_start = retried.messages.last().unwrap().start;
+    retried.tokens[tool_start as usize + 5] = 777_777;
+    let (miss, _, _) = rig.run(&retried, 50);
+    assert_eq!(miss.cause, Some(Cause::Changed));
+    assert_eq!((miss.cached, miss.gap), (tool_start, 5));
+}

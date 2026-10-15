@@ -532,3 +532,42 @@ async fn cache_divergence_names_the_message_in_the_stream_comment() {
         "API message index: {comment}"
     );
 }
+
+#[tokio::test]
+async fn xapi_no_prompt_content_in_metadata() {
+    // Miss reports and metadata carry positions, indices and roles, never text.
+    let secret = "zebra-quartz-17";
+    let server = common::start(&["ok", "ok", "ok"]).await;
+    let body = |user: &str| {
+        json!({"max_tokens": 20, "stream": true, "system": format!("system {secret}"),
+            "messages": [{"role": "user", "content": user}]})
+    };
+    server
+        .post("/v1/messages", &body(&format!("question {secret}")))
+        .await;
+    let reply = server
+        .post("/v1/messages", &body(&format!("other {secret}")))
+        .await;
+    for (name, text) in reply.frames() {
+        if name == ":" {
+            assert!(
+                !text.contains(secret) && !text.contains("question"),
+                "{text}"
+            );
+        }
+    }
+    let mut plain = body("again");
+    plain["stream"] = json!(false);
+    let reply = server.post("/v1/messages", &plain).await;
+    for (name, value) in &reply.headers {
+        let value = value.to_str().unwrap_or_default();
+        assert!(!value.contains(secret), "{name}: {value}");
+    }
+    let status = server
+        .client
+        .get(server.url("/mrun/status"))
+        .send()
+        .await
+        .unwrap();
+    assert!(!status.text().await.unwrap().contains(secret));
+}

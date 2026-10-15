@@ -174,7 +174,9 @@ fn constraint(loaded: &Loaded, request: &ChatRequest, reasoning_open: bool) -> O
     let compile = |lark: &str| match env.matcher(lark) {
         Ok(matcher) => Some(matcher),
         Err(error) => {
-            eprintln!("mrun: strict-unsupported ({error})");
+            // The error can quote the schema: log the condition only (FR-014).
+            let _ = error;
+            eprintln!("mrun: strict-unsupported");
             None
         }
     };
@@ -472,8 +474,10 @@ impl Relay {
     async fn forward(&mut self, out: ParseOut) -> bool {
         for log in &out.logs {
             match log {
-                ParseLog::ToolUnknown(name) => eprintln!("mrun: tool-unknown ({name})"),
-                ParseLog::BuiltinRecipient(name) => eprintln!("mrun: tool-unknown ({name})"),
+                // Names come from the model's output: log the condition only (FR-014).
+                ParseLog::ToolUnknown(_) | ParseLog::BuiltinRecipient(_) => {
+                    eprintln!("mrun: tool-unknown");
+                }
             }
         }
         let mut events = out.events;

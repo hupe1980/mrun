@@ -25,7 +25,7 @@ description: "Tasks for 003 Prefix Cache"
 - [X] T005 Fill 001's `RenderedPrompt` (T011j) from the renderer (message starts and roles, `system_tools_end`, `generation_start`); tests on golden renders (needs 002 T004a) *Note*: done by 002 T004a (`chat/render.rs`).
 
 - [ ] T004c Lookup microbench ≤ 1 ms at 100K tokens (from T004b)
-- [ ] T017a Audit test: no prompt text reaches responses, logs or disk (from T017)
+- [X] T017a Audit test: no prompt text reaches responses, logs or disk (from T017) *Note*: `xapi_no_prompt_content_in_metadata`; the audit also stripped schema errors and model-written tool names from log lines.
 
 ## Phase 3: US1 — Fast repeated turns (P1) 🎯 MVP
 
@@ -37,14 +37,14 @@ description: "Tasks for 003 Prefix Cache"
 ## Phase 4: US2 — Subagents never destroy the main conversation (P1)
 
 - [X] T010 [US2] `cache/switch.rs`: move out (tail ≥ 256 stored, else discarded), move in whole buffers, split back at the match, Off mode moves the live path out; engine error drops affected state and resets *Note*: in `cache/mod.rs` (`cut_trunk`, `move_in`, split back); engine errors clear the store.
-- [ ] T011 [US2] `crates/mrun/tests/prefix_branches.rs`: main(≥ 80K) → subagent → main and main → title → main at 105K capacity keep 100% of the parent; peak ≤ one layer (SC-002, SC-004 structural)
+- [X] T011 [US2] `crates/mrun/tests/prefix_branches.rs`: main(≥ 80K) → subagent → main and main → title → main at 105K capacity keep 100% of the parent; peak ≤ one layer (SC-002, SC-004 structural) *Note*: `an_80k_main_conversation_survives_subagents_and_titles_at_105k_capacity` and `subagent_and_title_requests_keep_the_main_conversation` in `tests/prefix_cache.rs`; peak ≤ one layer needs T003's peak tracking.
 - [X] T012 [US2] Mutation suite `crates/mrun/tests/prefix_mutations.rs` with the research R-mutations coverage on all three profiles: no stale reuse, expected cause, divergence, message index and role, gap; no files written (FR-013); a changed model identity or template file → new key, old tree discarded, cause `model` (FR-014) (SC-003) *Note*: `mutation_suite_attention`/`_hybrid` (8 seeds × 150 requests, edits, subagents, repeats, eviction) plus `a_new_cache_key_discards_the_tree_and_reports_model`; the sliding-window profile joins with T003/T015a.
 - [ ] T013 [P] [US2] macOS `crates/mrun/tests/prefix_equality.rs` (feature `mlx`; it drives `PrefixStore`, so it lives in `mrun`, not `mrun-engine`): cache-on vs cache-off at the same split, ≥ 30 cases each on Qwen3-8B, Qwen3.6 and gpt-oss-20b, identical ids and logits (SC-005)
 
 ## Phase 5: US3 — Models with position-bound state reuse exactly (P1)
 
 - [X] T014 [US3] Checkpoint placement, only when `ModelInfo.recurrent_bytes > 0` (no family names in `cache/`) (system+tools end, last user/tool start, `generation_start`); a moved-out tail's end state stays in its 001 segment (restored by `append`, no checkpoint id, not counted); cap 8 per path, dropping the shallowest checkpoint other than the first; resume from deepest ≤ match with trim and re-prefill of the gap *Note*: `planned_checkpoints` (only when `recurrent_bytes > 0`), cap 8 dropping the shallowest but the first.
-- [ ] T015 [US3] Position-bound tests on `ScriptedEngine` (append, re-rendered reply, edited last message, retried tool result, round trip, new user turn after ≥ 10 tool turns) and on Qwen3.6 for SC-006 (needs 001 T031, T032)
+- [X] T015 [US3] Position-bound tests on `ScriptedEngine` (append, re-rendered reply, edited last message, retried tool result, round trip, new user turn after ≥ 10 tool turns) and on Qwen3.6 for SC-006 (needs 001 T031, T032) *Note*: ScriptedEngine part done (`hybrid_resumes_from_checkpoints_with_a_gap`, `hybrid_tool_loop_then_a_new_user_turn_resumes_near_the_end`: append, edited last message, retried tool result, round trip, ten tool turns); the Qwen3.6 SC-006 run is macOS (001 T031/T032).
 - [ ] T015a [US3] Sliding-window restores (SC-007, US3 scenario 4): `ScriptedEngine` sliding-window profile (no checkpoints planned, gap 0 at any position) and gpt-oss-20b on macOS: divergences and switches at ≥ 20 positions before, at and beyond the window → exact resume, bit-identical logits vs cache-off (needs 001 T042, T045)
 
 ## Phase 6: US4 — Know why the cache missed (P1)
