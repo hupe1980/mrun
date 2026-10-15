@@ -12,7 +12,7 @@ key; a new key discards the old tree (FR-014).
 | tokens | Vec<u32> | P = len |
 | messages | Vec<MessageMark{start: u32, role, content_hash: u64}> | content hash: role, visible text, tool calls (canonical JSON); reasoning excluded |
 | system_tools_end | u32 | end of system + tools region |
-| generation_start | u32 | start of the generation header (≤ P − 1) |
+| generation_start | u32 | start of the generation header (≤ P − 1); hybrid checkpoint position |
 | mode | Cached \| Off | `x-mrun-cache: off` or `--no-cache` → Off |
 
 ## Node
@@ -33,7 +33,13 @@ freed when its last view drops.
 
 ## Checkpoint
 
-`{pos: u32, id: CheckpointId (001), bytes: u64, kind: SystemTools | LastMessage | PromptEnd | TailEnd}`
+`{pos: u32, id: CheckpointId (001), bytes: u64 (≈ 61 MiB on Qwen3.6), kind: SystemTools |
+LastMessage | GenerationStart}`. A moved-out tail's end state is not a checkpoint: it stays inside
+its 001 segment (the node's `SegmentView` buffer), is restored by `append`, and does not count
+toward the cap of 8.
+
+Drop rule when a path exceeds 8: keep the first, the two deepest and the newest checkpoint at a
+user (non-tool) message start; drop the one nearest the path's midpoint among the rest.
 
 ## Plan (lookup result)
 
@@ -87,6 +93,7 @@ prompt_tokens_total, cached_tokens_total, evicted_total, pressure_events, last: 
 4. `live_bytes + Σ buffer bytes + Σ checkpoint bytes ≤ capacity bytes` before and after every
    operation; during a move the excess is at most one layer of the moved buffer.
 5. The live path is never evicted while a request runs; after `prepare` no node is hard-pinned.
-6. Checkpoints per root-to-leaf path ≤ 8; every checkpoint position lies on its node's edge.
+6. Checkpoints per root-to-leaf path ≤ 8 (segment end states not counted); every checkpoint
+   position lies on its node's edge.
 7. Reused tokens equal the request's tokens under the same key (mutation suite oracle).
 8. Committed live path = prompt tokens + emitted output, cut to whole committed chunks on cancel.

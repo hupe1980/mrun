@@ -24,7 +24,8 @@ Detailed field mapping per API is in [research §1, §5](research.md); this is t
 Not in the model (FR-030, FR-023 removed): `cache_control`, `prompt_cache_key`, client session
 headers and Anthropic `diagnostics` are accepted and dropped by the decoders.
 
-Assistant parts: `Text`, `Reasoning{text}` (restored from signature/encrypted_content),
+Assistant parts: `Text`, `Reasoning{text}` (restored from signature/encrypted_content; for
+Qwen3.6 rendered with the template's preserve-thinking option, FR-013),
 `ToolCall{id, name, raw_args}` — raw argument text is kept verbatim. Byte stability of the
 re-rendered history depends on the template:
 
@@ -59,7 +60,7 @@ Finish mapping: see [research Design recommendations](research.md#design-recomme
 | reasoning | `completion_tokens_details.reasoning_tokens` | (in output) | `output_tokens_details.reasoning_tokens` |
 | cache writes | — | `cache_creation_input_tokens` = 0 | `cache_write_tokens` omitted |
 
-`cached = min(matched, P − 1)`: the last prompt token is always processed (003). Anthropic
+`cached = min(resume, P − 1)`; resume = match (attention) or restored checkpoint position (hybrid), per 003 FR-006: the last prompt token is always processed. Anthropic
 `input_tokens = P − cached`. Writes are reported as 0 because mrun bills nothing and keeps no
 separate write tier; clients that price cache writes then estimate zero cost.
 
@@ -87,4 +88,6 @@ output_tokens, outcome, body}`. Files mode 0600.
 
 `{tokens, messages: [{start, role, content_hash}], system_tools_end, generation_start}`. Content
 hashes cover role, visible text and tool calls as canonical JSON, never reasoning, so 003 can tell
-an edit from a template re-render. Offsets come from rendering message prefixes incrementally.
+an edit from a template re-render. Render once; derive message starts from the token stream
+(`<|im_start|>`, `<tool_response>` special tokens) and check the count against the messages;
+prefix rendering only in tests.

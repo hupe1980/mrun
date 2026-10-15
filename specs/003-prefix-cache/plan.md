@@ -11,8 +11,10 @@ conversation appends; switching moves the old tail out and the matched branch in
 time, through 001's `split_off` and `append(consume)`. Segments are refcounted buffer views, so
 edge splits are metadata; buffers move whole. Hybrid models capture up to 8 checkpoints per path at
 planned chunk ends and resume from the deepest one at or below the match. Eviction is LRU over
-branch units, lazily at the initial allocation and at each growth step; memory pressure is read at
-the per-layer check point. Every request yields a miss report delivered through 002.
+branch units, lazily at the initial allocation and on every `NeedsMemory{bytes}` (evict, retry);
+memory pressure is read at every per-layer check point and acted on at the next whole-chunk end
+(001 prefill yield). The per-request loop stays in 001's `runtime/generate.rs`, which takes the
+`PrefixStore` as its reuse policy. Every request yields a miss report delivered through 002.
 
 ## Technical Context
 
@@ -26,11 +28,12 @@ weights
 **Target Platform**: macOS (Metal); tree, policy and suites run on Linux
 **Project Type**: Module of the `mrun` crate
 **Performance Goals**: lookup ≤ 1 ms at 100K tokens; SC-001 ≥ 10× TTFT; move of 80K tokens bounded by
-memory bandwidth (≈ 0.1 s on Qwen3-Coder); pressure response < 1 s
+memory bandwidth (90K tokens on Qwen3-Coder ≈ 8.2 GiB read + write ≥ 65 ms at 273 GB/s; round
+trip ≈ 0.15–0.2 s); pressure response < 1 s
 **Constraints**: one copy per unique token; transient ≤ one layer; no hard pins after `prepare`;
 no hash-only matches; equality tests at a fixed chunk split
 **Scale/Scope**: Qwen3-Coder ≈ 105K tokens of attention state (96 KiB/token); Qwen3.6 ≈ 8 GiB for
-attention (≈ 20 KiB/token) plus checkpoints of 60–150 MiB each
+attention (≈ 20 KiB/token) plus checkpoints of ≈ 61 MiB each (8 per path ≈ 0.5 GiB)
 
 ## Constitution Check
 

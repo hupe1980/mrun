@@ -11,7 +11,7 @@ lists what mrun serves and where it intentionally differs.
 | `HEAD /api/hello` | Claude Code probe | 200, empty |
 | `GET /v1/models` | Served models | `context_window` and `max_model_len` = this machine's KV capacity (vLLM-style field read by OpenCode's local discovery); `max_output_tokens` = server default |
 | `POST /v1/chat/completions` | OpenAI Chat Completions | stream + non-stream, tools, `response_format`, `reasoning_content` |
-| `POST /v1/messages` | Anthropic Messages | query string ignored (`?beta=true`); thinking with opaque signatures; `ping` every 10 s of silence; `diagnostics` and `context_management` accepted and ignored |
+| `POST /v1/messages` | Anthropic Messages | query string ignored (`?beta=true`); `anthropic-beta` headers accepted (FR-017); thinking with opaque signatures; `ping` every 10 s of silence; `diagnostics` and `context_management` accepted and ignored |
 | `POST /v1/messages/count_tokens` | Anthropic token count | no queue; exact tokens mrun would process |
 | `POST /v1/responses` | OpenAI Responses (stateless) | `previous_response_id` and item references → 400; `store:true` accepted, nothing stored; `response.in_progress` every 10 s of silence |
 | `GET /mrun/status` | `mrun ps` data | model, budget, active/queued, cache stats, last miss (003) |
@@ -36,7 +36,7 @@ Cross-cutting:
   - streaming: SSE comment lines `: mrun {json}` before the first content event (cache, limit) and
     before the final event (warnings); clients ignore comments;
   - bodies stay strictly standard; the last request's metadata is in `/mrun/status`.
-- **Usage**: `cached = min(matched, P − 1)`; Anthropic `input_tokens` excludes cache reads,
+- **Usage**: `cached = min(resume, P − 1)`; resume = match (attention) or restored checkpoint position (hybrid), per 003 FR-006; Anthropic `input_tokens` excludes cache reads,
   `cache_creation_input_tokens` is always 0 (FR-007).
 - **Ignored fields** (FR-023 removed, FR-024, FR-030): Anthropic `diagnostics` (no
   `diagnostics` in responses) and `context_management`; `cache_control` anywhere;
@@ -51,7 +51,7 @@ Cross-cutting:
 - **Strict schemas** (FR-004/005): a schema llguidance cannot compile runs unconstrained with warning `strict-unsupported`.
 - **`tool_choice: none`**: tools stay rendered; a fixed −inf logit bias on tool-call opener tokens prevents calls (decode stays pipelined).
 - **Disconnect** (FR-011): a per-connection close watcher cancels the request in any phase (queued, prefilling, generating, non-streaming) within 300 ms.
-- **Queued and prefilling streams** (FR-010): headers at once, then until the first token a keepalive at least every 10 s:
+- **Keepalives** (FR-010): streaming responses send headers at once; then, in every phase (queued, prefilling, generating, including while a tool call is buffered), a keepalive whenever 10 s pass without an event:
 
   | API | First event | Keepalive | Why |
   | --- | --- | --- | --- |

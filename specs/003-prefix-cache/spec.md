@@ -104,11 +104,13 @@ and that outputs equal cache-off runs with the same chunk split.
 **Acceptance Scenarios**:
 
 1. **Given** a hybrid prefill, **When** it runs, **Then** checkpoints are captured at the end of
-   system+tools, the start of the last user or tool message and the end of the prompt's messages.
+   system+tools, the start of the last user or tool message and `generation_start` (the start of
+   the generation header).
 2. **Given** a divergence at position d, **When** the request resumes, **Then** it restores the
    deepest checkpoint ≤ d, re-prefills the gap and reports it.
-3. **Given** a conversation with 8 checkpoints, **When** another is captured, **Then** a middle one
-   is dropped.
+3. **Given** a conversation with 8 checkpoints, **When** another is captured, **Then** the first,
+   the two deepest and the newest checkpoint at a user (non-tool) message start are kept, and the
+   one nearest the path's midpoint among the rest is dropped.
 
 ---
 
@@ -147,8 +149,9 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 
 1. **Given** branches filling capacity, **When** an admitted request's state grows, **Then** LRU
    branch leaves are evicted before each growth step and the growth always succeeds.
-2. **Given** a pressure warning during a request, **When** the next per-layer check point is
-   reached, **Then** branches are evicted and the running request continues.
+2. **Given** a pressure warning during a request, **When** the next per-layer check point reads
+   it, **Then** prefill yields at the end of the current whole chunk, branches are evicted and the
+   running request continues with the same chunk split.
 3. **Given** critical pressure while idle, **When** branches are gone, **Then** the idle live path
    is reset.
 
@@ -186,10 +189,13 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   a branch (or discarded if under 256 tokens) and the matched branch moved in, one layer at a time.
   No token's state is ever held twice by a move; the transient is at most one layer.
 - **FR-004**: For hybrid models, prefill MUST capture recurrent-state checkpoints at the end of
-  system+tools, the start of the last user or tool message, and the end of the prompt's messages
-  (before the generation header); moving a tail out MUST keep its end state as a checkpoint. At
-  most 8 checkpoints per conversation (root-to-leaf path); a middle one is dropped first. A request
-  MUST resume from the deepest checkpoint at or below its match and re-prefill the gap.
+  system+tools, the start of the last user or tool message, and `generation_start` (the start of
+  the generation header). A moved-out tail's end state stays inside its 001 segment and is
+  restored by `append`; it is not a checkpoint and does not count toward the cap. At most 8
+  checkpoints per conversation (root-to-leaf path): the first, the two deepest and the newest
+  checkpoint at a user (non-tool) message start are kept; among the rest the one nearest the
+  path's midpoint is dropped first. A request MUST resume from the deepest checkpoint at or below
+  its match and re-prefill the gap.
 - **FR-005**: Prefill MUST be planned in chunks that end at message boundaries and at checkpoint
   positions (within 001's chunk-size limit), and only whole chunks are committed. A cancelled
   request MUST keep every whole committed chunk.
@@ -197,13 +203,14 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   resume is the match (attention) or the restored checkpoint position (hybrid).
 - **FR-007**: Admission (001) checks statically that prompt plus clamped output fits capacity. The
   cache MUST evict only for the initial allocation (`P − resume + min(output limit, 4K)` tokens of
-  attention state, the move transient and planned checkpoints), then on demand before each growth
-  step the engine reports. After the switch no state is pinned, so decode-time eviction always
+  attention state and planned checkpoints; the one-layer move transient lies in 001's scratch
+  envelope), then on demand whenever the engine returns `NeedsMemory{bytes}`. After the switch no state is pinned, so decode-time eviction always
   succeeds. Matched prefixes of queued requests MUST be evicted last.
 - **FR-008**: Eviction MUST be least-recently-used over branch leaves. The live path in use is never
   evicted; its checkpoints are evicted only after all branches. Freed bytes are counted per buffer.
-- **FR-009**: Memory pressure, checked at every per-layer check point and between decode tokens,
-  MUST evict branches first, then reset an idle live path, and return freed memory to the OS within
+- **FR-009**: Memory pressure MUST be read at every per-layer check point and between decode
+  tokens, and acted on at the next whole-chunk end (prefill yields, 001 FR-005) or decode token:
+  evict branches first, then reset an idle live path, and return freed memory to the OS within
   1 s; a running request is never affected.
 - **FR-010**: Every request MUST produce a miss report: cached, processed, divergence position,
   checkpoint gap, and a cause ∈ {`new`, `system`, `edit`, `template`, `evicted`, `capacity`, `checkpoint`,
@@ -239,10 +246,12 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 - **SC-001**: On the target Mac (M4 Pro, 48 GB), for a 30K-token conversation appending 200–1,000
   tokens per turn, median time to first token over 10 turns is at least 10× lower than cache-off,
   for Qwen3-Coder-30B-A3B and Qwen3.6-35B-A3B, and the same ratio holds for the median turn of
-  005's `agent/opencode-refactor` replay.
+  005's `agent/opencode-refactor` replay. The synthetic part gates M3; the trace part is reported
+  with M5.
 - **SC-002**: With Qwen3-Coder-30B-A3B at its target capacity (~105K tokens) and a parent of ≥ 80K
   tokens, main → subagent → main and main → title request → main both report the returning turn's
-  cached tokens ≥ the parent's committed length (100% kept); Qwen3.6 likewise with gap 0.
+  cached tokens ≥ the parent's committed length (100% kept); Qwen3.6 likewise, with gap ≤ the
+  previous reply's length.
 - **SC-003**: In a mutation suite of ≥ 100 cases (append, edit, rewind, interleaved branches, tiny
   tails, cancel, eviction, pressure, model and template change, attention and hybrid), zero stale
   reuses occur and every case reports the expected cause and divergence.
@@ -251,14 +260,16 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 - **SC-005**: Cache-on output equals cache-off output bit for bit (token ids and logits) when the
   cache-off run uses the same chunk split, on Qwen3-8B and Qwen3.6 for ≥ 30 cases.
 - **SC-006**: On Qwen3.6, a divergence inside the previous reply or the last user or tool message
-  resumes at or after the start of the message containing the divergence or the message before it.
+  resumes at or after the start of the message containing the divergence or the message before it,
+  including for a new user turn after ≥ 10 tool turns (more planned positions than the cap of 8).
 
 ## Assumptions
 
-- 001 provides: lazy `reserve(keep, total)`, `allocated()`, growth reported before allocation,
-  planned prefill returning whole committed chunks and checkpoints, forward/sample split,
-  `split_off(at) → Segment`, `append(segment, consume)`, `checkpoint()` /
-  `restore_checkpoint(id)`.
+- 001 provides: lazy `reserve(keep, total)`, `allocated()`, `NeedsMemory{bytes}` before any
+  allocation, planned prefill returning whole committed chunks and checkpoints and yielding on
+  request, forward/sample split, `split_off(at, shrink) → Segment`, `append(segment, consume)`,
+  `checkpoint()` / `restore_checkpoint(id)`, and the generation loop (`runtime/generate.rs`) that
+  takes the prefix cache as its reuse policy.
 - 002 provides message boundaries, per-message content hashes and the generation-header position
   from the renderer, carries the miss report, and sends the `x-mrun-cache` header through.
 - One request runs at a time (D018). One model is resident (D020).

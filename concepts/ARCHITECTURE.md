@@ -27,7 +27,7 @@ system.
 
 | Model | Layers | Attention state per token | Fixed recurrent state | Role |
 | --- | --- | --- | --- | --- |
-| Qwen3.6-35B-A3B, 4-bit (≈20 GB) | 30 Gated DeltaNet + 10 gated attention, MoE 256 experts | ≈20 KiB | ≈60–150 MiB per checkpoint | Default (confirmed by `mrun bench` before release) |
+| Qwen3.6-35B-A3B, 4-bit (≈20 GB) | 30 Gated DeltaNet + 10 gated attention, MoE 256 experts | ≈20 KiB | ≈61 MiB per checkpoint | Default (confirmed by `mrun bench` before release) |
 | Qwen3-Coder-30B-A3B, 4-bit (17.2 GB) | 48 attention, MoE 128 experts | 96 KiB | none | Attention-only alternative |
 | Qwen3-8B, 4-bit | 36 attention, dense | 144 KiB | none | Reference for correctness; small Macs |
 
@@ -39,7 +39,7 @@ was computed for, so a hybrid model resumes from a **checkpoint**: a copy of all
 taken at a planned position during prefill.
 
 Worked budget on the target (M4 Pro, 48 GB): `min(0.75 × 48, 36) − 8 = 28 GiB`. Qwen3.6 4-bit
-leaves ≈8 GiB after weights and scratch, which is far more than its 262K window needs. Qwen3-Coder
+leaves ≈6–7 GiB after weights and scratch, more than its 262K window needs (≈5 GiB). Qwen3-Coder
 leaves ≈10 GiB, ≈105K tokens. Clients assume larger windows (Claude Code 200K, Codex 272K for
 unknown models), so mrun reports its real capacity and `mrun launch` passes it on.
 
@@ -74,15 +74,20 @@ client ──HTTP──▶ api (Chat | Messages | Responses ─▶ ChatRequest; 
   Competing servers that drive MLX from several threads have hit stream errors and kernel panics.
 - **Budget by construction**: `budget = min(fraction × physical, recommended working set) −
   reserve`, with the reserve defaulting to `clamp(physical ÷ 6, 2 GiB, 8 GiB)`. Weights are
-  measured after load; scratch is measured by one probe at the largest chunk at the deepest
-  admissible position (cached per model identity, machine, macOS, MLX and mrun version, 001
-  FR-008); capacity is sized from the remainder and never exceeds the probed depth. MLX memory and cache limits back the budget.
+  measured after load; scratch is measured by probe chunks at two points, the deepest admissible
+  position and the largest chunk (including the one-layer copy transient of growth and moves),
+  cached per model identity, machine, macOS, MLX version, mrun version and chunk policy (001
+  FR-008); capacity is sized from the remainder and never exceeds the probed depth. MLX memory
+  and cache limits back the budget.
 - **Allocation never exceeds the reservation**: per-layer attention arrays start at the prompt
   plus up to 4K tokens of output and grow in 4K steps, both clamped to the request's reserved
-  total. Before any growth the engine reports the bytes it needs; the worker evicts cache first.
-- **Cancellation bound**: one layer in flight; prefill chunk = `clamp(2048 × 16K / depth, 256,
-  2048)` tokens so a layer stays near 100 ms at any depth. A cancelled prefill keeps every whole
-  chunk.
+  total. Before any allocation the engine returns `NeedsMemory{bytes}` with nothing changed; the
+  worker evicts cache and retries the call.
+- **Cancellation bound**: one layer in flight; prefill chunk = `clamp(2048 × 16K / depth, 128,
+  2048)` tokens so a layer stays near 100 ms up to 128K and ≤ ~200 ms at 262K (cancel at maximum
+  depth is at risk against the 300 ms target, 001 SC-004). A cancelled prefill keeps every whole
+  chunk; a yield (memory pressure) ends prefill after the current whole chunk and the worker
+  continues with the same plan.
 
 ## Prefix cache
 
@@ -95,11 +100,15 @@ hanging off it.
   prefix stays in place. The old tail is **moved** out into a branch segment, one layer at a time
   (copy the tail, then free that layer's slack), and the requested branch is moved in the same way.
   State is never held twice, so a 90K-token conversation survives a subagent on a 105K-token
-  machine. Tiny tails (under 256 tokens) are discarded instead.
+  machine; moving its 8.2 GiB tail out and back costs ≈ 0.15–0.2 s of bandwidth. Tiny tails
+  (under 256 tokens) are discarded instead.
 - **Hybrid models**: checkpoints are captured during prefill at the end of system+tools, at the
-  start of the last user or tool message, and at the end of the prompt (where the next turn's
-  re-rendered reply diverges). At most 8 per conversation; middle ones are dropped first. A switch
-  or edit resumes from the deepest checkpoint at or below the match and re-prefills the gap.
+  start of the last user or tool message, and at the end of the prompt's messages, before the
+  generation header (`generation_start`, where the next turn's re-rendered reply diverges). At
+  most 8 per conversation (≈ 0.5 GiB); the first, the two deepest and the newest at a user message
+  start are kept, and the one nearest the midpoint is dropped first. A moved-out tail keeps its
+  end state inside its segment. A switch or edit resumes from the deepest checkpoint at or below
+  the match and re-prefills the gap.
 - **Eviction**: least recently used branch leaves; the live path is never evicted while in use.
   Under memory pressure, branches go first, then an idle live path.
 - **Miss report** on every request: cached and processed tokens, divergence position, and a cause

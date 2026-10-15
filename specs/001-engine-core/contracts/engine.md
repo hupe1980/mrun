@@ -145,7 +145,7 @@ decoding (`forward_draft`, `accept`, `draft_mtp`, `spec_caps`;
 ## Generation loop (`crates/mrun/src/runtime/generate.rs`)
 
 The single owner of the per-request loop, generic over `Engine` and over a reuse policy:
-`Session` (001, `mrun run`) or the 003 `PrefixStore` (under `serve`, unless `--no-cache`).
+`Session` (001, `mrun run`) or the 003 `PrefixStore` (under `serve`).
 002's `runtime/worker.rs` only dequeues and calls `generate`.
 
 1. Validate (empty prompt, limit 0, sampling, stop caps) → `Rejected`.

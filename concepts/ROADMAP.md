@@ -24,9 +24,9 @@ sprint ([competitors](research/competitors-2026-10.md), [arxiv-sota](research/ar
 | Milestone | Outcome | Specs | Gate |
 | --- | --- | --- | --- |
 | **M0 Foundation** | MLX binding spike on a Mac: load, quantized matmul, gather-qmm, SDPA, RoPE, a custom Metal kernel, memory APIs | 001 phase 1 | Go/no-go within one week |
-| **M1 Engine** | `mrun run` streams Qwen3-8B, Qwen3-Coder-30B-A3B and Qwen3.6-35B-A3B with the memory budget, checkpoints and per-layer cancellation | 001 | 001 SC-001…SC-009 |
+| **M1 Engine** | `mrun run` streams Qwen3-8B, Qwen3-Coder-30B-A3B and Qwen3.6-35B-A3B with the memory budget, checkpoints and per-layer cancellation | 001 | 001 SC-001…SC-009 (SC-004 max-depth bucket recorded; at risk, 001 R5) |
 | **M2 Agent APIs** | Claude Code, Codex and OpenCode complete real tool loops, including MCP tools | 002 | 002 SC-001…SC-006; client matrix green |
-| **M3 Prefix cache** | Exact reuse across turns and branches for attention and hybrid models, with miss reports | 003 | 003 SC-001…SC-006 |
+| **M3 Prefix cache** | Exact reuse across turns and branches for attention and hybrid models, with miss reports | 003 | 003 SC-001…SC-006; SC-001 synthetic part gates M3; the trace part is reported with M5 |
 | **M4 Models & DX** | `pull`, `launch`, `connect`, `doctor`, `ps`; default model confirmed | 004 | 004 SC-001…SC-005 |
 | **M5 Bench** | `mrun bench` with in-order trace replay against llama.cpp, Ollama, oMLX, mlx-lm and SGLang-MLX | 005 | First dated public comparison, losing cells included |
 | **M6 Distribution** | Homebrew formula, signed and notarized binary, launchd service, `/metrics` | 008 | Fresh Mac: `brew install` → `mrun launch claude-code` works |

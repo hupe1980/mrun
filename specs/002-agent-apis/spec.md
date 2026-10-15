@@ -165,8 +165,7 @@ timeouts and that the next request runs normally.
 - **FR-006**: The Responses API MUST be stateless: `previous_response_id` and item references MUST
   be rejected with a clear error; `store: true` is accepted and nothing is stored.
 - **FR-007**: Usage MUST report input, cached input and output tokens with each API's semantics.
-  Cached tokens are `min(matched, P − 1)` for a prompt of `P` tokens, because the last prompt token
-  is always processed (003). Anthropic `input_tokens` excludes cache reads (`input_tokens +
+  For a prompt of `P` tokens `cached = min(resume, P − 1)`; resume = match (attention) or restored checkpoint position (hybrid), per 003 FR-006; the last prompt token is always processed. Anthropic `input_tokens` excludes cache reads (`input_tokens +
   cache_read_input_tokens = P`) and `cache_creation_input_tokens` is always 0 (mrun has no billed
   cache writes; reporting 0 keeps clients' cost estimates at zero); OpenAI totals include cached
   tokens. Finish reasons MUST follow the mapping table in
@@ -180,9 +179,10 @@ timeouts and that the next request runs normally.
   64 MiB, since agent histories carry base64 screenshots; 4,096 messages, 256 tools, schema 64 KiB and depth 16); errors name the limit and the
   setting that raises it.
 - **FR-010**: The server MUST run one generation at a time with a FIFO queue (default 16 waiting).
-  The queue deadline covers waiting time only (default 600 s, configurable). While a request waits
-  or its prompt is processed, streaming responses MUST send headers at once and a keepalive at
-  least every 10 s that the client's idle timer counts: Responses `response.created` at once, then
+  The queue deadline covers waiting time only (default 600 s, configurable). Streaming responses
+  MUST send headers at once and, in every phase (queued, prefilling, generating, including while a
+  tool call is buffered per FR-004), a keepalive whenever 10 s pass without an event, in a form
+  the client's idle timer counts: Responses `response.created` at once, then
   `response.in_progress` (Codex drops SSE comments and aborts after 300 s without an event);
   Anthropic `ping` (Claude Code aborts after 300 s without bytes); Chat SSE comments. Full-queue
   and deadline errors MUST be immediate and explicit; `retry-after` is integer seconds, at most 60
@@ -200,7 +200,10 @@ timeouts and that the next request runs normally.
   adaptive; OpenAI `reasoning_effort` / Responses `reasoning.effort` not in {none, minimal}; a bare
   `reasoning` object does not count). A server setting `--thinking client|off|on` (default
   `client`) overrides clients. Anthropic `budget_tokens` is honored by closing the thinking block
-  when the budget is reached.
+  when the budget is reached. For Qwen3.6, history is rendered with the template's
+  preserve-thinking option (`preserve_thinking`), with reasoning replayed per FR-016, so earlier
+  reasoning stays in the prompt and a new user turn does not re-process the previous tool loop
+  (its token cost is measured in 005).
 - **FR-014**: The server MUST NOT log prompt or completion content by default; request logs contain
   timings, token counts and outcome only.
 - **FR-015**: `GET /v1/models` MUST list served models with their context capacity on this machine
@@ -293,8 +296,10 @@ timeouts and that the next request runs normally.
 ### Measurable Outcomes
 
 - **SC-001**: OpenCode, Claude Code and Codex (pinned versions) each complete the scripted
-  read-edit-test task against the primary model with no client-side protocol errors, 5 of 5 runs;
-  one Claude Code run crosses the configured capacity and compacts without errors.
+  read-edit-test task against Qwen3.6-35B-A3B (`mlx-community/Qwen3.6-35B-A3B-4bit`) and
+  Qwen3-Coder-30B-A3B (`mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit`) with no client-side
+  protocol errors, 5 of 5 runs each; one Claude Code run crosses the configured capacity and
+  compacts without errors.
 - **SC-002**: The API conformance suite (at least 60 cases across the three APIs: streaming,
   tools, errors, limits, cancellation, keepalives) passes 100%.
 - **SC-003**: With strict tools whose schemas compile, 100% of completed tool calls in the

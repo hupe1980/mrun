@@ -176,7 +176,7 @@ wire_api = "responses"
 - **History replay to non-OpenAI providers.** Codex clears `encrypted_content` on everything except `reasoning` items, and **omits reasoning `content` that holds `reasoning_text`** [V `client.rs:1013-1031`, `protocol/src/models.rs:1756-1763`]. → Reasoning survives a turn only through `encrypted_content`.
 - **`function_call_output.output`** may be a string or an array of content items, possibly `input_image` (from the view_image tool) [V `models.rs` FunctionCallOutput].
 - **SSE consumption** [V `CX codex-api/src/sse/responses.rs:345-557`]:
-  - Parsed with `eventsource-stream`, which **drops comment lines**; every `stream.next()` is wrapped in the idle timeout (default 300 s, `model-provider-info/src/lib.rs:66`; `responses.rs:557`). SSE comments therefore do not keep Codex alive: mrun sends `response.created` at once and `response.in_progress` every 10 s while queued or prefilling (Codex ignores `in_progress` at :503 but the event resets the timer).
+  - Parsed with `eventsource-stream`, which **drops comment lines**; every `stream.next()` is wrapped in the idle timeout (default 300 s, `model-provider-info/src/lib.rs:66`; `responses.rs:557`). SSE comments therefore do not keep Codex alive: mrun sends `response.created` at once and `response.in_progress` whenever 10 s pass without an event, in every phase (Codex ignores `in_progress` at :503 but the event resets the timer).
   - Function calls are taken **only from `response.output_item.done`**. `function_call_arguments.*` events are ignored.
   - An item that fails to deserialize is **silently dropped** (debug log, :359). A reasoning item **must** include `summary: []` [V `models.rs:1082`].
   - `response.completed` needs `response.id`; `usage` is optional but used.
@@ -244,7 +244,7 @@ wire_api = "responses"
 **Qwen3.6 / Qwen3.5 family (hybrid, default)** [V `LC models/templates/Qwen3.5-4B.jinja`; Qwen3.6 template assumed identical in these respects, re-check on the release weights]:
 - Same XML tool-call syntax and the same `|items` + `tojson` argument re-serialization as Qwen3-Coder (:119-122), so the same byte-stability caveat and raw-args rule apply.
 - Tools render as `tojson` lines in the system turn (:50).
-- Thinking is on by default: the generation prompt opens `<think>\n` unless `enable_thinking` is false (:149-152); mrun passes `enable_thinking=false` when thinking is off. Reasoning is re-rendered only after the last user query (:100).
+- Thinking is on by default: the generation prompt opens `<think>\n` unless `enable_thinking` is false (:149-152); mrun passes `enable_thinking=false` when thinking is off. By default reasoning is re-rendered only after the last user query (:100); mrun sets the preserve-thinking option so all replayed reasoning is rendered (§5 item 4, FR-013).
 - **Non-leading system messages raise** "System message must be at the beginning." (:83-86). Decision (FR-029): pass them to the template as a user turn at the same position; this stays append-only and needs no template edits. Rejected: injecting a raw `<|im_start|>system` turn outside the template (bypasses the template the model was trained with), merging into the next user turn (changes earlier text once the next turn arrives).
 
 **Reference parsers:**
@@ -327,15 +327,16 @@ wire_api = "responses"
    - Accept `cache_control` everywhere and ignore it (FR-030; 003 dropped breakpoint hints).
 2. **Usage semantics differ.**
    - OpenAI `prompt_tokens` and Responses `input_tokens` **include** cached tokens. Anthropic `input_tokens` **excludes** them.
-   - Cached tokens are `min(matched, P − 1)`: the last prompt token is always processed (003), so a fully matched prompt reports `P − 1`.
+   - `cached = min(resume, P − 1)`; resume = match (attention) or restored checkpoint position (hybrid), per 003 FR-006. The last prompt token is always processed, so a fully matched prompt reports `P − 1`; a hybrid reports its checkpoint position (gap in mrun metadata).
    - Report `cache_creation_input_tokens: 0`: mrun bills nothing and has no write tier distinct from reads; a non-zero value would make clients estimate a cost.
    - Reasoning tokens are part of the output tokens in all three APIs.
 3. **Max tokens.** Chat: `max_completion_tokens` takes precedence over `max_tokens`. Anthropic: `max_tokens` is required. Responses: `max_output_tokens`. Each bounds reasoning plus answer. Absent → server default (16,384); clamp to `capacity − prompt` and report the clamp (FR-019); error only if fewer than 1 token remains.
 4. **Thinking control.**
    - Anthropic `thinking.enabled` and `adaptive` → on; `disabled` and `between_tools` → off. `budget_tokens`: force `</think>` at the budget [U quality].
    - OpenAI `reasoning_effort` / Responses `reasoning.effort`: `none`/`minimal`/absent → off.
-   - Claude Code sends `adaptive` on every request, so an "only when requested" policy will think on Claude Code turns. Qwen3-Coder has no thinking, so the primary model is unaffected; for Qwen3 hybrids `mrun launch`/`connect` can set `MAX_THINKING_TOKENS=0` (or use `--thinking off`) [U effect behind a base URL].
-5. **Reasoning in history.** The Qwen3 template re-renders reasoning only inside the current tool loop. Replay it from Anthropic `thinking` blocks, Chat `reasoning_content`/`reasoning`, and Responses `reasoning.encrypted_content`. Codex never sends `reasoning_text` back, so mrun must put the reasoning text (versioned and base64-encoded) into `encrypted_content`. Signatures and encrypted blobs are opaque, unsigned, and never rejected.
+   - Claude Code sends `adaptive` on every request, so an "only when requested" policy will think on Claude Code turns, including on the Qwen3.6 default. Decision (maintainer, 2026-10-15): thinking follows the client (unchanged); users who want none use `--thinking off` or `MAX_THINKING_TOKENS=0` [U effect behind a base URL].
+   - **Qwen3.6 history (decision)**: mrun renders history with the template's preserve-thinking option (`preserve_thinking`), replaying reasoning from signatures / `encrypted_content` (FR-016). Earlier reasoning stays in the prompt, so a new user turn appends instead of re-rendering (and re-processing) the previous tool loop without its reasoning. Cost: reasoning tokens stay in context; measured in 005.
+5. **Reasoning in history.** The Qwen3 template re-renders reasoning only inside the current tool loop (Qwen3.6: all turns, via preserve-thinking, see item 4). Replay it from Anthropic `thinking` blocks, Chat `reasoning_content`/`reasoning`, and Responses `reasoning.encrypted_content`. Codex never sends `reasoning_text` back, so mrun must put the reasoning text (versioned and base64-encoded) into `encrypted_content`. Signatures and encrypted blobs are opaque, unsigned, and never rejected.
 6. **Arguments round-trip.**
    - OpenAI and Responses history carries `arguments` as a JSON string; Anthropic `input` is an object.
    - Qwen3 renders a string verbatim; Qwen3-Coder needs an object.
@@ -417,7 +418,7 @@ enum Finish { Stop, StopSequence, Length, ContextFull, ToolCalls, Cancelled }
 `Cancelled` is never written.
 
 **Per-API encoders.** Each encoder is a state machine over `GenEvent` that owns indices and ids and writes SSE frames. Each handles both streaming and non-streaming by folding the same events.
-- **Keepalives** (every 10 s of silence while queued or prefilling): Responses `response.created` at once then `response.in_progress`; Anthropic `ping`; Chat SSE comments carrying progress.
+- **Keepalives** (whenever 10 s pass without an event, in every phase, including while a tool call is buffered): Responses `response.created` at once then `response.in_progress`; Anthropic `ping`; Chat SSE comments carrying progress.
 - **Errors after headers**: Anthropic `event: error` (`overloaded_error`), Chat `data: {"error":…}` then close, Responses `response.failed`.
 - **Anthropic:** emits a `signature_delta` (`"mrun1."+b64(sha256(thinking))[..16]`) before closing a thinking block, and `cache_read_input_tokens` in `message_start` and `message_delta`.
 - **Chat:** emits the usage chunk after the finish chunk, then `[DONE]`, and nothing after `finish_reason`.
@@ -463,7 +464,7 @@ enum Finish { Stop, StopSequence, Length, ContextFull, ToolCalls, Cancelled }
   - `xapi_disconnect_while_queued_releases_slot`, `xapi_body_over_8mib_413`, `xapi_schema_depth_limit`, `xapi_tool_count_limit`
   - `xapi_nonloopback_requires_key`, `xapi_no_prompt_content_in_logs`
   - `xapi_disconnect_while_queued_prefilling_nonstream_cancels_300ms`, `xapi_strict_schema_uncompilable_unconstrained_warning`, `xapi_tool_choice_none_bias_pipelined`
-  - `xapi_qwen3_raw_args_rerender_byte_stable`, `xapi_qwen_xml_rerender_template_miss_reported`, `xapi_qwen_xml_history_args_nonobject_raw_warning`, `xapi_cached_tokens_full_match_p_minus_1`, `xapi_max_tokens_clamped_reported`, `xapi_record_fields_and_session_headers`
+  - `xapi_qwen3_raw_args_rerender_byte_stable`, `xapi_qwen_xml_rerender_template_miss_reported`, `xapi_qwen_xml_history_args_nonobject_raw_warning`, `xapi_cached_tokens_resume_p_minus_1`, `xapi_cached_tokens_hybrid_checkpoint_resume`, `xapi_max_tokens_clamped_reported`, `xapi_record_fields_and_session_headers`
 
 ## Sources
 - OpenAI: https://platform.openai.com/docs/api-reference/chat/streaming ; https://platform.openai.com/docs/api-reference/responses-streaming ; https://platform.openai.com/docs/guides/reasoning ; SDK types `OS` above.

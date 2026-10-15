@@ -81,7 +81,8 @@ crates/mrun/src/
 │   └── reasoning.rs      # think-tag split, signature + encrypted_content codec
 ├── runtime/
 │   ├── queue.rs          # FIFO, deadline, cancel tokens, retry-after
-│   └── worker.rs         # pulls from queue, drives Engine, fans out GenEvents
+│   └── worker.rs         # dequeues and calls 001 `runtime/generate.rs` (owner of the per-request loop;
+│                         # reuse policy: 003 PrefixStore); maps its events to GenEvents
 └── cli/serve.rs
 crates/mrun/tests/
 ├── api_conformance/{chat.rs, messages.rs, responses.rs, cross.rs}
