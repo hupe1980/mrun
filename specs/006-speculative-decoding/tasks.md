@@ -12,7 +12,7 @@ description: "Tasks for 006 Speculative Decoding"
 ## Phase 1: Setup and measure first
 
 - [ ] T001 `crates/mrun/src/spec/index.rs`: suffix automaton over token ids with sentinel-separated sources, incremental extension, longest-suffix lookup with most-recent tie-break; unit tests in `crates/mrun/tests/spec_index.rs`, plus a perf check (index build ≤ 10 ms per 100K tokens, plan Performance Goals)
-- [ ] T002 [P] `crates/mrun/src/spec/render.rs`: copy-aware rendering (line-number prefixes `␣*N→`/`␣*N<TAB>` stripped) and, for JSON-argument syntaxes (Hermes, Harmony, Mistral), a JSON-escaped rendering (FR-003); tests with Claude Code `Read` output
+- [ ] T002 [P] `crates/mrun/src/spec/render.rs`: copy-aware rendering (line-number prefixes `␣*N→`/`␣*N<TAB>` stripped) and, for JSON-argument syntaxes (Hermes, Harmony; Mistral from 0.2), a JSON-escaped rendering (FR-003); tests with Claude Code `Read` output
 - [ ] T003 `crates/mrun/src/bench/suites/spec.rs` offline cell: reply tokens from the next request's history, simulated drafting, acceptance histogram per tool-call syntax, `copy_share_16`, `edit-heavy` label; result fields per contract (depends on T001, T002)
 - [ ] T004 Run `mrun bench --suite spec --offline` on the bundled traces; record the go/no-go note in `research.md` R8 (FR-001 offline part)
 
@@ -36,11 +36,11 @@ description: "Tasks for 006 Speculative Decoding"
 - [ ] T013 [US1] `crates/mrun/tests/spec_mutations.rs`: ≥ 100 cases (partial/full/zero acceptance, EOS and stop strings inside drafts, hybrid EOS and hybrid stop-string `commit(k)`, limit, cancel mid-round, `NeedsMemory` retry, hybrid rollback) asserting zero rejected tokens in state, store and stream (SC-004)
 - [ ] T014 [US1] `crates/mrun-engine/tests/spec_conformance.rs` (macOS): greedy `auto` vs `off` on 001 conformance prompts and teacher-forced traces; report divergences with margins (SC-003)
 
-**Checkpoint**: n-gram speculation works end to end on every Tier 1 0.1 model.
+**Checkpoint**: n-gram speculation works end to end on every 0.1 alias.
 
 ## Phase 4: US4 — visibility and control (P2)
 
-- [ ] T015 [P] [US4] `crates/mrun/src/spec/stats.rs` + `crates/mrun/src/api/*`: `spec` metadata (headers, final `: mrun` comment), `x-mrun-speculation: off`, other values ignored (as `x-mrun-cache`); `/mrun/status` `spec` key; conformance tests on all three APIs
+- [ ] T015 [P] [US4] `crates/mrun/src/spec/stats.rs` + `crates/mrun/src/api/*`: `spec` metadata (headers, final `: mrun` comment), `x-mrun-speculation: off`, other values ignored; `/mrun/status` `spec` key; conformance tests on all three APIs
 - [ ] T016 [P] [US4] `crates/mrun/src/config.rs` + `cli/serve.rs` + `cli/run.rs`: `--speculation auto|off|ngram`, `[speculation] mode`, `MRUN_SPECULATION_MODE`; summary line `accepted/drafted`; `run --check` forces `off` (FR-017); snapshot tests
 
 ## Phase 5: US3 — MTP drafting (P2) — Removed
@@ -49,11 +49,11 @@ T017–T020 moved to "Follow-up (gated)".
 
 ## Phase 6: Gates and polish
 
-- [ ] T021 Online `spec` cells (`off|ngram|auto`) in `bench/suites/spec.rs`; run on the target Mac on every Tier 1 0.1 model (FR-001 online part)
-- [ ] T022 SC-001: full bench `off` vs `auto` with `--baseline` at the 005 regression threshold (5 repetitions, medians) on every Tier 1 0.1 model; SC-002: edit-heavy decode ratio ≥ 1.3× on Qwen3.6-35B-A3B and the default model if different; record results and flip the default to `auto` only if both pass
+- [ ] T021 Online `spec` cells (`off|ngram|auto`) in `bench/suites/spec.rs`; run on the target Mac on every 0.1 alias (FR-001 online part)
+- [ ] T022 SC-001: full bench `off` vs `auto` at the 005 regression threshold (5 repetitions, medians; `--baseline` if 005's regression mode has returned, else compared by hand) on every 0.1 alias; SC-002: edit-heavy decode ratio ≥ 1.3× on Qwen3.6-35B-A3B and the default model if different; record results and flip the default to `auto` only if both pass
 - [ ] T023 [P] Site page section "Speculative decoding" (how it works, how to turn it off, measured numbers)
 - [ ] T024 Fold cross-spec changes into the 001–005 contracts and specs/README index (plan "Cross-spec changes")
-- [ ] T025 [P] `crates/mrun/src/metrics.rs`: `mrun_spec_drafted_tokens_total`, `mrun_spec_accepted_tokens_total`, `mrun_spec_rounds_total` (label `drafter` = `ngram`) per 008 metrics contract; test with the scripted engine
+- [ ] T025 [P] (only once 008's `/metrics` lands; Later since the lean cut) `crates/mrun/src/metrics.rs`: `mrun_spec_drafted_tokens_total`, `mrun_spec_accepted_tokens_total`, `mrun_spec_rounds_total` (label `drafter` = `ngram`) per 008 metrics contract; test with the scripted engine
 - [ ] T026 [P] FR-017: `mrun run --check`, 003 exactness tests and `bench --suite agent` comparisons pass `--speculation off`; test that `--check` reports `spec.reason = off`
 
 ## Dependencies

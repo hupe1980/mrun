@@ -1,5 +1,9 @@
 # Research: Model Families
 
+**Update 2026-10-15 (lean 0.1 cut, D025)**: 010 is post-0.1. One syntax per family (R8's ordered
+sets and tool-placement check are Later, OQ-7); the locality rule is a review rule (no CI check);
+Devstral (`mistral`) is 0.2; 0.1 gates live in 001–005.
+
 Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Models; Sequence state),
 [DECISIONS](../../concepts/DECISIONS.md) D010, D015, D019, [landscape §4](../../concepts/research/landscape-2026-10.md),
 [mlx-rust](../../concepts/research/mlx-rust.md), 001 [research](../001-engine-core/research.md)

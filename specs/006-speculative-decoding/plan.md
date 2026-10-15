@@ -42,7 +42,7 @@ drafts never exceed the reservation; cancellation within one round
 | III Memory budget | Verify scratch and rollback input cache in the measured scratch envelope; drafts capped by reservation | Pass |
 | IV Local, private | No network access; no persisted speculation state | Pass |
 | V Own runtime | No new kernels; MTP follow-up names its reference implementation (Ollama MLX runner, vLLM cross-check) | Pass |
-| VI Simple | One controller, one drafter, one mode switch; no trained drafters | Pass |
+| VI Simple | One controller, one drafter, one mode switch; trained drafters (MTP, DFlash2) only as gated follow-ups | Pass |
 
 Post-design re-check: Pass.
 
@@ -97,7 +97,7 @@ reached only through the `Engine` trait.
 - 004 CLI contract: `serve|run --speculation auto|off|ngram`; `run --check` forces `off`; config key.
 - 005: suite `spec`, edit-heavy trace classification, result fields (additive, schema v1);
   `--suite agent` comparisons with `--speculation off`.
-- 008 metrics: `mrun_spec_*` counters (label `drafter` ∈ {`ngram`}).
+- 008 metrics (Later since the lean 0.1 cut): `mrun_spec_*` counters (label `drafter` ∈ {`ngram`}) once `/metrics` lands.
 - Folded by T024.
 
 ## Complexity Tracking

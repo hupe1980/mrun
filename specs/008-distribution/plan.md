@@ -6,41 +6,37 @@
 
 ## Summary
 
-Ship mrun 0.1 to Macs (macOS 15+, arm64): a GitHub Actions release pipeline that builds the arm64 binary with the
-vendored MLX Metal library, signs and notarizes it, publishes a tarball with checksums, changelog
-and SBOM, and updates a Homebrew tap formula. Add `mrun service install|uninstall` (launchd user
-agent running `serve --service` with rotating logs and lazy model loading, `--preload` opt-in), an
-idle-sleep power assertion while requests run, and a Prometheus `/metrics` endpoint with a fixed,
-documented metric set. No updater.
+Ship mrun 0.1 to Macs (macOS 15+, arm64), lean (D025, 2026-10-15): a GitHub Actions release
+pipeline that builds the arm64 binary with the vendored MLX Metal library, ad-hoc signs it,
+publishes a tarball with checksums and changelog, and updates a Homebrew tap formula; a long
+`--version`; an idle-sleep power assertion while requests run. No updater. Deferred (spec, Later):
+Developer ID signing and notarization, SBOM, the launchd service with lazy model load, `/metrics`;
+their design below and in research stays for that release.
 
 ## Technical Context
 
 **Language/Version**: Rust 1.94.0 (edition 2024); Ruby (Homebrew formula); GitHub Actions YAML
-**Primary Dependencies**: existing axum router (002) for `/metrics`; `objc2-io-kit` or a minimal
-`extern "C"` IOKit binding; `plist` crate for writing the launchd plist; CI tools `codesign`,
-`xcrun notarytool`, `syspolicy_check`, `cargo-cyclonedx`, `promtool` (tests)
-**Storage**: `~/Library/LaunchAgents/io.github.hupe1980.mrun.plist`; `~/.mrun/{server.log*,
-launchd.log, server.pid}`
-**Testing**: cargo test (plist rendering snapshots, metric exposition snapshots and `promtool check
-metrics` when available, power-assertion state machine with a fake clock, service command dry-run
-on Linux); release workflow dry run on a fork with test credentials; manual SC-001/002/004 on the
-target Mac
+**Primary Dependencies**: `objc2-io-kit` or a minimal `extern "C"` IOKit binding; CI tools
+`codesign`; later: `plist`, `xcrun notarytool`, `syspolicy_check`, `cargo-cyclonedx`, `promtool`
+**Storage**: none new (`serve --detach` logs per 004)
+**Testing**: cargo test (power-assertion state machine with a fake clock, `--version` snapshot and
+offline test); release workflow dry run on a fork; manual SC-001/004 on the target Mac
 **Target Platform**: macOS 15+ arm64 (release); Linux for portable tests and CI
 **Project Type**: Packaging, CI, and small runtime additions to the `mrun` binary
-**Performance Goals**: `/metrics` render < 1 ms; metric updates lock-free on the hot path
+**Performance Goals**: none beyond not slowing the request path
 **Constraints**: No network except `pull`; no root; no privileged OS tuning (constitution)
-**Scale/Scope**: One formula, one plist, ~40 metric series
+**Scale/Scope**: One formula, one release workflow, one CI job
 
 ## Constitution Check
 
 | Principle | Gate | Status |
 | --- | --- | --- |
-| I Agent latency | Power assertion keeps long runs alive; `/metrics` exposes TTFT and throughput as measured by the server | Pass |
-| II Exactness | Metrics report real counts from the runtime (no estimates) | Pass |
-| III Memory budget | Service install states resident memory; no new large allocations | Pass |
-| IV Local, private | No update check; `/metrics` local with existing bind/auth rules, no prompt-derived labels; logs without content | Pass |
-| V Own runtime | No new runtime dependencies beyond a plist writer and IOKit binding | Pass |
-| VI Simple, DX | One install command, one service command pair, no `brew services` duplicate, hand-written encoder | Pass |
+| I Agent latency | Power assertion keeps long runs alive | Pass |
+| II Exactness | Not affected | Pass |
+| III Memory budget | No new large allocations | Pass |
+| IV Local, private | No update check; nothing new listens | Pass |
+| V Own runtime | No new runtime dependency beyond an IOKit binding | Pass |
+| VI Simple, DX | One install command; ad-hoc signing needs no certificate | Pass |
 
 Exception (scoped): `crates/mrun/src/platform/macos/power.rs` may use `unsafe` for the IOKit FFI if
 `objc2-io-kit` lacks the calls; module-level allow with a safety comment; expires when a safe
@@ -64,31 +60,26 @@ specs/008-distribution/
 
 ```text
 crates/mrun/src/
-├── cli/service.rs            # service install|uninstall [--preload]; launchctl bootstrap/bootout
-├── runtime/lazy.rs           # lazy engine creation on first dequeue, keepalive/progress while loading
 ├── cli/version.rs            # long --version (commit, MLX/mlx-c, build date) via build.rs env
 ├── platform/
-│   ├── mod.rs                # install source detection, real binary path
-│   ├── launchd.rs            # plist model + rendering (plist crate), label, paths
+│   ├── mod.rs                # real binary path, Metal library check, arm64/macOS 15 floor
 │   └── macos/power.rs        # IOPM assertion holder (no-op elsewhere)
-├── runtime/power.rs          # queue-driven assertion state machine (acquire, 60 s release)
-├── metrics.rs                # registry: counters, gauges, fixed-bucket histograms, text encoder
-├── api/metrics.rs            # GET /metrics handler
-└── logging.rs                # service-mode rotating file log (16 MiB × 3, 0600)
+└── runtime/power.rs          # queue-driven assertion state machine (acquire, 60 s release)
 crates/mrun/build.rs          # embed git commit, build date, vendored MLX/mlx-c versions
 crates/mrun/tests/
-├── metrics_exposition.rs     # snapshot + promtool (if installed) + label-set checks
-├── service_plist.rs          # plist snapshots for Homebrew and tarball paths, with/without --preload
-├── lazy_load.rs              # scripted lazy-load: keepalives, /health loaded flag, estimated capacity
-├── doctor_offline.rs         # install source detection; no network during doctor
+├── version_offline.rs        # --version opens no socket
 └── power_state.rs            # fake-clock state machine
 .github/workflows/
-├── ci.yml                    # PRs: Linux fmt/clippy/test; macOS arm64 release build
-└── release.yml               # tags: version check, build, sign, notarize, publish, tap PR
+├── ci.yml                    # owned by 001 T004a; T003 adds the macOS arm64 release build job
+└── release.yml               # tags: version check, build, ad-hoc sign, verify, publish, tap PR
 packaging/homebrew/mrun.rb.tmpl   # formula template rendered by release.yml
-scripts/release/{sign.sh, notarize.sh, package.sh, sbom.sh}
+scripts/release/{package.sh, sign.sh}
 CHANGELOG.md  RELEASING.md
 ```
+
+Later (service, metrics, notarization): `cli/service.rs`, `runtime/lazy.rs`,
+`platform/launchd.rs`, `metrics.rs`, `api/metrics.rs`, `logging.rs`, `scripts/release/{notarize.sh,
+sbom.sh}` and their tests.
 
 **Structure Decision**: Runtime pieces live in the `mrun` crate (`platform/` isolates macOS-only
 code with Linux no-ops so tests run everywhere); packaging lives in `packaging/`, `scripts/release/`
@@ -96,14 +87,12 @@ and workflows; the tap repository holds only the rendered formula.
 
 ## Cross-spec changes (to fold into the owning specs)
 
-- 002 API contract: `GET /metrics` row; `/mrun/status` adds `power: {assertion: bool, since?}` and
-  `loaded`; `/health` adds `loaded`; `/v1/models` capacity may be `estimated` before load.
-- 004 CLI contract: `mrun service install|uninstall [--preload]`, `serve --service [--preload]`,
-  long `--version`; `doctor` checks install source, service state, stale plist; `stop` message with
-  a service; `launch` shows estimated capacity before load.
-- 001: macOS 15.0 deployment target.
-- 006/007 own their metric families (`mrun_spec_*`, `mrun_cache_*{tier="disk"}`) using the names
-  reserved in the metrics contract.
+- 002 API contract: `/mrun/status` adds `power: {assertion: bool, since?}`.
+- 004 CLI contract: long `--version`.
+- 001: macOS 15.0 deployment target; `ci.yml` stays 001's (T004a).
+- Later: `GET /metrics`, `/health` `loaded` and estimated capacity before a lazy load,
+  `mrun service install|uninstall [--preload]`, `serve --service`, `doctor` install source and
+  service state; 006/007 metric families.
 - Folded by T024.
 
 ## Complexity Tracking

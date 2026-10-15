@@ -7,8 +7,8 @@
 | model_type | `&'static str` | `config.json` `model_type` |
 | text_model_type | `Option<&'static str>` | `text_config.model_type` when the config nests the text model (`mistral3` → `ministral3`, `gemma4` → `gemma4_text`) |
 | family | `&'static dyn Family` | the module (contract) |
-| release | `Release` | `V0_1` \| `After0_1`; only families whose module ships are in the table |
-| tier | `1 \| 2` | highest tier of any model of this architecture; per-model tier is in the 004 manifest |
+| release | `Release` | `V0_1` \| `V0_2` \| `Later`; only families whose module ships are in the table |
+| tier | `1 \| 2` | with Tier 2 (post-0.1): highest tier of any model of this architecture |
 | aliases | `&'static [&'static str]` | Tier 1 aliases of this architecture (listed in 004 E034) |
 
 Lookup is exact on the pair; a nested config whose text type is unregistered is refused
@@ -92,20 +92,20 @@ the file → `UnsupportedQuantization { path, mode }`.
 | reasoning | `ThinkTags` \| `HarmonyChannels` \| `MistralThink` \| `GemmaThought` \| `None` |
 | history | template variables mrun sets (`preserve_thinking`, `clear_thinking=false`, `reasoning_effort`) and the message field reasoning goes into |
 
-## ProbeResult
+## TemplateCheck (was ProbeResult)
 
-`{ detected: Option<SyntaxId>, accepted: &[SyntaxId], used: SyntaxId, tools_late: bool }`: shown by `mrun show` and
-`/mrun/status`. `detected ∉ accepted` ⇒ `SyntaxMismatch` load error. Accepted sets at 0.1:
-`qwen3` {Hermes}, `qwen3_moe` {QwenXml, Hermes}, `qwen3_5_moe` {QwenXml}, `gpt_oss` {Harmony},
-`mistral` {Mistral}; after 0.1: `glm4_moe_lite` {GlmXml}, `gemma4` {Gemma}, `nemotron_h`
-{QwenXml}.
+`{ syntax: SyntaxId, markers_found: bool, missing: Vec<&'static str> }`: shown by `mrun show` and
+`/mrun/status`. `!markers_found` ⇒ `SyntaxMismatch` load error. `SyntaxId` is defined in
+`mrun-engine`; one per family: `qwen3` Hermes, `qwen3_moe` QwenXml, `qwen3_5_moe` QwenXml,
+`gpt_oss` Harmony; 0.2: `mistral` Mistral; later: `glm4_moe_lite` GlmXml, `gemma4` Gemma,
+`nemotron_h` QwenXml. Later (lean cut 2026-10-15): ordered accepted sets (OQ-7) and `tools_late`.
 
 ## Tier1Alias (extends 004 ModelManifest)
 
 Adds `family`, `syntax`, `tier: 1`, `state_bytes_per_token`, `checkpoint_bytes`,
-`capacity_48gb`, `parity_ref` (path of the stored reference outputs). Tier 2 models get a manifest
-on pull with `tier: 2` and no parity reference; a 0.1 alias that misses a Tier 1 gate keeps its
-alias with `tier: 2` (FR-016).
+`capacity_48gb`, `parity_ref` (path of the stored reference outputs). With Tier 2 (post-0.1),
+non-alias models get a manifest on pull with `tier: 2` and no parity reference. (Demoting a 0.1
+alias to `tier: 2`: removed, lean cut 2026-10-15.)
 
 ## ParityFixture
 

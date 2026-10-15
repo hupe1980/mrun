@@ -1,5 +1,11 @@
 # Research: Distribution
 
+**Update 2026-10-15 (lean 0.1 cut, D025)**: 0.1 ships the tap and an ad-hoc-signed tarball (R1,
+R2, R4, R6, R8, R9 apply). R3 (Developer ID signing and notarization), R5 (launchd user agent)
+and R7 (`/metrics`) are Later, as is the SBOM. Homebrew does not quarantine formula downloads, so
+an ad-hoc signature suffices for `brew install` [U until 008 T010]; browser-downloaded tarballs
+need `xattr -d com.apple.quarantine`.
+
 ## R1: Channel: tap with a prebuilt binary
 
 - **Decision**: Tap `hupe1980/homebrew-tap`, formula `mrun.rb` downloading the notarized release

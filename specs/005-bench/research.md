@@ -1,5 +1,15 @@
 # Research: Benchmark Harness
 
+**Update 2026-10-15 (lean 0.1 cut, D025; delta scan)**: R2's automated `start`/`stop` and
+free-memory check, R1's RSS/footprint sampling, R6's thermal slope and the regression mode are
+Later; 0.1 switches systems at a manual pause and records thermal state only. The competitor set
+drops the SGLang-MLX profile and adds Inco Splash (github.com/incoai/splash, Apache-2.0; `splash
+serve --model mlx-community/Qwen3.6-35B-A3B-4bit`, port 8000; run with `--kv-format bf16` and idle
+release off as the exact cell, and with its default INT8 KV as a labeled "lossy KV" cell; restart
+with persistent/SSD caches cleared as its reset) [flags U until checked on the pinned release].
+Reply lengths come from the next request's history, because `--record` no longer stores response
+data (002 FR-021).
+
 ## R1: What to measure
 
 - **Decision**: Primary: per-turn time to first token (TTFT, FR-013), time to first useful token

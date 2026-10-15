@@ -1,5 +1,9 @@
 # Contract: Service, Install and Release
 
+Lean 0.1 (D025, 2026-10-15): `--version`, install layout, release workflow and versioning apply;
+the `service` commands, `serve --service`, service-aware `stop`/`doctor` rows, notarization and
+the SBOM are Later.
+
 ## CLI (extends the [004 CLI contract](../../004-models-cli/contracts/cli.md))
 
 | Command | Behavior |
@@ -27,9 +31,10 @@ expected path.
 1. Check: tag `vX.Y.Z` = workspace version = `CHANGELOG.md` section `## [X.Y.Z]`; CI green on the
    commit.
 2. Build `--release --target aarch64-apple-darwin` with `MACOSX_DEPLOYMENT_TARGET=15.0`.
-3. Sign (hardened runtime, timestamp), notarize (`notarytool submit --wait`), verify (`codesign
-   --verify --strict`, `syspolicy_check distribution`), smoke-test `mrun --version`.
-4. Package tarball, `SHA256SUMS`, SBOM; create the GitHub Release (pre-release for `-rc.N`) with
+3. Ad-hoc sign (`codesign -s -`), verify (`codesign --verify --strict`), smoke-test `mrun --version`.
+   (Later: Developer ID with hardened runtime and timestamp, `notarytool submit --wait`,
+   `syspolicy_check distribution`.)
+4. Package tarball and `SHA256SUMS` (SBOM: Later); create the GitHub Release (pre-release for `-rc.N`) with
    the changelog section as notes.
 5. Final releases only: open a pull request on `hupe1980/homebrew-tap` updating `url`, `sha256`,
    `version`; `brew audit --strict` and `brew test` run in the tap's CI.

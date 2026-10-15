@@ -16,8 +16,8 @@ Validation scenarios for feature 006 (after implementation), on the target Mac (
    ```
    Expect: edit-heavy traces labelled; drafted/accepted per mode.
 2. **No regression** (SC-001): `mrun bench --suite all` with `--speculation off`, then `auto`, per
-   model (5 repetitions, medians); compare with `--baseline` at the 005 regression threshold (exit 0
-   expected).
+   model (5 repetitions, medians); compare at the 005 regression threshold (with `--baseline` once
+   005's regression mode returns, else by hand).
 3. **Edit speed-up** (SC-002): in the `spec` cells, `auto` decode tok/s on edit-heavy traces ≥ 1.3×
    `off`.
 4. **Greedy equality** (SC-003): `spec_conformance` (below) compares `auto` with `off`; any

@@ -8,12 +8,13 @@
 
 Define the family mechanism that 001, 002 and 004 implement for release 0.1 (block library,
 `model_type` registry, per-layer state layout, MXFP4 next to MLX affine, syntax registry with a
-template probe, aliases), and own what lies beyond it: the family contract and locality rule,
-tiers (Tier 2 loading of any repo of a registered architecture, tiny-model parity per
-architecture), the Tier 1 gate across all families, and the post-0.1 families. 0.1 families are
-built by 001 (T039–T043a, T045, T046 (+ goldens T010d, parity T027d/e): `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`, `mistral`), their
-syntaxes by 002 (T006a–T006c: Hermes, Qwen XML, Harmony, Mistral), their aliases by 004. After 0.1,
-each of `glm4_moe_lite` (MLA), `gemma4` (sliding + global, KV sharing, Gemma syntax) and
+template check, aliases), and own what lies beyond it (lean cut 2026-10-15, D025: 010 is post-0.1):
+the family contract and locality rule (a review rule), tiers (Tier 2 loading of any repo of a
+registered architecture, tiny-model parity per architecture) and the post-0.1 families. 0.1
+families are built and gated by 001 (T039–T042, T043a, T045, T046 (+ goldens T010c/T010d, parity
+T027d): `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`), their syntaxes by 002 (T006a, T006b:
+Hermes, Qwen XML, Harmony), their aliases by 004. Devstral (`mistral`, Mistral syntax) is 0.2
+(T010). After that, each of `glm4_moe_lite` (MLA), `gemma4` (sliding + global, KV sharing, Gemma syntax) and
 `nemotron_h` (Mamba2 hybrid) lands through the same porting checklist, gated by its measure-first
 check. Sliding-window layers keep full KV and read a window slice, so every attention-like state
 stays positional and 003 needs no per-family logic.
@@ -26,16 +27,16 @@ stays positional and 003 needs no per-family logic.
 **Storage**: Reference outputs and tiny weights under `crates/mrun-engine/tests/families/`;
 template goldens under `crates/mrun/tests/templates/<family>/`
 **Testing**: Linux CI: tiny random-weight parity per registered architecture on the MLX CPU
-backend, parser suites, probe, locality check, layout arithmetic. macOS (`#[ignore]`,
+backend, parser suites, template check, layout arithmetic. macOS (`#[ignore]`,
 `MRUN_TEST_MODELS`): real-weight parity, cache equality per family, Metal kernels vs ops, bench
 cells
 **Target Platform**: macOS 15+ Apple Silicon; Linux for portable tests
 **Project Type**: Modules of `mrun-engine` (models, state, loader) and `mrun` (chat syntax, hub)
-**Performance Goals**: ≥ 90% of mlx-lm decode and 16K prefill per Tier 1 model (SC-005); sliding
+**Performance Goals**: ≥ 90% of mlx-lm decode and 16K prefill per Tier 1 model (001 SC-002/SC-003); sliding
 layers O(W + L) per chunk
 **Constraints**: Parity with mlx-lm `ba8a08f`; no family logic outside its module and syntax
 (Principle V); no new kernels beyond mlx-lm's own (Mamba2 decode kernel ported verbatim, like GDN)
-**Scale/Scope**: 5 Tier 1 models at 0.1 (5 architectures), 3 after; 6 syntaxes
+**Scale/Scope**: 3 aliases + 1 reference at 0.1 (4 architectures, 3 syntaxes); Devstral in 0.2; 3 after; 6 syntaxes
 
 ## Constitution Check
 
@@ -90,12 +91,14 @@ directories; it creates no parallel structure.
 - **001**: FR-002 and FR-023–FR-025 build the 0.1 families on blocks and the registry (T039–T043a, T045, T046 (+ goldens T010d, parity T027d/e)).
   010's contract adds per-layer K/V widths and `None` layers to 001 FR-025's layer kinds (needed
   for MLA and Gemma's shared-KV layers, post-0.1). Reconciled by T003.
-- **002**: FR-032–FR-035 own the syntax registry, probe and 0.1 syntaxes; 010 adds GLM XML and
-  Gemma under FR-004's rules; 002 FR-032 already holds the ordered set (OQ-7 decided).
+- **002**: FR-032, FR-033, FR-035 own the syntax registry, template check and 0.1 syntaxes; 010
+  adds Mistral (0.2, 002 FR-034 in Later), GLM XML and Gemma under FR-004's rules; one syntax per
+  family (OQ-7 revised).
 - **003**: No change; relies on state kinds through the engine contract. SC-003 adds window cases.
-- **004**: FR-002 owns the 0.1 aliases (`gpt-oss`, `devstral`, …) and FR-014 the pull gate; 010
-  adds post-0.1 aliases; the `tier`, `syntax` and fit fields are in 004's manifest. Reconciled by T003.
-- **005**: One synthetic and one agent cell set per Tier 1 model.
+- **004**: FR-002 owns the 0.1 aliases (`qwen3.6`, `qwen3-coder`, `gpt-oss`) and FR-014 the pull
+  gate; 010 adds post-0.1 aliases (`devstral` first); `syntax` and fit fields are in 004's
+  manifest, `tier` arrives with Tier 2. Reconciled by T003.
+- **005**: One synthetic and one agent cell set per new Tier 1 model.
 - **ARCHITECTURE / D015**: the syntax list gains Gemma when Gemma 4 lands; the model table gets
   measured numbers.
 
@@ -105,5 +108,5 @@ directories; it creates no parallel structure.
 | --- | --- | --- |
 | Per-layer `StateLayout` | MLA (different K/V widths), shared-KV layers (none), windows | Uniform `kv_heads × head_dim` cannot describe GLM or Gemma |
 | Window slice instead of full-depth mask | Keeps sliding layers O(W + L) per chunk with full KV | Full-depth masked SDPA makes half of gpt-oss's layers cost like full attention at depth |
-| Accepted-syntax set + template probe | One architecture ships different syntaxes | A single syntax per family refuses Qwen3-30B-A3B-Instruct-2507 (Hermes) under `qwen3_moe`; substring inference matches comments |
+| Template check of the family's one syntax (ordered sets later, OQ-7) | A template that does not render the expected markers must not load | Substring inference matches comments; ordered sets wait for a model that needs them |
 | Mamba2 decode Metal kernel (mlx-lm's) | Parity and speed for Nemotron-H decode | The ops path (`ssm_attn`) is not what mlx-lm runs at L = 1, so parity would fail |

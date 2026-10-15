@@ -4,23 +4,25 @@
 
 ```text
 mrun bench [--suite agent|synthetic|cancel|all] [--trace NAME]...
-           [--system NAME=URL[,apis=chat+messages+responses][,model=M][,pid=N][,profile=P]]...
-           [--compare] [--reps N] [--out DIR] [--baseline FILE]
+           [--system NAME=URL[,apis=chat+messages+responses][,model=M][,profile=P]]...
+           [--compare] [--reps N] [--out DIR]
 ```
 
 - `--reps` raises, never lowers, the FR-004 minimums.
 - Without `--system`, benchmarks the local mrun server (`http://127.0.0.1:8484`).
-- `--compare` with several `--system` entries runs them one at a time (profile start → health →
-  reset per repetition → stop; or a "Stop X, start Y, press Enter" pause without commands) and
-  writes one combined report. The `cancel` suite runs for mrun only.
-- Exit codes per the [CLI contract](../../004-models-cli/contracts/cli.md#exit-codes): 7 when
-  `--baseline` thresholds fail; 5 only when every system (or the only system) is unreachable. An
-  unreachable competitor under `--compare` yields "not run" cells, not an error exit.
+- `--compare` with several `--system` entries runs them one at a time ("Stop X, start Y, press
+  Enter" pause → health → reset per repetition) and writes one combined report. The `cancel` suite
+  runs for mrun only.
+- Exit codes per the [CLI contract](../../004-models-cli/contracts/cli.md#exit-codes): 5 only when
+  every system (or the only system) is unreachable. An unreachable competitor under `--compare`
+  yields "not run" cells, not an error exit. (`--baseline` and exit 7: Later.)
 
 ## Profile (`bench/profiles/<name>.toml`)
 
-`start`, `stop`, `health` (optional; all or none), `reset` (required), `pid` (optional command),
-`context_length` flags, cache flags, model name, format and quantization.
+`health` (optional), `reset` (required: an HTTP call, or `manual` for a restart pause),
+`context_length` flags, cache flags, model name, format, quantization and KV format. Bundled:
+`mrun`, `llama.cpp`, `ollama`, `omlx`, `mlx-lm`, `splash` (cells `splash-bf16` and `splash`).
+(`start`/`stop`/`pid` commands: Later.)
 
 ## Result schema (v1)
 
@@ -32,6 +34,7 @@ Additive changes keep `schema_version: 1`; removals or meaning changes bump it. 
 
 Sections: Method (in-order replay, reuse measured up to the previous reply, cache resets, equal
 context, repetitions) · Machine · Systems (versions, flags, context length, model name, format,
-bits per weight) · Agent suite (per-turn TTFT table, session totals, peak memory, malformed tool
-calls and early EOS per system) · Synthetic cells · Cancellation (mrun) · Warnings (power,
-throttling, memory not recovered) · Losing cells (always present, possibly "none").
+bits per weight, KV format) · Agent suite (per-turn TTFT table, session totals, malformed tool
+calls and early EOS per system, mrun `template` re-renders) · Synthetic cells · Cancellation
+(mrun) · Warnings (power, thermal state, free memory) · Losing cells (always present, possibly
+"none").

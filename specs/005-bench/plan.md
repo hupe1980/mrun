@@ -9,10 +9,11 @@
 `mrun bench` is an HTTP-only load driver built into the binary. It replays bundled agent traces
 (recorded requests in order, unchanged) and synthetic cells against any system speaking OpenAI Chat
 Completions, Anthropic Messages or OpenAI Responses (mrun, llama.cpp server, Ollama, oMLX, mlx-lm
-server). Profiles start, health-check, reset and stop each system so only one is loaded at a time,
-with equal context length. It measures client-side timings from the streamed bytes, samples
-machine state and per-system memory, and writes a versioned JSON result plus a markdown report. A
-regression mode compares against a baseline.
+server, Splash). The user switches systems at a pause, so only one is loaded at a time; profiles
+health-check and reset each one, with equal context length. It measures client-side timings from
+the streamed bytes, records machine and thermal state, and writes a versioned JSON result plus a
+markdown report. (Automated start/stop, RSS sampling, the thermal slope and regression mode are
+Later, lean cut 2026-10-15.)
 
 ## Technical Context
 
@@ -31,7 +32,7 @@ configured hosts
 driver tests also run on Linux CI against fake servers with a test-only machine-state stub
 **Project Type**: CLI subcommand of the `mrun` binary, plus an `xtask` crate for trace building
 **Performance Goals**: Client-side timing overhead < 1 ms per event; driver memory < 100 MB
-**Constraints**: One system loaded at a time (FR-008); no other hosts contacted (FR-011)
+**Constraints**: One system loaded at a time, switched by hand (FR-008); no other hosts contacted (FR-011)
 **Scale/Scope**: ~10 agent traces (10–30 turns, up to 60K tokens), 4 synthetic sizes × prefill/decode
 
 ## Constitution Check
@@ -40,7 +41,7 @@ driver tests also run on Linux CI against fake servers with a test-only machine-
 | --- | --- | --- |
 | I Agent latency | Per-turn TTFT on in-order trace replay with equal cache resets and context; every cell names model, format and bits per weight | Pass |
 | II Exactness | Malformed-tool-call and early-EOS counts next to speed; greedy conformance stays in 001 `--check` | Pass |
-| III Memory budget | RSS/footprint and swap sampled per system during agent runs | Pass |
+| III Memory budget | Free memory and swap recorded before each system | Pass |
 | IV Local, private | Only open-source-client traces bundled, redacted + secret-scanned; no upload (tested) | Pass |
 | V Own runtime | Talks HTTP only; no engine coupling | Pass |
 | VI Simple, DX | One command; min/median/max for small n; no quality sandbox; hand-written schema | Pass |
@@ -63,18 +64,18 @@ specs/005-bench/
 ```text
 crates/mrun/src/bench/
 ├── mod.rs          # `mrun bench` args, suite selection, orchestration
-├── systems.rs      # profiles: start/stop/health/reset, context length, pid; one system at a time
+├── systems.rs      # profiles: health/reset, context length; manual switch pause; one system at a time
 ├── driver.rs       # request replay over HTTP, SSE timing capture (FR-013)
 ├── suites/
 │   ├── agent.rs  synthetic.rs  cancel.rs
-├── machine.rs      # macOS only: chip, memory, macOS, power, thermal, swap, RSS sampling
-├── stats.rs        # min/median/max, p95 + IQR for n ≥ 20, throttling slope
-└── report.rs       # JSON result + markdown rendering, regression compare
-xtask/src/main.rs   # `cargo xtask bench-trace`: order, group, count tokens, redact, secret scan
+├── machine.rs      # macOS only: chip, memory, macOS, power, thermal state, swap
+├── stats.rs        # min/median/max, p95 + IQR for n ≥ 20
+└── report.rs       # JSON result + markdown rendering
+xtask/src/main.rs   # (crate created by 004 T005) `cargo xtask bench-trace`: order, group, count tokens, redact, secret scan
 bench/
 ├── traces/*.jsonl  # redacted OpenCode/Codex traces
 ├── result.schema.json  # hand-written, versioned
-└── profiles/*.toml # mrun, llama.cpp, ollama, omlx, mlx-lm: commands and flags
+└── profiles/*.toml # mrun, llama.cpp, ollama, omlx, mlx-lm, splash: reset, flags, KV format
 crates/mrun/tests/bench_driver.rs   # fake SSE server tests
 ```
 

@@ -1,6 +1,6 @@
 +++
 title = "API reference"
-description = "mrun's HTTP endpoints: OpenAI Chat Completions, Anthropic Messages, OpenAI Responses, model listing, health, status, metrics and error codes."
+description = "mrun's HTTP endpoints: OpenAI Chat Completions, Anthropic Messages, OpenAI Responses, model listing, health, status and error codes."
 weight = 70
 +++
 
@@ -15,24 +15,23 @@ definitions; this page lists what mrun serves and where it deliberately differs.
 | `POST /v1/messages` | Anthropic Messages: streaming, tools, thinking |
 | `POST /v1/messages/count_tokens` | Anthropic token count; exact, never queued |
 | `POST /v1/responses` | OpenAI Responses, stateless |
-| `GET /v1/models` | The served model with this machine's `context_window` and default `max_output_tokens` |
-| `GET /health` | `{"status":"ok","model":...,"loaded":bool}`; 503 while loading. Under the background service the model loads on the first request, so `loaded` is `false` until then |
-| `GET /metrics` | Prometheus metrics: requests, tokens, cache, memory and queue (no prompt content) |
+| `GET /v1/models` | The served model with this machine's `context_window` (also as `max_model_len`) and default `max_output_tokens` |
+| `GET /health` | `{"status":"ok","model":...,"loaded":bool}`; 503 while loading |
 | `GET /mrun/status` | Everything `mrun ps` shows, as JSON |
 | `POST /mrun/cache/clear` | Clear the prefix cache |
 
 ## Behavior worth knowing
 
 - **Any model name works.** The loaded model serves every request; responses report its real id.
-- **Output limit.** Requests without one get 16,384 tokens; larger values are clamped to the space
-  left after the prompt and reported in `x-mrun-max-tokens`. Only a prompt that leaves no room at
-  all is refused.
+- **Output limit.** Chat Completions requests without one get 16,384 tokens; Responses requests
+  without one may use all the space left after the prompt (Codex never sends a limit). Larger
+  values are clamped to the space left and reported in `x-mrun-max-tokens`. Only a prompt that
+  leaves no room at all is refused.
 - **Stateless Responses.** `previous_response_id` and item references return 400, because nothing
   is stored. Clients resend the conversation, and the prefix cache makes that cheap.
 - **Queueing.** One request runs at a time; others wait up to 600 seconds in a queue of 16. While a
   request waits or its prompt is processed, streams receive keepalives every 10 seconds in each
   API's own form (Anthropic `ping`, Responses `response.in_progress`, Chat SSE comments).
-- **Cache off per request.** Send `x-mrun-cache: off`.
 - **Disconnect cancels.** Closing the connection stops queued or running work at once.
 - **Invalid tool arguments.** When the model emits tool-call arguments that aren't valid JSON, mrun
   reports them in the way each API allows and adds a `tool-args-invalid` warning.
@@ -53,9 +52,13 @@ Response bodies stay standard. Additional information travels beside them:
 
 | | Non-streaming | Streaming |
 | --- | --- | --- |
-| Cache report | `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`, `x-mrun-cache-divergence`, `x-mrun-cache-gap` (hybrid models) | `: mrun {...}` SSE comment before the first event |
+| Cache report | `x-mrun-cache-cached`, `x-mrun-cache-processed`, `x-mrun-cache-cause`, `x-mrun-cache-divergence`, `x-mrun-cache-message` (index and role), `x-mrun-cache-gap` (hybrid models) | `: mrun {...}` SSE comment before the first event |
 | Output limit | `x-mrun-max-tokens` | same comment |
 | Warnings | `x-mrun-warning` (comma-separated) | `: mrun {...}` comment before the final event |
+
+There are three warnings: `tool-args-invalid`, `max-tokens-clamped` and `image-omitted`. Other
+conditions, such as a call to an undeclared tool or a schema the constrained decoder cannot
+compile, are written to the server log (without prompt content).
 
 ## Errors
 
@@ -66,11 +69,10 @@ Response bodies stay standard. Additional information travels beside them:
 | Prompt does not fit | 400 `context_length_exceeded` | 400 `invalid_request_error` ("prompt is too long") |
 | Unsupported input | 400 `invalid_request_error` with `param` | 400 `invalid_request_error` |
 | Host or Origin rejected | 403 | 403 |
-| Missing or wrong API key | 401 | 401 `authentication_error` |
 
 ## Security
 
-mrun binds to `127.0.0.1`. It accepts only loopback `Host` headers and rejects browser requests
-from other origins, which blocks DNS-rebinding and drive-by requests from web pages. Binding to
-another address with `--host` requires an API key (`MRUN_API_KEY` or `--api-key-file`), sent as
-`Authorization: Bearer` or `x-api-key`.
+mrun listens on `127.0.0.1` only. It accepts only loopback `Host` headers and rejects browser
+requests from other origins, which blocks DNS-rebinding and drive-by requests from web pages. No
+API key is needed or checked. Listening on other addresses, with an API key, is planned after the
+first release.

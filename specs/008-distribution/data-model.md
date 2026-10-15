@@ -6,10 +6,9 @@
 | --- | --- |
 | name | `mrun-X.Y.Z-macos-arm64.tar.gz` |
 | contents | `mrun-X.Y.Z/{bin/mrun, bin/mlx.metallib, LICENSE-MIT, LICENSE-APACHE, NOTICE, completions/{mrun.bash, _mrun, mrun.fish}}` |
-| signature | Developer ID Application, hardened runtime, secure timestamp (on `bin/mrun`) |
-| notarization | submission id + status `Accepted` (recorded in release notes footer) |
-| checksums | `SHA256SUMS` (tarball, SBOM) |
-| sbom | `mrun-X.Y.Z.cdx.json` (CycloneDX; Rust graph + MLX + mlx-c components) |
+| signature | ad-hoc (`codesign -s -`) on `bin/mrun`; Developer ID, hardened runtime and notarization Later |
+| checksums | `SHA256SUMS` (tarball) |
+| sbom | Later (`mrun-X.Y.Z.cdx.json`, CycloneDX; Rust graph + MLX + mlx-c components) |
 
 ## Formula (`hupe1980/homebrew-tap/Formula/mrun.rb`)
 
@@ -18,10 +17,10 @@
 | url, sha256, version | release tarball |
 | requirements | `depends_on arch: :arm64`, `depends_on macos: :sequoia` |
 | install | `libexec.install "bin/mrun", "bin/mlx.metallib"`; `bin.write_exec_script libexec/"mrun"`; completions |
-| caveats | service install/restart after upgrade; `brew upgrade mrun`; models live in the HF cache |
-| test | `mrun --version`; `mrun config` |
+| caveats | `brew upgrade mrun`, then restart a running server (`mrun stop`, `mrun serve --detach`); models live in the HF cache |
+| test | `mrun --version` |
 
-## ServiceDefinition (plist)
+## ServiceDefinition (plist): Later (lean cut 2026-10-15)
 
 | Key | Value |
 | --- | --- |
@@ -49,14 +48,14 @@ States (from `launchctl print gui/<uid>/<label>` and the plist): `not-installed`
 Transitions: `idle --request queued/started--> held`; `held --queue empty--> releasing(60 s)`;
 `releasing --new request--> held`; `releasing --timeout--> idle`. Linux: always `idle`.
 
-## ModelLoadState (service mode)
+## ModelLoadState (service mode): Later (lean cut 2026-10-15, D022)
 
 `unloaded → loading → loaded`; `loading → unloaded` on failure (waiting requests fail with the 004
 error). Engine created on the first dequeued request (or at start with `--preload`). Exposed as
 `/health` `loaded`, `/mrun/status` `loaded`, gauge `mrun_model_loaded`. While `unloaded`, capacity
 comes from the cached probe or the 004 fit estimate with `estimated: true`.
 
-## Metric
+## Metric: Later (lean cut 2026-10-15)
 
 `{name, type: counter | gauge | histogram, unit, help, labels: fixed enum sets, buckets?}`; the
 full list is the [metrics contract](contracts/metrics.md).

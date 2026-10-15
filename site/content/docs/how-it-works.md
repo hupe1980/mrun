@@ -58,7 +58,7 @@ token-for-token against them.
 mrun supports an open set of model families built from shared blocks, and each kind of layer is
 cached in the way that keeps reuse exact:
 
-- **Full attention** (Qwen3-Coder, Devstral, Qwen3-8B) keeps state for every token, so a cached
+- **Full attention** (Qwen3-Coder) keeps state for every token, so a cached
   prefix can be cut at any position.
 - **Sliding-window attention** (gpt-oss) only looks at recent tokens, but mrun keeps the full
   state and applies the window as a mask, so any position stays reusable here too.

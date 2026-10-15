@@ -4,7 +4,9 @@
 
 **Created**: 2026-10-15
 
-**Status**: Draft
+**Status**: Draft (revised 2026-10-15, lean 0.1 cut, D025): post-0.1. Devstral Small 2 is 0.2;
+GLM-4.7-Flash, Gemma 4 and Nemotron-H follow. The 0.1 family modules (`qwen3_5_moe`, `qwen3_moe`,
+`gpt_oss`, and `qwen3` as test reference) are delivered by 001 under this spec's design.
 
 **Input**: "mrun supports an open set of model families, not one model. A family is a small module
 that maps `config.json` and weight names onto a shared block library (full GQA, sliding-window
@@ -34,12 +36,13 @@ its module, a syntax entry if new, an alias and tests."
   gate (004 FR-002, FR-014). 010 owns the complete design they implement (family contract,
   per-layer state layout, tiers, porting checklist, locality rule), Tier 2, the Tier 1 gate across
   all families, and the post-0.1 blocks (MLA, Mamba2, Gemma options), families and syntaxes (GLM
-  XML, Gemma).
-- Q: What decides the chat syntax, the family or the template? → A: The family names an ordered
-  set of accepted syntaxes (usually one; the first is the default); the template probe at load
-  picks within that set and a template outside it refuses the load (002 FR-032). The set exists
-  because one architecture ships with different syntaxes (`qwen3_moe`: Hermes in
-  Qwen3-30B-A3B-Instruct-2507, Qwen XML in Qwen3-Coder); see OQ-7.
+  XML, Gemma). *Revised by the lean cut (session below): Devstral and the Mistral syntax move here
+  as 0.2; the cross-family 0.1 gates are deleted in favor of the owning specs' gates.*
+- Q: What decides the chat syntax, the family or the template? → A: *Revised by the lean cut
+  (2026-10-15):* each family names one syntax; load checks the template renders that syntax's
+  markers, else refuses (002 FR-032). Ordered sets (for `qwen3_moe` repos such as
+  Qwen3-30B-A3B-Instruct-2507 that use Hermes) return only when a supported model needs them; see
+  OQ-7.
 - Q: Which quantization formats? → A: MLX affine (4/8-bit, per-path overrides) and MXFP4 (group 32,
   4-bit, uint8 scales, no biases). Unquantized bf16/f16 load. Other modes are refused by name.
   MLX v0.32.4 and mlx-c v0.7.0 support `mode` in `quantized_matmul` and `gather_qmm` (research R6).
@@ -52,11 +55,21 @@ its module, a syntax entry if new, an alias and tests."
 - Q: Gemma 4 uses its own tool syntax (`<|tool_call>call:name{…}<tool_call|>`). Allowed? → A: Yes,
   as a sixth syntax entry when Gemma 4 lands (a family may add one syntax entry).
 
+### Session 2026-10-15 (lean 0.1 cut, D025)
+
+- Q: What is 010's scope now? → A: Post-0.1 only, plus the design the 0.1 modules follow. The 0.1
+  gates live in their owning specs (parity 001 SC-001, goldens 001 SC-009, cache equality 003
+  SC-005/SC-007, speed 001 SC-002/SC-003, client gate 002 SC-001), so 010's duplicates are
+  deleted: SC-001, SC-003, SC-005. Also removed: tier demotion of 0.1 aliases (FR-016), the
+  locality CI check (FR-019, SC-007), the `--info` accuracy gate (SC-008) and ordered syntax sets.
+- Q: Which family comes first after 0.1? → A: Devstral Small 2 (`mistral`, Mistral syntax) in 0.2;
+  its design below is unchanged.
+
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Run the strongest model of any 0.1 family (Priority: P1)
+### User Story 1 - Run the strongest model of any supported family (Priority: P1)
 
-A developer pulls `gpt-oss` or `devstral` (or any 0.1 alias) and runs it exactly like
+A developer pulls `gpt-oss` or, from 0.2, `devstral` (or any alias) and runs it exactly like
 the Qwen models: same commands, same memory budget, same exactness.
 
 **Why this priority**: Strong coding models come from several families; tying mrun to one family
@@ -90,8 +103,8 @@ model's native syntax (Hermes JSON, Qwen XML, Harmony, Mistral).
 1. **Given** gpt-oss-20b, **When** it emits `<|channel|>commentary to=functions.read_file
    <|constrain|>json<|message|>{…}<|call|>`, **Then** clients receive one tool call with those
    arguments; analysis-channel text arrives as reasoning, final-channel text as content.
-2. **Given** Devstral Small 2, **When** it emits `[TOOL_CALLS]read_file[ARGS]{…}` twice, **Then**
-   clients receive two tool calls.
+2. **Given** Devstral Small 2 (0.2), **When** it emits `[TOOL_CALLS]read_file[ARGS]{…}` twice,
+   **Then** clients receive two tool calls.
 3. **Given** any syntax, **When** an argument value contains that syntax's own closing marker,
    **Then** it round-trips unchanged; malformed arguments follow 002 FR-004's raw fallback; values
    are never coerced or evaluated.
@@ -137,9 +150,9 @@ mode, unknown tensor names, a tiny random-weight model of every registered archi
    supported architectures and the Tier 1 aliases.
 2. **Given** a Tier 2 repo, **When** loaded, **Then** it runs and `mrun show` marks it
    `tier 2 (architecture supported, model not validated)`.
-3. **Given** a template whose probe matches none of the family's accepted syntaxes, **When**
-   loaded, **Then** the load is refused naming the family, its accepted syntaxes and the detected
-   one (002 FR-032).
+3. **Given** a template that does not render the family syntax's markers, **When** loaded,
+   **Then** the load is refused naming the family, its syntax and the missing markers (002
+   FR-032).
 
 ---
 
@@ -150,14 +163,12 @@ family module, one syntax entry if new, one alias and tests.
 
 **Why this priority**: Model releases are monthly; the cost of a port decides how fast mrun follows.
 
-**Independent Test**: The family-locality check (contract) on the GLM-4.7-Flash, Gemma 4 and
-Nemotron-H changes.
+**Independent Test**: Review of the Devstral, GLM-4.7-Flash, Gemma 4 and Nemotron-H changes
+against the locality rule (contract; a review rule since the CI check was cut on 2026-10-15).
 
 **Acceptance Scenarios**:
 
-1. **Given** a family change, **When** CI runs, **Then** the locality check lists every touched path
-   outside the allowed set and fails if any exists.
-2. **Given** a family that needs a new block, **When** ported, **Then** the block lands first in
+1. **Given** a family that needs a new block, **When** ported, **Then** the block lands first in
    its own change with a block-level test, and the family change stays local.
 
 ### Edge Cases
@@ -166,7 +177,7 @@ Nemotron-H changes.
   `gemma4_text`): the registry keys on the pair; vision towers and projectors are dropped by the
   family's sanitize; images are 009's concern.
 - Same `model_type`, different syntax (Qwen3-30B-A3B-Instruct-2507 Hermes vs Qwen3-Coder XML):
-  the probe selects within the family's accepted set; `mrun show` prints the choice.
+  refused by the template check until ordered syntax sets return (OQ-7).
 - Mixed quantization in one repo (MXFP4 experts, affine attention; 8-bit routers): per-path
   overrides from `quantization`; a path with no matching mode is refused at load, naming the path.
 - Original (non-MLX) checkpoints, e.g. `openai/gpt-oss-20b` with `_blocks`/`_scales` tensors:
@@ -178,7 +189,7 @@ Nemotron-H changes.
   the server's start date (OQ-4), so the date never changes mid-session.
 - History re-rendering that differs from generated bytes (Harmony drops earlier analysis once a
   final message follows; `<|return|>` renders as `<|end|>`; GLM drops reasoning before the last
-  user turn unless `clear_thinking=false`): reported as 003 cause `template`; mrun passes the
+  user turn unless `clear_thinking=false`): reported as 003 cause `changed` (005 counts them as `template` re-renders); mrun passes the
   template options that preserve reasoning where they exist.
 - Gemma 4 KV-shared layers have no KV of their own: no state, no bytes.
 - An MTP/next-n head in the weights (`mtp.*`, `num_nextn_predict_layers`): ignored, as in 001.
@@ -189,9 +200,10 @@ Nemotron-H changes.
 ### Functional Requirements
 
 Ownership: 001 implements FR-002–FR-008 and FR-010 for the 0.1 block options (via 001
-FR-023–FR-025; uniform per-layer widths suffice at 0.1); FR-001's post-0.1 blocks, FR-005's
-per-layer `StateLayout`, FR-009 and FR-017–FR-019 are 010's. For the 0.1 families 002 (FR-011–FR-015, via 002 FR-032–FR-035) and 004 (FR-016 aliases); 010's
-own work is the post-0.1 parts, Tier 2, the locality check and the cross-family gates.
+FR-023–FR-025; uniform per-layer widths suffice at 0.1); for the 0.1 families 002 implements
+FR-011–FR-015 (via 002 FR-032, FR-033, FR-035) and 004 owns the aliases. 010's own work is
+post-0.1: Devstral (0.2), FR-001's later blocks, FR-005's per-layer `StateLayout`, FR-009,
+FR-017, FR-018 and Tier 2.
 
 **Family mechanism**
 
@@ -206,8 +218,8 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
 - **FR-002**: A family module MUST implement the family contract
   ([contracts/families.md](contracts/families.md)): parse and validate its config (rejecting
   unknown values with named reasons), map and sanitize weights, compose the layer stack from
-  blocks, declare per-layer state layout and kind, and name its ordered set of accepted chat
-  syntaxes (FR-014). Family code
+  blocks, declare per-layer state layout and kind, and name its chat syntax (FR-014). Family
+  code
   MUST NOT leak outside its module (Principle V).
 - **FR-003**: A registry MUST map `(model_type, text_config.model_type?)` to a family module. An
   unregistered pair MUST be refused before reading weights (exit 3) with the supported
@@ -260,16 +272,13 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
 - **FR-013**: Reasoning MUST map to 002's reasoning events per syntax: `<think>…</think>` (Qwen,
   GLM, Nemotron), Harmony `analysis` channel, Mistral `[THINK]…[/THINK]`, Gemma's thought channel.
   Harmony `commentary` text without a recipient is content (preamble).
-- **FR-014**: At load, a template probe MUST render a fixed tool conversation with the model's
-  template and identify the syntax from the rendered markers and the vocabulary's added tokens.
-  A family declares an ordered set of accepted syntaxes; the probe's syntax is used when it is in
-  the set; otherwise the load is refused naming the family, the accepted set and the detected
-  syntax (002 FR-032). A template without tool support passes the probe only for families whose
-  set allows it (none at 0.1). The probe also checks tool placement: a template that renders
-  tools after the first user message (e.g. Mistral Small 3.2 puts `[AVAILABLE_TOOLS]` before the
-  last user message) changes the prefix every turn and defeats caching; such a model loads, and
-  `mrun doctor` and `mrun ps` warn `template-tools-late`. Ministral 3 and Devstral Small 2507
-  templates put tools at the start (llama.cpp `models/templates`).
+- **FR-014**: At load, a template check MUST render a fixed tool conversation with the model's
+  template and require the family syntax's markers in the rendered text and as added tokens; each
+  family names one syntax; a miss refuses the load naming the family, its syntax and the missing
+  markers (002 FR-032). *Moved to Later (0.1 scope cut, 2026-10-15)*: ordered syntax sets (OQ-7)
+  and the tool-placement check (`template-tools-late` in `doctor`/`ps` for templates that render
+  tools after the first user message, e.g. Mistral Small 3.2; Ministral 3 and Devstral Small 2507
+  put tools at the start, llama.cpp `models/templates`).
 - **FR-015**: History rendering MUST pass template options that keep earlier reasoning when the
   template offers them (Qwen3.6 preserve-thinking, GLM `clear_thinking=false`) and MUST map
   reasoning into the field each template reads (`reasoning_content`, Harmony `thinking`, Mistral
@@ -278,19 +287,17 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
 **Tiers and porting**
 
 - **FR-016**: Tier 1 models MUST have a curated alias (004 FR-002 format) with pinned revision,
-  hashes, license, family, syntax and fit numbers. 0.1 aliases (004 FR-002): `qwen3.6`,
-  `qwen3-coder`, `gpt-oss`, `devstral`, `qwen3-8b`. After 0.1: `glm-4.7-flash`, `gemma4`,
-  `nemotron-3-nano` (each when its family passes its gates). A 0.1 alias whose model fails a
-  Tier 1 gate (incl. SC-002, 5 of 5 client runs) ships with `tier: 2` in its manifest, is
-  labelled as Tier 2 by `mrun show` and `mrun ls`, and cannot be the default.
+  hashes, license, family, syntax and fit numbers: `devstral` (0.2), then `glm-4.7-flash`,
+  `gemma4`, `nemotron-3-nano` (each when its family passes its gates). *Removed (0.1 scope cut,
+  2026-10-15)*: the `tier: 2` demotion of a 0.1 alias that misses a gate (004 drops it instead).
 - **FR-017**: Every registered architecture MUST have a tiny random-weight parity test against
   mlx-lm (CPU, Linux CI), covering every block option its config space enables.
 - **FR-018**: A family port MUST complete the porting checklist (tasks): module; syntax entry if
-  new; template goldens; parity; alias with fit numbers; client smoke in Claude Code, Codex and
-  OpenCode; bench cells (005). A family is Tier 1 only when all items pass.
-- **FR-019**: A CI locality check MUST fail a family change that touches paths outside the allowed
-  set ([contracts/families.md](contracts/families.md#locality-rule)); block-library changes are
-  separate changes with their own tests.
+  new; template goldens; parity; alias with fit numbers; the client gate (002 SC-001); bench cells
+  (005). A family is Tier 1 only when all items pass.
+- **FR-019**: *Removed (0.1 scope cut, 2026-10-15)*: the CI locality check. The locality rule
+  ([contracts/families.md](contracts/families.md#locality-rule)) stays a review rule;
+  block-library changes are separate changes with their own tests.
 
 ### Key Entities
 
@@ -306,32 +313,24 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
 
 ### Measurable Outcomes
 
-- **SC-001**: Every Tier 1 model passes greedy parity against mlx-lm at the pinned commit on 100%
-  of its reference set (001 SC-001 definition: ≥ 20 prompts up to 8K tokens, 256 output tokens,
-  same weights and chunk split). For sliding-window families the reference is mlx-lm with a
-  temporal-order full-KV windowed cache substituted for `RotatingKVCache` in the reference process
-  (001 R16); stock mlx-lm's token agreement is recorded (OQ-2); a disagreement is reported in
-  001 research R16 and does not fail SC-001.
-- **SC-002**: For every Tier 1 model, the 004 scripted read-edit-test task completes 5 of 5 runs in
-  each of Claude Code, Codex and OpenCode (pinned versions).
-- **SC-003**: For every Tier 1 model, cache-on equals cache-off bit for bit (token ids and logits)
-  at the same chunk split on ≥ 30 cases (003 SC-005); sliding-window families include divergences
-  at p mod W ∈ {0, 1, W − 1} and p < W, p > 2W; hybrids include restores from each checkpoint kind.
+- **SC-001**: *Removed (0.1 scope cut, 2026-10-15)*: duplicate of 001 SC-001 (parity), which
+  each new family's module extends.
+- **SC-002**: Every new alias meets the client gate (002 SC-001).
+- **SC-003**: *Removed (0.1 scope cut, 2026-10-15)*: duplicate of 003 SC-005/SC-007 (cache
+  equality), which each new family extends.
 - **SC-004**: Each syntax passes 100% of its parser suite: every marker split at every byte
   boundary (text-matched markers) or token boundary (token-id markers), parallel calls where the
   syntax allows them (not Harmony), values containing the syntax's own closing markers, string values
   `"null"`/`"true"` kept as strings, malformed and truncated calls, undeclared tools; and ≥ 10
   template golden fixtures per Tier 1 model render to Hugging Face's text and token ids (001
   SC-009; mistral-common for Devstral, OQ-3).
-- **SC-005**: Decode and 16K prefill speed are ≥ 90% of mlx-lm's on the same weights for every
-  Tier 1 model on the target Mac (001 SC-002/SC-003 extended), measured by 005 cells.
+- **SC-005**: *Removed (0.1 scope cut, 2026-10-15)*: duplicate of 001 SC-002/SC-003 (speed).
 - **SC-006**: 100% of load-refusal fixtures (unknown architecture, unsupported mode, unknown
   tensor, shape mismatch) are refused before weights are read with a message naming the cause and
   the supported list; every registered architecture passes its tiny-model parity test in CI.
-- **SC-007**: Each post-0.1 family change (GLM-4.7-Flash, Gemma 4, Nemotron-H) passes the locality
-  check with zero paths outside the allowed set.
-- **SC-008**: `mrun run --info` state bytes per token and per checkpoint are within 2% of measured
-  MLX allocations for every Tier 1 model; the recorded fit numbers match `mrun ls` on the target.
+- **SC-007**: *Removed (0.1 scope cut, 2026-10-15)*: locality CI check (FR-019).
+- **SC-008**: *Removed (0.1 scope cut, 2026-10-15)*: `--info` within 2% of measured allocations
+  (FR-009 still records measured numbers with each alias).
 
 ## Measure first and open questions
 
@@ -360,8 +359,9 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
   30B-A3B (same `nemotron_h`?); dimensions and Mamba2 state dtype to be read from the pinned config.
 - **OQ-6**: Pins for post-0.1 aliases: mlx-community vs lmstudio-community conversions (GLM,
   Gemma, Nemotron), and gpt-oss `MXFP4-Q8` vs `MXFP4-Q4` (non-expert precision; agent-suite result).
-- **OQ-7** (decided 2026-10-15): a family names an ordered set of accepted syntaxes; the template
-  probe picks the first that matches (002 FR-032 updated).
+- **OQ-7** (decided 2026-10-15, revised by the lean cut the same day): one syntax per family at
+  0.1; ordered accepted sets return when a supported model needs a second syntax for one
+  architecture (e.g. Qwen3-30B-A3B-Instruct-2507, Hermes, under `qwen3_moe`).
 
 ## Assumptions
 
@@ -370,8 +370,9 @@ own work is the post-0.1 parts, Tier 2, the locality check and the cross-family 
 - 002 owns the syntax registry, the probe, the 0.1 parsers, the API mapping of parser events and
   the FR-004 policy; 010 adds the GLM XML and Gemma parsers under the same rules.
 - 003 consumes state kinds only through the engine contract; no cache change per family.
-- 004 owns alias format, pulling and the 0.1 aliases; 010 adds post-0.1 alias entries.
-- 005 owns bench cells; 010 adds one cell set per Tier 1 model.
+- 004 owns alias format, pulling and the 0.1 aliases; 010 adds post-0.1 alias entries
+  (`devstral` first).
+- 005 owns bench cells; 010 adds one cell set per new Tier 1 model.
 - Reference: mlx-lm `ba8a08f` on MLX v0.32.4 (001). Ports follow that commit; newer upstream
   fixes are taken by re-pinning, not by divergence.
 - Vision components (Devstral/Pixtral tower, Gemma 4 vision) are out of scope (009).

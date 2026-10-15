@@ -28,9 +28,9 @@ attention state as recomputing it, up to floating-point rounding in the GPU kern
 ## Which models are supported?
 
 mrun supports an open set of model families. The first release covers Qwen3.6-35B-A3B (the
-expected default, a hybrid mixture-of-experts model), Qwen3-Coder-30B-A3B, gpt-oss-20b, Devstral
-Small 2 24B and Qwen3-8B, in MLX format. GLM-4.7-Flash, Gemma 4 and Nemotron-H follow, then other
-families based on what coding agents actually use; see [Models](@/docs/models.md) and the
+expected default, a hybrid mixture-of-experts model), Qwen3-Coder-30B-A3B and gpt-oss-20b, in MLX
+format. Devstral Small 2 is next, then GLM-4.7-Flash, Gemma 4 and Nemotron-H, then other families
+based on what coding agents actually use; see [Models](@/docs/models.md) and the
 [roadmap](@/docs/roadmap.md).
 
 ## Can I use GGUF files?

@@ -15,8 +15,8 @@
 
 - **Decision**: Use feature 001's identity function (sha256 over sorted (path, file sha256)); in the
   HF cache, LFS blob names are their sha256, so weights need no re-hashing; downloads are verified
-  against the hub's `lfs.oid` as they complete. Fast checks on every use compare (size, mtime,
-  inode) with the recorded values; `mrun verify` re-hashes everything. Path-loaded models get the
+  against the hub's `lfs.oid` as they complete. Fast checks on every use compare (size, mtime)
+  with the recorded values (inode dropped in the lean cut, 2026-10-15); `mrun verify` re-hashes everything. Path-loaded models get the
   same identity (hashed once, cached in `~/.mrun/identity.toml`).
 - **Rationale**: Constitution IV; analysis C2/I7: a size+mtime cache cannot catch every in-place
   edit, so the spec promises full detection only through `verify`.
@@ -39,8 +39,11 @@
   | `qwen3.6` | `mlx-community/Qwen3.6-35B-A3B-4bit` | `qwen3_5_moe` | default candidate; ≈4.5 bits per weight, ≈20 GB; third-party tables report ≈20.7 GB peak [U]; repo verified at pin time |
   | `qwen3-coder` | `mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit` | `qwen3_moe` | 17.2 GB |
   | `gpt-oss` | `mlx-community/gpt-oss-20b-MXFP4-Q8` | `gpt_oss` | repo listed by third parties (created 2025-08-29) [V exists, U contents]: MXFP4 experts, 8-bit elsewhere and `quantization.mode` in `config.json` assumed [U]; sibling `-MXFP4-Q4` exists; ≈12–13 GB [U] |
-  | `devstral` | `mlx-community/Devstral-Small-2-24B-Instruct-2512-4bit` [U: not found by search] | `mistral` | fallback `mlx-community/Devstral-Small-2-24B-Instruct-2512-OptiQ-4bit` (mixed 4/8-bit, `mistral3`) [V exists]; base `mistralai/Devstral-Small-2-24B-Instruct-2512` (Apache-2.0; context 256K vs 128K reported inconsistently [U]); must ship `tokenizer.json` and a Jinja template (001 R17) [U]; ≈14 GB |
-  | `qwen3-8b` | `mlx-community/Qwen3-8B-4bit` | `qwen3` | 4.6 GB, correctness reference |
+  | `devstral` (0.2, spec 010) | `mlx-community/Devstral-Small-2-24B-Instruct-2512-4bit` [U: not found by search] | `mistral` | fallback `mlx-community/Devstral-Small-2-24B-Instruct-2512-OptiQ-4bit` (mixed 4/8-bit, `mistral3`) [V exists]; base `mistralai/Devstral-Small-2-24B-Instruct-2512` (Apache-2.0; context 256K vs 128K reported inconsistently [U]); must ship `tokenizer.json` and a Jinja template (001 R17) [U]; ≈14 GB |
+
+  Lean cut (2026-10-15, D025): 0.1 ships `qwen3.6`, `qwen3-coder` and `gpt-oss`. Qwen3-8B
+  (`mlx-community/Qwen3-8B-4bit`, 4.6 GB) stays the internal correctness reference without an
+  alias.
 
   The hub API was unreachable from the research environment (2026-10-15), so `[U]` rows are
   resolved when `cargo xtask refresh-aliases` pins them (004 T005).
@@ -55,8 +58,15 @@
 ## R5: Client integration (`launch` and `connect`)
 
 - **Decision**: `mrun launch <client>` (primary, Ollama-style) execs the client with process-scoped
-  environment and flags; `mrun connect` prints/writes persistent config with diff, 0600 backup and
-  `--undo`. Values come from the running server (`/v1/models` context window, served model id).
+  environment and flags; `mrun connect` prints the persistent config (writing it with diff, backup
+  and `--undo` is Later, lean cut 2026-10-15). Values come from the running server (`/v1/models`
+  context window, served model id).
+  - Delta 2026-10-15: Claude Code 2.1.299 compacts a 200K+ conversation idle ≈ 54 min; mrun's cache
+    never expires, so `launch` sets `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` above capacity (an env
+    var; the other control is `"idleCompaction": false` in settings.json). Codex custom providers
+    send a hosted `web_search` tool by default; `launch` passes `-c web_search="disabled"`.
+    OpenCode (2026-10-13) continues by itself after `finish=length`, up to twice, by appending a
+    user message, which keeps the prefix cache-friendly.
   - Claude Code (minimum 2.1.273, re-verified 2026-10-15 against code.claude.com env-vars,
     model-config and llm-gateway-protocol docs and Ollama `cmd/launch/claude.go:67-87`):
     `ANTHROPIC_BASE_URL=http://127.0.0.1:8484`; `ANTHROPIC_AUTH_TOKEN` (env reference when keyed,
@@ -95,17 +105,19 @@
 
 ## R6: Doctor checks
 
-- **Decision**: Registry of checks, each `fn check(&Ctx) -> Finding { id, status, severity, fix }`:
-  chip/macOS, memory budget and pressure, low-power mode, model integrity (fast checks), server
-  reachability, port conflicts, HF cache free space, client config pitfalls (wrong base URL or wire
-  API, missing context limits, Claude Code < 2.1.273, a shell `ANTHROPIC_API_KEY`). `--agent <client>`
-  runs a scripted tool-call round trip and a request at 95% of capacity (admitted, output clamped). Each check is
-  unit-tested with a fake context. Exit code 8 when any check fails.
+- **Decision** (lean cut 2026-10-15): Registry of checks, each `fn check(&Ctx) -> Finding { id,
+  status, severity, fix }`: chip/macOS with memory budget and pressure, low-power mode, port
+  conflicts, server reachability, client pitfalls (Claude Code < 2.1.273, a shell
+  `ANTHROPIC_API_KEY`, missing client binaries). Each check is unit-tested with a fake context. Exit
+  code 8 when any check fails. Later: model integrity, HF cache free space, client config files,
+  `template-tools-late`, and `--agent <client>` (a tool-call round trip and a request at 95% of
+  capacity).
 
 ## R7: Config
 
-- **Decision**: Layered: defaults < `~/.mrun/config.toml` < `MRUN_*` env < flags; `mrun config`
-  prints each effective value with its source. Unknown keys are errors with a "did you mean".
+- **Decision** (lean cut 2026-10-15): defaults < `MRUN_*` env < flags, no config file in 0.1
+  (bench and launch read the running server, not a file). Later: `~/.mrun/config.toml` and
+  `mrun config` printing each effective value with its source.
 - **Alternatives**: Multiple config locations (confusing), YAML (no benefit).
 
 ## R8: Error catalog

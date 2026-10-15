@@ -1,27 +1,24 @@
 # Quickstart: Model Families
 
+Post-0.1 (lean cut 2026-10-15). The 0.1 families are validated by the 001–005 quickstarts.
+
 ## Automated
 
 ```sh
 cargo test -p mrun-engine --test families          # tiny-model parity, every registered architecture (MLX CPU, any OS)
-cargo test -p mrun --test syntax --test probe       # parser suites, probe, template goldens (any OS)
-scripts/check_family_diff.sh origin/main            # locality rule on a family change
-MRUN_TEST_MODELS=gpt-oss,devstral cargo test -p mrun-engine --test conformance -- --ignored   # macOS
-MRUN_TEST_MODELS=gpt-oss cargo test -p mrun-engine --test prefix_equality -- --ignored              # macOS, window cases
+cargo test -p mrun --test syntax                    # parser suites, template check, template goldens (any OS)
+MRUN_TEST_MODELS=devstral cargo test -p mrun-engine --test conformance -- --ignored        # macOS, 0.2
+MRUN_TEST_MODELS=devstral cargo test -p mrun --features mlx --test prefix_equality -- --ignored
 ```
 
 ## Manual (target Mac)
 
-1. `mrun pull gpt-oss && mrun run gpt-oss --info`: family `gpt_oss`, syntax `harmony`,
-   quantization `mxfp4 (experts) + affine`, positional state 48 KiB/token (12 windowed layers),
-   capacity 131,072 (max position).
-2. `mrun run gpt-oss --check` and `mrun run devstral --check`: no mismatch.
-3. `mrun launch claude-code --model gpt-oss`; ask for a file edit: tool calls arrive, analysis
-   text shows as thinking. Repeat with `codex` and `opencode`, then with `devstral`.
-4. Continue a gpt-oss session past 5K tokens, edit a message near position 130: `mrun ps` shows
-   cause `edit` and a divergence at that message; the output equals a `x-mrun-cache: off` rerun.
+1. `mrun pull devstral && mrun run devstral --info`: family `mistral`, syntax `mistral`,
+   positional state ≈160 KiB/token, capacity ≈78K on 48 GB.
+2. `mrun run devstral --check`: no mismatch.
+3. `mrun launch claude-code --model devstral`; ask for a file edit: `[TOOL_CALLS]` calls arrive as
+   tool calls. Repeat with `codex` and `opencode` (002 SC-001).
+4. Edit a message in a Devstral session: `mrun ps` shows cause `changed` and the message index;
+   the output equals a `mrun serve --no-cache` rerun.
 5. `mrun run some-org/unknown-arch-mlx`: exit 3, supported architectures and aliases listed.
-6. `mrun run mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit` (Tier 2, `qwen3_moe`): `mrun show`
-   prints `tier 2` and syntax `hermes` chosen by the probe.
-7. `mrun bench --suite synthetic --model gpt-oss` and `--model devstral`: cells
-   recorded (SC-005).
+6. With Tier 2: `mrun run <repo of a registered architecture>`: `mrun show` prints `tier 2`.

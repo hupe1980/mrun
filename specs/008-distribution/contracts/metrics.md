@@ -1,5 +1,8 @@
 # Contract: `GET /metrics`
 
+**Status**: Later. Removed from 0.1 by the lean cut (2026-10-15, D025; spec FR-010). Kept as the
+design for the release that adds `/metrics`.
+
 Prometheus text exposition format 0.0.4 (`Content-Type: text/plain; version=0.0.4`). Same bind,
 Host/Origin and API-key rules as every endpoint (002). Label values come only from the fixed sets
 below; no prompt, session, header or path data appears. Names are stable within a minor release;

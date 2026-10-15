@@ -8,13 +8,15 @@ weight = 10
 
 - A Mac with Apple Silicon (M1 or later) and macOS 15 or newer.
 - Memory: 48 GB or more for the expected default model, Qwen3.6-35B-A3B, with its full context. A 36 GB Mac
-  gets far less context; smaller Macs use Qwen3-8B. `mrun pull` tells you how much context a model
-  gets on your Mac before downloading (see [Memory](@/docs/memory.md)).
+  gets far less context; on smaller Macs, gpt-oss-20b (≈13 GB) is the first-release model that fits.
+  `mrun pull` tells you how much context a model gets on your Mac before downloading (see
+  [Memory](@/docs/memory.md)).
 - About 20 GB of free disk space for the default model.
 
 ## Install
 
-Until the first release, build from source with the Rust toolchain pinned in the repository:
+Once released, mrun installs with Homebrew (`brew install hupe1980/tap/mrun`). Until then, build
+from source with the Rust toolchain pinned in the repository:
 
 ```sh
 git clone https://github.com/hupe1980/mrun
@@ -60,8 +62,8 @@ mrun launch claude-code    # or: codex, opencode
 
 `launch` starts the client already pointed at mrun, for that process only; your global client
 settings stay untouched. It also offers to start the server and download the model if needed, so
-on a fresh install this one command is enough. To configure a client permanently, use `mrun connect` (see
-[Clients](@/docs/clients.md)).
+on a fresh install this one command is enough. To configure a client permanently, `mrun connect`
+prints the settings to paste (see [Clients](@/docs/clients.md)).
 
 ## When something is off
 
@@ -69,5 +71,5 @@ on a fresh install this one command is enough. To configure a client permanently
 mrun doctor
 ```
 
-`doctor` checks the machine, the model, the server and each installed client, and prints a fix for
-every failure.
+`doctor` checks the chip and memory budget, Low Power Mode, the port, the server and each
+installed client, and prints a fix for every failure.

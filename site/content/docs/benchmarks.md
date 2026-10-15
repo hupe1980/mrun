@@ -1,6 +1,6 @@
 +++
 title = "Benchmarks"
-description = "How mrun measures local inference for coding agents: replayed agent sessions, time to first token per turn, and fair, dated comparisons with llama.cpp, Ollama, oMLX, mlx-lm and SGLang."
+description = "How mrun measures local inference for coding agents: replayed agent sessions, time to first token per turn, and fair, dated comparisons with llama.cpp, Ollama, oMLX, mlx-lm and Inco Splash."
 weight = 100
 +++
 
@@ -14,11 +14,11 @@ No results are published yet. The first dated comparison is a release goal.
 
 | Suite | Measures |
 | --- | --- |
-| `agent` | Replays bundled OpenCode and Codex sessions turn by turn (your own Claude Code sessions can be recorded and replayed locally): time to first token per turn, session time, malformed tool calls |
+| `agent` | Replays bundled OpenCode and Codex sessions turn by turn (your own Claude Code sessions can be recorded and replayed locally): time to first token per turn, session time, malformed tool calls, and for mrun the miss causes, including how often the chat template re-rendered history |
 | `synthetic` | Prefill and decode speed at 1K, 8K, 32K and the largest context every compared server supports |
 | `cancel` | mrun only: time from disconnect until the next request starts |
 
-Memory and swap are sampled for every server during agent runs.
+Free memory, swap, power and thermal state are recorded for every server.
 
 ## Method
 
@@ -33,10 +33,14 @@ Memory and swap are sampled for every server during agent runs.
 - **Equal context.** Every server gets the same context length. A turn whose reported prompt size
   differs from the recording by more than 2% fails as truncated input, so silent truncation can't
   look fast.
-- **One server at a time.** Servers are started, measured and stopped in turn, so none competes for
-  memory.
-- **Weights recorded.** Model file, format and bits per weight are recorded for every server;
-  different quantizations are labeled as such.
+- **One server at a time.** `mrun bench` pauses and asks you to stop one server and start the next,
+  so none competes for memory.
+- **Weights recorded.** Model file, format, bits per weight and attention-state format are recorded
+  for every server; different quantizations and lossy state formats are labeled as such.
+- **Competitors.** llama.cpp, Ollama, oMLX, mlx-lm and Inco Splash, each at its latest stable
+  release with its prompt cache on. Splash keeps its attention state in 8 bits by default; it runs
+  once with full-precision (bf16) state, the setting comparable to mrun, and once with its default,
+  labeled as lossy.
 - **Losing cells are always reported.** A report without them is not a valid result.
 
 ## Running it
@@ -49,10 +53,9 @@ mrun bench --suite all --compare \
   --system ollama=http://127.0.0.1:11434,apis=chat,profile=ollama
 ```
 
-Profiles contain the commands that start, stop and reset each server; without them `mrun bench`
+Profiles contain each server's flags, context length and how to reset its cache; `mrun bench`
 pauses and asks you to switch servers. Results are written as JSON (versioned schema) and a
-Markdown report. `--baseline <file>` turns a
-run into a regression check that exits with code 7 when thresholds fail.
+Markdown report.
 
 ## Your own traces
 

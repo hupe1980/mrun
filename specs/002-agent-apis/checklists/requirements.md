@@ -35,3 +35,6 @@
 - Validation pass 2 (2026-10-15, third audit): FR-023 removed (ID kept, marked removed); FR-030 added;
   one [NEEDS CLARIFICATION] added to FR-029. Spec still names wire fields and client env vars where
   they are the requirement (API compatibility is the product).
+- Validation pass 3 (2026-10-15, lean 0.1 cut): FR-026 removed, FR-034 and FR-012 second part moved
+  to Later, FR-036 (decode hook) added; SC-001 is the single client gate; SC-002/SC-007 name their
+  coverage instead of counting cases.

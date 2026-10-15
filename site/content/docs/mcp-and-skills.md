@@ -20,9 +20,9 @@ keep it fast.
 Tool schemas are expensive: a few MCP servers can add tens of thousands of tokens to every
 prompt. The chat templates of the first-release models put tool definitions near the start of the
 prompt, so the first request after a server connects or changes its tools is processed from the
-start (the miss report says `system`); after that, turns are cached as usual. Some templates (for
-example Mistral Small 3.2) place tools before the last user message instead, which defeats caching
-on every turn; `mrun doctor` and `mrun ps` warn about such models.
+start (the miss report says `changed` at message 0); after that, turns are cached as usual. Some
+other models' templates (for example Mistral Small 3.2) place tools before the last user message
+instead, which defeats caching on every turn; none of the first-release models does.
 
 ## Deferred tool loading
 

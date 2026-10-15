@@ -26,20 +26,21 @@ mrun doctor                # diagnose the machine and client setup
 
 - **Three agent APIs.** Anthropic Messages, OpenAI Chat Completions and OpenAI Responses, with
   streaming, tool calls, structured output, MCP tools and deferred tool loading.
-- **Open set of model families.** Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, gpt-oss-20b, Devstral
-  Small 2 and Qwen3-8B in the first release, built from shared blocks with a registry of tool-call
-  formats; GLM-4.7-Flash, Gemma 4 and Nemotron-H follow.
+- **Open set of model families.** Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B and gpt-oss-20b in the
+  first release, built from shared blocks with a registry of tool-call formats; Devstral Small 2
+  comes next, then GLM-4.7-Flash, Gemma 4 and Nemotron-H.
 - **Exact prefix cache.** Reuses the longest identical token prefix across turns and subagents,
-  for attention, sliding-window and hybrid models, and reports cached tokens and the reason for each miss.
+  for attention, sliding-window and hybrid models, and reports cached tokens, the reason for each
+  miss and the message where the prompt changed.
 - **Predictable memory.** Weights, attention state and scratch are budgeted at startup; requests
   that cannot fit are refused up front.
 - **Interruption that keeps progress.** Cancellation is checked after every model layer; finished
   work is kept for the retry.
 - **Apple MLX from Rust.** One native binary; no Python at runtime.
-- **Private by default.** Loopback only, no telemetry, no prompt logging, offline after `pull`.
+- **Private.** Loopback only, no telemetry, no prompt logging, offline after `pull`.
 
-Target hardware is an Apple Silicon Mac. The default model is chosen by benchmark among the
-first-release families; the expected default, Qwen3.6-35B-A3B, gets its full 262K context with
+Target hardware is an Apple Silicon Mac. The first release installs with Homebrew. The default
+model is chosen by benchmark among the first-release models; the expected default, Qwen3.6-35B-A3B, gets its full 262K context with
 48 GB of memory. Linux builds compile and pass the portable tests in CI.
 
 ## Development

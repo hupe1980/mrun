@@ -24,7 +24,7 @@ memory pressure is read at every per-layer check point and acted on at the next 
 **Primary Dependencies**: none new; 001 `Engine` primitives, 002 renderer marks and metadata;
 macOS `dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE)` via a small FFI shim
 **Storage**: In memory only (FR-013)
-**Testing**: proptest for tree invariants; mutation suite (≥ 100 cases) on `ScriptedEngine` with
+**Testing**: proptest for tree invariants; mutation suite (research R-mutations) on `ScriptedEngine` with
 positional-only, sliding-window and position-bound profiles and buffer/peak tracking; macOS equality and timing tests on real
 weights
 **Target Platform**: macOS (Metal); tree, policy and suites run on Linux
@@ -36,7 +36,7 @@ trip ≈ 0.15–0.2 s); pressure response < 1 s
 no hash-only matches; equality tests at a fixed chunk split
 **Scale/Scope**: Qwen3-Coder ≈ 105K tokens of attention state (96 KiB/token); Qwen3.6 ≈ 8 GiB for
 attention (≈ 20 KiB/token) plus checkpoints of ≈ 61 MiB each (8 per path ≈ 0.5 GiB); gpt-oss-20b
-48 KiB/token, Devstral Small 2 160 KiB/token, no checkpoints (001 data model)
+48 KiB/token, no checkpoints (001 data model)
 
 ## Constitution Check
 
@@ -45,7 +45,7 @@ attention (≈ 20 KiB/token) plus checkpoints of ≈ 61 MiB each (8 per path ≈
 | I Agent latency | SC-001 (10×), SC-002 (subagent round trip keeps the parent), measured with `mrun bench` | Pass |
 | II Exactness | Token-walk matching under the full cache key; checkpoints exact; SC-005 bit equality at a fixed split; no prompt rewriting here | Pass |
 | III Memory budget | Static admission (001); lazy eviction before every growth; one copy per token; peak ≤ one layer (SC-004); pressure sheds branches first | Pass |
-| IV Local, private | In memory only; excerpts only with `--debug-cache` on loopback, terminal only; side channel documented | Pass |
+| IV Local, private | In memory only; reports carry positions and roles, never text; side channel documented | Pass |
 | V Own runtime | Pure Rust tree; MLX only through `Engine` | Pass |
 | VI Simple | Plain LRU, one opt-out header, three controls, no tuning knobs | Pass |
 
@@ -70,14 +70,14 @@ crates/mrun/src/cache/
 ├── tree.rs       # radix tree, live path, segment views, buffers, merge on commit
 ├── switch.rs     # plan + prepare: move out/in, split back, checkpoint restore
 ├── chunks.rs     # prefill plan (R4), checkpoint placement and the 8-per-path cap (R3)
-├── evict.rs      # LRU units, soft pins, pressure levels
-└── miss.rs       # MissReport and cause classification
+├── evict.rs      # LRU units, pressure levels
+└── miss.rs       # MissReport: five causes, divergence, message index and role, gap
 crates/mrun/src/runtime/pressure.rs   # macOS memory-pressure source; injectable no-op on Linux
 crates/mrun/tests/
 ├── prefix_tree_props.rs
-├── prefix_mutations.rs               # ≥ 100 cases, positional, sliding-window, position-bound profiles
-└── prefix_branches.rs                # SC-002 round trips at Qwen3-Coder capacity
-crates/mrun-engine/tests/prefix_equality.rs   # macOS: SC-005
+├── prefix_mutations.rs               # research R-mutations coverage, three profiles
+├── prefix_branches.rs                # SC-002 round trips at Qwen3-Coder capacity
+└── prefix_equality.rs                # macOS, feature `mlx`: SC-005 (uses PrefixStore, so it lives in `mrun`)
 ```
 
 **Structure Decision**: Tree and policy live in `mrun` (testable anywhere); state bytes stay in

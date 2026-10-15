@@ -46,9 +46,9 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine th
   and `generation_start` (the start of the generation header, where the next turn's re-rendered
   reply diverges). A moved-out tail's end state stays inside its 001 segment and is restored by
   `append`; it is not a checkpoint id and does not count toward the cap. At most 8 per
-  root-to-leaf path; the first, the two deepest and the newest checkpoint at a user (non-tool)
-  message start are kept, and among the rest the one nearest the path's midpoint is dropped first
-  (a long tool loop thus cannot push out the resume point of the next user turn). Resume restores
+  root-to-leaf path; when a ninth is captured, the shallowest checkpoint other than the first is
+  dropped (lean cut 2026-10-15; it replaces a keep-first/two-deepest/newest-user/midpoint rule:
+  the deepest checkpoints, which a new user turn and a retry need, survive either way). Resume restores
   the deepest checkpoint ≤ match and re-prefills the gap; attention KV for the gap is trimmed and
   recomputed (bit-identical with the same chunk split). Per prefill call at most 3 are planned
   (001 `MAX_PLAN_CHECKPOINTS`); stored ones beyond the live + 3 are evictable cache.
@@ -78,8 +78,8 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine th
   `allocated()` after the switch, plus planned checkpoints (the one-layer move transient lies in
   001's scratch envelope); (4) switch with the matched nodes pinned; unpin; (5) on
   `Err(NeedsMemory{bytes})` from any engine call the worker calls `evict(bytes)` and retries the
-  call. Queued requests' matched branches are soft-pinned (evicted last); the worker applies
-  pending soft pins between requests and at each prefill yield.
+  call. (Soft pins for queued requests' matched branches: removed in the lean cut, 2026-10-15;
+  a queued request reuses whatever LRU leaves.)
 - **Rationale**: Static admission bounds the request; lazy allocation lets branches use capacity
   reserved for output until the output needs it. Since only the live path's state is unevictable and
   it fits by admission, growth-time eviction cannot fail (Constitution III).
@@ -88,8 +88,7 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine th
 
 - **Decision**: LRU over eviction units. A unit is a branch leaf plus its chain of single-child
   ancestors that are views of the same buffer; its bytes are the buffers it alone references. Units
-  freeing nothing are skipped. Order: plain branch units, soft-pinned units, then live-path
-  checkpoints (R3 drop order). Evicting increments the fork node's evicted counter (keyed by the
+  freeing nothing are skipped. Order: branch units, then live-path checkpoints (R3 drop order). Evicting increments the fork node's evicted counter (keyed by the
   unit's first token, with the reason) and calls MLX `clear_cache`.
 - **Rationale**: "When Fancy Eviction Fails" (2609.28870) and "Where Should the KV Cache Live?"
   (2609.16215) find LRU at the offline optimum for single long sessions (D017).
@@ -110,19 +109,31 @@ Sources: [ARCHITECTURE](../../concepts/ARCHITECTURE.md) (Prefix cache; Engine th
 
 ## R8: Miss classification
 
-- **Decision**: Nodes record message marks `{start, content_hash}` from 002's renderer; content hash
-  covers role, visible text and tool calls (name, arguments as a canonical JSON value) and excludes
-  reasoning. Precedence: `disabled` > `model` > divergence causes > `checkpoint` > none. For a
-  divergence at d against the closest stored path: `evicted` / `capacity` if the request continues
-  into a removed child (evicted counter: LRU, clear or tiny-tail discard → `evicted`; memory
-  pressure → `capacity`); `template` if every message up to the one containing d has an equal
-  content hash; `system` if the divergence lies inside the stored path's system+tools region;
-  `edit` if at least one conversation message matched before it (a message changed, removed or
-  replaced, including an edited last turn); otherwise `new`. `checkpoint` when there is no divergence cause but resume < match.
+- **Decision** (lean cut, 2026-10-15): five causes. Nodes record message marks `{start, role}`
+  from 002's renderer. Precedence: `disabled` > `model` > `evicted` > `changed` > `new`; none on a
+  full hit. For a divergence at d against the closest stored path: `evicted` if the request
+  continues into a removed child (LRU, `cache clear`, tiny-tail discard or memory pressure);
+  `changed` if d lies inside the stored path's system+tools region or at least one conversation
+  message matched before it (a system prompt, tool list or message changed, removed, replaced or
+  re-rendered); otherwise `new`. Every report carries d, the index and role of the message
+  containing d, and `gap = match − resume` (> 0 only with position-bound state). Earlier design:
+  nine causes with content hashes to separate `template` from `edit`; 005 now makes that call
+  from the request bodies (`template` diagnostic), so the server needs no hashes.
 - **Rationale**: "Don't Break the Cache" (2601.06007) and oMLX's divergence stats show positions
-  alone do not tell users what to fix. Content hashes catch the common template case (Qwen3-Coder
-  and Qwen3.6 re-serialize tool arguments, 002 FR-004). The Claude Code attribution nonce is fixed
-  in 002 (D021).
+  alone do not tell users what to fix; the message index and role do (a changed tool list shows
+  index 0, `system`; a re-rendered reply shows the previous assistant message). The Claude Code
+  attribution nonce is fixed in 002 (D021).
+
+### R-mutations: mutation suite coverage (SC-003)
+
+Per profile (positional-only, sliding-window, position-bound): append; full hit (`P − 1`); system
+prompt edit; tool list edit; earlier message edit; last message edit; re-rendered previous reply
+(`changed` at that message); rewind; interleaved branches (A, B, A); tiny tail (< 256, then
+`evicted`); cancel then retry (whole chunks kept); LRU eviction; `cache clear`; pressure eviction;
+model or template change (`model`, old tree discarded); `--no-cache` (`disabled`); checkpoint cap
+(ninth capture drops the shallowest but the first); resume below the match (`gap > 0`); no file
+written (FR-013). Each case asserts no stale reuse, the cause, the divergence and its message
+index and role.
 
 ## R9: Exactness oracle
 

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `003-prefix-cache`
 
-**Created**: 2026-10-14 · **Revised**: 2026-10-15 (design sprint 3: live path plus moved branches; open model architecture, D015)
+**Created**: 2026-10-14 · **Revised**: 2026-10-15 (design sprint 3: live path plus moved branches; open model architecture, D015; lean 0.1 cut, D025)
 
 **Status**: Draft
 
@@ -19,8 +19,8 @@ tokens, the divergence position and a miss cause."
 
 - Q: How much memory may the cache use? → A: All attention-state capacity not occupied by the
   active request; there is no separate cache budget to tune.
-- Q: Do miss reports include prompt text? → A: Positions, counts and cause only. Excerpts only with
-  `--debug-cache` (loopback only), printed on the server terminal, never on disk or in responses.
+- Q: Do miss reports include prompt text? → A: No: positions, counts, message index and role, and
+  cause only. (`--debug-cache` excerpts: removed, 0.1 scope cut, 2026-10-15.)
 - Q: How do concurrent subagents share? → A: Requests are serialized (002 queue); a queued request
   reuses whatever the requests ahead of it leave behind.
 
@@ -34,7 +34,8 @@ tokens, the divergence position and a miss cause."
   positions; at most 8 per conversation.
 - Q: Eviction policy? → A: Plain LRU over branch leaves (two 2026 studies: LRU near-optimal for
   single long sessions); no priority tiers.
-- Q: Per-request opt-out? → A: Header `x-mrun-cache: off` only; no request-body field.
+- Q: Per-request opt-out? → A: None in 0.1 (the `x-mrun-cache: off` header was removed on
+  2026-10-15); `--no-cache` disables the cache for the server.
 - Q: Disk persistence? → A: Not in this feature; opt-in SSD tier is spec 007.
 
 ### Session 2026-10-15 (open model architecture, D015)
@@ -44,6 +45,15 @@ tokens, the divergence position and a miss cause."
   layers, which keep full KV and apply the window when attending (001 FR-024); trims and moves are
   exact at any position there. Checkpoint planning applies only to families with position-bound
   state; the cache sees state kinds and byte costs from `ModelInfo`, never family names.
+
+### Session 2026-10-15 (lean 0.1 cut, D025)
+
+- Q: Which miss causes? → A: Five: `new`, `changed`, `evicted`, `model`, `disabled`, plus the
+  divergence position, the message index and role it falls in, and the checkpoint gap. Old
+  `system` and `edit` merge into `changed`; `capacity` into `evicted`; `checkpoint` is `gap > 0`;
+  `template` becomes a bench-side diagnostic (005), which has the request bodies to compare.
+- Q: Checkpoint cap? → A: At most 8 per path; drop the shallowest checkpoint other than the first.
+- Removed: soft pins for queued requests, `--debug-cache`, `x-mrun-cache`, content hashes.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -65,8 +75,8 @@ compare time to first token and processed counts.
    last prompt token is processed (attention models) and usage reports `P − 1` cached.
 3. **Given** a request cancelled during prefill, **When** it is retried, **Then** every whole chunk
    committed before the cancel is reused.
-4. **Given** the cache is off for a request, **When** it runs with the same chunk split as a cached
-   run, **Then** token ids and logits are identical.
+4. **Given** `--no-cache`, **When** a request runs with the same chunk split as a cached run,
+   **Then** token ids and logits are identical.
 
 ---
 
@@ -116,9 +126,8 @@ and that outputs equal cache-off runs with the same chunk split.
    the generation header).
 2. **Given** a divergence at position d, **When** the request resumes, **Then** it restores the
    deepest checkpoint ≤ d, re-prefills the gap and reports it.
-3. **Given** a conversation with 8 checkpoints, **When** another is captured, **Then** the first,
-   the two deepest and the newest checkpoint at a user (non-tool) message start are kept, and the
-   one nearest the path's midpoint among the rest is dropped.
+3. **Given** a path with 8 checkpoints, **When** another is captured, **Then** the shallowest
+   checkpoint other than the first is dropped.
 4. **Given** a gpt-oss conversation (sliding-window layers, no position-bound state), **When** a
    request diverges or a branch is moved out and back at any position, inside or beyond the last
    window, **Then** it resumes exactly at the match, no checkpoint is planned or restored, and the
@@ -139,11 +148,11 @@ the injected cause and position.
 **Acceptance Scenarios**:
 
 1. **Given** any request, **When** it completes, **Then** 002's mrun metadata and `/mrun/status`
-   carry cached, processed, divergence position, checkpoint gap and cause.
+   carry cached, processed, divergence position, message index and role, checkpoint gap and cause.
 2. **Given** a previous reply whose API content is resent unchanged but renders to different tokens,
-   **When** the next turn arrives, **Then** the cause is `template` at the reply's position.
-3. **Given** `--debug-cache` is off (default), **When** a miss occurs, **Then** no prompt text
-   appears anywhere.
+   **When** the next turn arrives, **Then** the cause is `changed` with the reply's message index
+   and role (005 labels it a template re-render).
+3. **Given** any miss, **When** it is reported, **Then** no prompt text appears anywhere.
 
 ---
 
@@ -171,7 +180,6 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 
 - Prompt does not fit capacity: rejected by admission (001) before the cache changes anything.
 - Identical requests queued back to back: the second reuses the first's committed state.
-- A queued request's matched branch is evicted last (soft pin) but stays evictable.
 - Retry of an identical request: the output may retrace a stored branch; the overlap is merged at
   commit so the tree keeps one copy.
 - Divergence leaves a tail under 256 tokens: discarded; a later request that needs it reports
@@ -179,10 +187,8 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 - Divergence inside a stored branch: the whole buffer is moved in and the unmatched part is split
   out again, so nothing is held twice.
 - Cancel during a move: the move finishes (bounded by one memory pass), then the cancel applies.
-- Position-bound state with no checkpoint at or below the match: resume from 0, cause
-  `checkpoint`, gap = match.
-- `x-mrun-cache: off` while a main conversation is live: the main state is moved out and kept; the
-  uncached request's own state is discarded afterwards.
+- Position-bound state with no checkpoint at or below the match: resume from 0, gap = match (no
+  cause of its own).
 - `mrun cache clear` during a request: the request is unaffected; branches go now, the live path
   is reset once idle.
 - Template file changed and the model reloaded: new cache key; old state discarded; cause `model`.
@@ -207,9 +213,8 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   system+tools, the start of the last user or tool message, and `generation_start` (the start of
   the generation header). A moved-out tail's end state stays inside its 001 segment and is
   restored by `append`; it is not a checkpoint and does not count toward the cap. At most 8
-  checkpoints per conversation (root-to-leaf path): the first, the two deepest and the newest
-  checkpoint at a user (non-tool) message start are kept; among the rest the one nearest the
-  path's midpoint is dropped first. A request MUST resume from the deepest checkpoint at or below
+  checkpoints per path (root to leaf); when a ninth is captured, the shallowest checkpoint other
+  than the first is dropped. A request MUST resume from the deepest checkpoint at or below
   its match and re-prefill the gap. Families without position-bound state (all other 0.1
   families, gpt-oss sliding-window layers included) plan no checkpoints and resume at the match.
 - **FR-005**: Prefill MUST be planned in chunks that end at message boundaries and at checkpoint
@@ -221,8 +226,9 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
 - **FR-007**: Admission (001) checks statically that prompt plus clamped output fits capacity. The
   cache MUST evict only for the initial allocation (`P − resume + min(output limit, 4K)` tokens of
   attention state and planned checkpoints; the one-layer move transient lies in 001's scratch
-  envelope), then on demand whenever the engine returns `NeedsMemory{bytes}`. After the switch no state is pinned, so decode-time eviction always
-  succeeds. Matched prefixes of queued requests MUST be evicted last.
+  envelope), then on demand whenever the engine returns `NeedsMemory{bytes}`. After the switch no
+  state is pinned, so decode-time eviction always succeeds. (Soft pins for queued requests:
+  removed, 0.1 scope cut, 2026-10-15.)
 - **FR-008**: Eviction MUST be least-recently-used over branch leaves. The live path in use is never
   evicted; its checkpoints are evicted only after all branches. Freed bytes are counted per buffer.
 - **FR-009**: Memory pressure MUST be read at every per-layer check point and between decode
@@ -230,21 +236,20 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   evict branches first, then reset an idle live path, and return freed memory to the OS within
   1 s; a running request is never affected.
 - **FR-010**: Every request MUST produce a miss report: cached, processed, divergence position,
-  checkpoint gap, and a cause ∈ {`new`, `system`, `edit`, `template`, `evicted`, `capacity`, `checkpoint`,
-  `model`, `disabled`} or none on a full hit (definitions in [data-model](data-model.md#missreport)).
-  It is delivered through 002's mrun metadata (headers or `: mrun` SSE comments) and in
-  `/mrun/status` and `mrun ps`.
-- **FR-011**: `--debug-cache` (refused on non-loopback binds) MAY print ±40-character excerpts
-  around a divergence on the server terminal only. mrun MUST document that the shared cache lets one
-  client infer from cached counts whether a prefix was seen.
-- **FR-012**: Controls: `--no-cache` (global), header `x-mrun-cache: off` (per request, all APIs;
-  stored conversations survive), `mrun cache clear` / `POST /mrun/cache/clear` (drops branches and
-  checkpoints, resets the live path once idle).
+  the message index and role containing it (from 002's message marks), checkpoint gap, and a
+  cause ∈ {`new`, `changed`, `evicted`, `model`, `disabled`} or none on a full hit (definitions and
+  precedence in [data-model](data-model.md#missreport)). It is delivered through 002's mrun metadata
+  (headers or `: mrun` SSE comments) and in `/mrun/status` and `mrun ps`.
+- **FR-011**: mrun MUST document that the shared cache lets one client infer from cached counts
+  whether a prefix was seen. (`--debug-cache` excerpts: removed, 0.1 scope cut, 2026-10-15.)
+- **FR-012**: Controls: `--no-cache` (global) and `mrun cache clear` / `POST /mrun/cache/clear`
+  (drops branches and checkpoints, resets the live path once idle). (`x-mrun-cache: off`: removed,
+  0.1 scope cut, 2026-10-15.)
 - **FR-013**: State MUST stay in memory only; nothing is written to disk.
 - **FR-014**: A changed model identity (including a changed template file) MUST use a separate
   cache key; state under the old key is discarded.
 - **FR-015**: On finish or cancel, the cache MUST record exactly the committed tokens (prompt and
-  emitted output) with message boundaries and content hashes; where the live path retraces a stored
+  emitted output) with message boundaries and roles; where the live path retraces a stored
   branch, the overlap is merged.
 
 ### Key Entities
@@ -255,7 +260,7 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   per-layer buffers) and checkpoints.
 - **Checkpoint**: position-bound state at one position (families with linear-attention layers
   only).
-- **Miss report**: cached, processed, divergence, gap, cause.
+- **Miss report**: cached, processed, divergence, message index and role, gap, cause.
 
 ## Success Criteria *(mandatory)*
 
@@ -270,10 +275,12 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   tokens, main → subagent → main and main → title request → main both report the returning turn's
   cached tokens ≥ the parent's committed length (100% kept); Qwen3.6 likewise, with gap ≤ the
   previous reply's length.
-- **SC-003**: In a mutation suite of ≥ 100 cases (append, edit, rewind, interleaved branches, tiny
-  tails, cancel, eviction, pressure, model and template change; positional-only, sliding-window
-  and position-bound profiles), zero stale
-  reuses occur and every case reports the expected cause and divergence.
+- **SC-003**: The mutation suite reports zero stale reuses and the expected cause, divergence,
+  message index and gap in every case. It covers, on each of the positional-only, sliding-window
+  and position-bound profiles: append; full hit; edit of the system prompt, tool list, an earlier
+  message and the last message; a re-rendered previous reply; rewind; interleaved branches; a tiny
+  tail; cancel then retry; LRU eviction; `cache clear`; pressure eviction; a model or template
+  change; `--no-cache`; the checkpoint cap (named list in research, R-mutations).
 - **SC-004**: During a switch moving an 80K-token tail out and back in, peak memory exceeds steady
   state by at most one layer's state.
 - **SC-005**: Cache-on output equals cache-off output bit for bit (token ids and logits) when the
@@ -294,8 +301,16 @@ limit, inject pressure warnings mid-prefill and mid-decode; no request fails and
   request, forward/sample split, `split_off(at, shrink) → Segment`, `append(segment, consume)`,
   `checkpoint()` / `restore_checkpoint(id)`, and the generation loop (`runtime/generate.rs`) that
   takes the prefix cache as its reuse policy.
-- 002 provides message boundaries, per-message content hashes and the generation-header position
-  from the renderer, carries the miss report, and sends the `x-mrun-cache` header through.
+- 002 provides `RenderedPrompt` (message starts and roles, `system_tools_end`, the
+  generation-header position) as 001's `GenerateRequest.prompt`, and carries the miss report.
 - One request runs at a time (D018). One model is resident (D020).
 - Exactness means identical tokens under one cache key; recomputation with a different chunk split
   may differ in the last bits, so equality tests fix the split.
+
+## Later
+
+Moved out of 0.1 on 2026-10-15 (D025); IDs kept: soft pins for queued requests (FR-007 last
+sentence), `--debug-cache` excerpts (FR-011), the per-request `x-mrun-cache: off` header (FR-012),
+and the separate causes `system`, `edit`, `template`, `capacity` and `checkpoint` (now `changed`,
+`evicted` and `gap > 0`; `template` as a 005 diagnostic). 007 (persistent tier) relies on the
+per-request header to keep requests off disk and reintroduces it when it ships.

@@ -9,33 +9,30 @@
 | revision | string | 40-hex commit sha (pinned) |
 | files | list of {path, size, sha256} | every file needed to load; sha256 64-hex |
 | license | string | SPDX id or "other" with URL |
-| family | string | 001 family registry: `qwen3_5_moe` \| `qwen3_moe` \| `gpt_oss` \| `mistral` \| `qwen3` (0.1) |
-| tier | 1 \| 2 | 1 for a curated alias that passed every Tier 1 gate (010 FR-016); 2 for non-alias repos and for a 0.1 alias that missed a gate (labelled by `show`/`ls`, never the default) |
-| syntax | string | chat syntax chosen by the template probe (002 FR-032): `hermes` \| `qwen_xml` \| `harmony` \| `mistral` |
+| family | string | 001 family registry: `qwen3_5_moe` \| `qwen3_moe` \| `gpt_oss` \| `qwen3` (0.1) |
+| syntax | string | the family's syntax (002 FR-032): `hermes` \| `qwen_xml` \| `harmony` |
 | state_bytes_per_token | u64 | positional state per token (001 `kv_bytes_per_token`), measured on the target (010 FR-009) |
 | checkpoint_bytes | u64 | position-bound state per checkpoint (001 `recurrent_bytes`); 0 without it |
 | capacity_48gb | u32 | token capacity on the 48 GB target (aliases only; recorded at pin time) |
-| architecture | string | from `config.json` `model_type` (e.g. `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`, `mistral3`; wrapped `text_config.model_type` recorded too) |
+| architecture | string | from `config.json` `model_type` (e.g. `qwen3`, `qwen3_moe`, `qwen3_5_moe`, `gpt_oss`; wrapped `text_config.model_type` recorded too) |
 | quantization | {bits, group_size, mode: affine \| mxfp4, overrides} | from `config.json` |
 | identity | string | 001 identity function: sha256 over sorted (path, sha256); used by 001/003 |
 | fast_check | list of {path, size, mtime} | compared on every use |
 
 States: `missing` → `downloading` → `verifying` → `ready` | `corrupt` (hash mismatch) → (pull) →
-`ready`. A compatible MLX repo found in the HF cache without a manifest is listed as `unpinned`;
-`mrun pull <repo>` hashes it and writes the manifest without downloading. A repo of an
-unsupported architecture is `unsupported` (listed, never loaded); `pull` of one stops after
-`config.json` with no manifest written.
+`ready`. `mrun pull <repo>` of a repo already in the HF cache hashes it and writes the manifest
+without downloading. `pull` of an unsupported architecture stops after `config.json` with no
+manifest written. (`unpinned`/`unsupported` listing of cached repos: Later.)
 
 ## ClientProfile (compiled in)
 
 | Field | Type |
 | --- | --- |
 | name | `claude-code` \| `codex` \| `opencode` |
-| config_path | path template (`~/.claude/settings.json`, ...) |
+| config_path | path printed by `connect` (`~/.claude/settings.json`, ...) |
 | format | json \| toml |
-| launch_env | env vars and flags for `mrun launch` (base URL, all model slots, context limits, auth reference, cache hints) |
-| settings | key path → value template for `connect` (same values, persistent form) |
-| probe | how to verify the client sees mrun (where possible) |
+| launch_env | env vars and flags for `mrun launch` (base URL, all model slots, context limits, idle-compaction floor, cache hints; Codex `web_search = "disabled"`) |
+| settings | key path → value template printed by `connect` (same values, persistent form) |
 
 ## Diagnostic
 
@@ -47,35 +44,12 @@ unsupported architecture is `unsupported` (listed, never loaded); `pull` of one 
 | detail | human text |
 | fix | concrete command or setting |
 
-## Config (`~/.mrun/config.toml`)
+## Settings (no config file in 0.1)
 
-```toml
-[server]
-host = "127.0.0.1"
-port = 8484
-queue = 16
-queue_wait_s = 600
-thinking = "client"
-max_output = 16384
-reject_tool_images = false
-
-[memory]
-fraction = 0.75
-# reserve_gib = clamp(physical ÷ 6, 2, 8)  (computed; 8 on a 48 GB Mac)
-
-[engine]
-default_model = "qwen3.6"
-
-[cache]
-enabled = true
-
-[limits]
-body_mib = 64
-messages = 4096
-tools = 256
-schema_kib = 64
-schema_depth = 16
-```
-
-Every key is optional; `mrun config` shows effective values and sources. Environment variables
-are `MRUN_<SECTION>_<KEY>`; `MRUN_HOME`, `MRUN_API_KEY` and (007) `MRUN_CACHE_DIR` are reserved names, not config keys (for example `MRUN_SERVER_PORT`, `MRUN_MEMORY_RESERVE_GIB`).
+Defaults < `MRUN_*` environment < flags. Settings and defaults: `MRUN_SERVER_PORT` 8484,
+`MRUN_SERVER_QUEUE` 16, `MRUN_SERVER_QUEUE_WAIT_S` 600, `MRUN_SERVER_MAX_OUTPUT` 16384,
+`MRUN_SERVER_REJECT_TOOL_IMAGES` false, `MRUN_MEMORY_FRACTION` 0.75, `MRUN_MEMORY_RESERVE_GIB`
+(computed: clamp(physical ÷ 6, 2, 8)), `MRUN_ENGINE_DEFAULT_MODEL` `qwen3.6`, `MRUN_CACHE_ENABLED`
+true, `MRUN_LIMITS_{BODY_MIB, MESSAGES, TOOLS, SCHEMA_KIB, SCHEMA_DEPTH}` 64/4096/256/64/16.
+`MRUN_HOME` and (007) `MRUN_CACHE_DIR` are paths. `~/.mrun/config.toml` and `mrun config` are
+Later (FR-010).

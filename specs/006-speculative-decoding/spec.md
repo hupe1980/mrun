@@ -143,8 +143,8 @@ speculation when diagnosing output differences.
 - **FR-003**: The drafter MUST also index a copy-aware rendering of tool-result and message text
   with line-number prefixes of file-read output removed (`␣*N→` and `␣*N<TAB>` at line start). The
   rendering is tokenized with the model tokenizer and used only for drafting, never rendered into
-  the prompt. For families whose tool-call syntax passes arguments as JSON (Hermes, Harmony,
-  Mistral), it MUST also index a JSON-escaped rendering of the same text, so copied file content
+  the prompt. For families whose tool-call syntax passes arguments as JSON (Hermes, Harmony;
+  Mistral from 0.2), it MUST also index a JSON-escaped rendering of the same text, so copied file content
   inside JSON string arguments matches.
 - **FR-004**: Removed (MTP drafter; see "Follow-up (gated)").
 - **FR-005**: The target MUST verify a draft of length N in one forward over N+1 positions and
@@ -173,9 +173,12 @@ speculation when diagnosing output differences.
   online EWMA of measured rounds. No probe calibration, nothing persisted.
 - **FR-009**: Speculation MUST NOT run for requests with a grammar mask, an explicit `seed`,
   `logprobs`, or a remaining output limit of 1; the metadata names the reason (`grammar`, `seed`,
-  `logprobs`, `limit`).
+  `logprobs`, `limit`). Note (SchemaFill 2610.07086, SchemaWeaver 2610.17436; delta §5): under a
+  grammar, tokens the grammar forces are already appended without sampling by 002's decode hook
+  (002 FR-004, FR-036), which is exact; drafting under masks stays later work.
 - **FR-010**: Speculation mode MUST be configurable: `--speculation auto|off|ngram` (`mtp` is added
-  by the follow-up), `[speculation] mode` in `config.toml`, `MRUN_SPECULATION_MODE`; per request,
+  by the follow-up), `MRUN_SPECULATION_MODE` (and `[speculation] mode` once the config file
+  returns, 004 Later); per request,
   header `x-mrun-speculation: off` on all three APIs. `auto` is the default once FR-001's gate
   passes.
 - **FR-011**: Every response MUST report in mrun metadata (002 headers or `: mrun` SSE comment
@@ -218,8 +221,8 @@ speculation when diagnosing output differences.
 
 - **SC-001**: With speculation `auto`, no `mrun bench` cell (synthetic prefill and decode at every
   size, every agent trace's TTFT and session time) is slower than with `off` beyond the 005
-  regression threshold (5 repetitions, medians), on every Tier 1 0.1 model (Qwen3.6-35B-A3B,
-  Qwen3-Coder-30B-A3B, gpt-oss-20b, Devstral Small 2, Qwen3-8B) on the target Mac.
+  regression threshold (5 repetitions, medians), on every 0.1 alias (Qwen3.6-35B-A3B,
+  Qwen3-Coder-30B-A3B, gpt-oss-20b) and on Devstral Small 2 once it ships (0.2) on the target Mac.
 - **SC-002**: On the edit-heavy traces (bench traces where at least 40% of reply tokens lie in
   matches of ≥ 16 tokens against the prompt), median decode tokens per second with `auto` is at
   least 1.3× that with `off`, on Qwen3.6-35B-A3B and on the default model if different; other
@@ -243,8 +246,11 @@ speculation when diagnosing output differences.
   options), 003 (prefix store sees committed tokens only) and 005 (traces, cells, regression
   threshold).
 - `Cancelled` and `Unsupported` are additive `EngineError` variants (contract).
-- EAGLE-3, DFlash and other trained drafters are out of scope (no drafter exists for the default
-  model). Speculation under grammar masks and concurrent sessions are later work.
+- EAGLE-3 is out of scope. Trained DFlash2 drafts exist for Qwen3.6-35B-A3B (Inco Splash ships
+  them; license and publication unverified, delta §3.1) and are a measured option in "Follow-up
+  (gated)". Speculation under grammar masks and concurrent sessions are later work.
+- SC-001 compares `off` and `auto` at the 005 regression threshold; 005's regression mode is Later
+  (lean cut 2026-10-15), so it returns with this feature or the comparison is run by hand.
 
 ## Follow-up (gated)
 
@@ -261,3 +267,10 @@ MTP drafting on Qwen3.6-35B-A3B (former US3, FR-004, FR-015, FR-016; sidecar pip
   weights and window in the memory budget.
 - **Note (F8)**: the MTP sidecar is not part of the 003 cache key (the head never changes target
   state); it is recorded in the manifest and shown by `mrun show` only.
+
+DFlash2 drafts for Qwen3.6-35B-A3B (measured option, added 2026-10-15 after the delta scan):
+Splash's 1.7–2× decode lead on this model comes mostly from them. **Gate**: confirm the drafts'
+license and that the weights are published; then measure acceptance offline on the bundled traces
+and proceed only under the same α₁ ≥ 0.8 and modeled ≥ 1.15× rule. Like MTP, the drafter is never
+part of the cache key, and its state never enters rollback data or checkpoints (FR-006; llama.cpp
+`e467e5b` leaked draft KV into checkpoints).
