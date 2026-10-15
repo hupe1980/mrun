@@ -18,12 +18,14 @@ mlx = ["mrun-engine/mlx"]
 
 [dependencies]
 axum = "0.8"
+base64 = "0.22.1"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 flume.workspace = true
 minijinja.workspace = true
 minijinja-contrib.workspace = true
 mrun-engine.workspace = true
 serde.workspace = true
+sha2.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokenizers.workspace = true
