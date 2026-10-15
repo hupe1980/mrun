@@ -5,6 +5,8 @@ use minijinja::{Environment, Error, ErrorKind, Value};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateError {
@@ -64,11 +66,19 @@ impl ChatTemplate {
         );
         env.add_template_owned("chat", source)
             .map_err(|error| TemplateError::Render(error.to_string()))?;
-        Ok(Self {
+        let mut template = Self {
             env,
             bos_token,
             eos_token,
-        })
+        };
+        template.set_date(Date::server_start());
+        Ok(template)
+    }
+
+    /// Fixes the date `strftime_now` reports (the template probe uses a constant one).
+    pub fn set_date(&mut self, date: Date) {
+        self.env
+            .add_function("strftime_now", move |format: String| date.format(&format));
     }
 
     /// Loads `chat_template.jinja`, or `chat_template` from `tokenizer_config.json`.
@@ -136,6 +146,124 @@ impl ChatTemplate {
                 eos_token => &self.eos_token,
             })
             .map_err(|error| TemplateError::Render(format!("{error:#}")))
+    }
+}
+
+/// A UTC calendar date, as `strftime_now` sees it (time of day is always midnight).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Date {
+    /// Days since 1970-01-01.
+    days: i64,
+}
+
+impl Date {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    const WEEKDAYS: [&str; 7] = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
+
+    /// `month` and `day` are 1-based.
+    pub fn from_ymd(year: i32, month: u32, day: u32) -> Self {
+        // Days from civil (Howard Hinnant), with March as the first month of the year.
+        let year = i64::from(year) - i64::from(month <= 2);
+        let era = year.div_euclid(400);
+        let year_of_era = year - era * 400;
+        let shifted_month = i64::from((month + 9) % 12);
+        let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        Self {
+            days: era * 146_097 + day_of_era - 719_468,
+        }
+    }
+
+    /// The UTC date when this process first asked, fixed for its lifetime.
+    pub fn server_start() -> Self {
+        static START: OnceLock<Date> = OnceLock::new();
+        *START.get_or_init(|| {
+            let secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs());
+            Self {
+                days: (secs / 86_400) as i64,
+            }
+        })
+    }
+
+    /// `(year, month, day)` with 1-based month and day.
+    pub fn ymd(self) -> (i32, u32, u32) {
+        let z = self.days + 719_468;
+        let era = z.div_euclid(146_097);
+        let day_of_era = z - era * 146_097;
+        let year_of_era =
+            (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let shifted_month = (5 * day_of_year + 2) / 153;
+        let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
+        let month = if shifted_month < 10 {
+            shifted_month + 3
+        } else {
+            shifted_month - 9
+        } as u32;
+        let year = year_of_era + era * 400 + i64::from(month <= 2);
+        (year as i32, month, day)
+    }
+
+    /// Python `strftime` for the date directives; time directives format midnight.
+    pub fn format(self, format: &str) -> String {
+        let (year, month, day) = self.ymd();
+        let month_name = Self::MONTHS[month as usize - 1];
+        // 1970-01-01 was a Thursday.
+        let weekday = Self::WEEKDAYS[(self.days + 3).rem_euclid(7) as usize];
+        let day_of_year = self.days - Self::from_ymd(year, 1, 1).days + 1;
+        let mut out = String::new();
+        let mut chars = format.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '%' {
+                out.push(ch);
+                continue;
+            }
+            match chars.next() {
+                Some('Y') => out.push_str(&year.to_string()),
+                Some('y') => out.push_str(&format!("{:02}", year.rem_euclid(100))),
+                Some('m') => out.push_str(&format!("{month:02}")),
+                Some('d') => out.push_str(&format!("{day:02}")),
+                Some('e') => out.push_str(&format!("{day:2}")),
+                Some('j') => out.push_str(&format!("{day_of_year:03}")),
+                Some('B') => out.push_str(month_name),
+                Some('b' | 'h') => out.push_str(&month_name[..3]),
+                Some('A') => out.push_str(weekday),
+                Some('a') => out.push_str(&weekday[..3]),
+                Some('H' | 'M' | 'S') => out.push_str("00"),
+                Some('I') => out.push_str("12"),
+                Some('p') => out.push_str("AM"),
+                Some('%') => out.push('%'),
+                Some(other) => {
+                    out.push('%');
+                    out.push(other);
+                }
+                None => out.push('%'),
+            }
+        }
+        out
     }
 }
 
@@ -262,6 +390,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(text, "ab", "Jinja trim_blocks + lstrip_blocks semantics");
+    }
+
+    #[test]
+    fn strftime_now_formats_the_fixed_date_like_python() {
+        let source = "{{ strftime_now('%d %b %Y') }}|{{ strftime_now('%Y-%m-%d %A %j %y %e %B %a %H:%M %%') }}";
+        let mut template = ChatTemplate::new(source.to_string()).unwrap();
+        template.set_date(Date::from_ymd(2026, 3, 5));
+        let text = template
+            .render(&serde_json::json!([]), &RenderOptions::default())
+            .unwrap();
+        assert_eq!(
+            text,
+            "05 Mar 2026|2026-03-05 Thursday 064 26  5 March Thu 00:00 %"
+        );
+    }
+
+    #[test]
+    fn dates_round_trip_through_days() {
+        for (ymd, days) in [
+            ((1970, 1, 1), 0),
+            ((2000, 2, 29), 11_016),
+            ((1969, 12, 31), -1),
+            ((2026, 10, 15), 20_741),
+        ] {
+            let date = Date::from_ymd(ymd.0, ymd.1, ymd.2);
+            assert_eq!(date.days, days, "{ymd:?}");
+            assert_eq!(date.ymd(), ymd);
+        }
+        assert_eq!(Date::from_ymd(2024, 12, 31).format("%j %a"), "366 Tue");
+    }
+
+    #[test]
+    fn strftime_now_defaults_to_the_server_start_date() {
+        let template = ChatTemplate::new("{{ strftime_now('%Y-%m-%d') }}".to_string()).unwrap();
+        let text = template
+            .render(&serde_json::json!([]), &RenderOptions::default())
+            .unwrap();
+        assert_eq!(text, Date::server_start().format("%Y-%m-%d"));
     }
 
     #[test]
