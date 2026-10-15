@@ -78,9 +78,9 @@ Evidence marks as in [next-features](../../concepts/research/next-features-2026-
   mrun patch releases that keep these keep their entries. Directory layout `prefix/<sha256(key)[0..16]>/` groups files
   per key; the key itself is in every header and compared in full.
 - **Rationale**: Stored bytes are exact for their tokens, but a version change alters recompute
-  bits and possibly layouts, so the MLX version is part of the key; tying to the full mrun version would discard every entry on each patch release for no exactness gain.
-- **Alternatives**: Bind only to MLX version and format (allows reuse across patch releases);
-  revisit if upgrades prove costly.
+  bits and possibly layouts, so the MLX version is part of the key.
+- **Alternatives**: Bind to the full mrun version (simplest, but every patch release discards the
+  whole tier).
 
 ## R7: Location, permissions, privacy
 
