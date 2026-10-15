@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [x] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain (FR-029 resolved 2026-10-15: user turn at the same position)
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -32,3 +32,6 @@
 ## Notes
 
 - Validation pass 1: all items pass.
+- Validation pass 2 (2026-10-15, third audit): FR-023 removed (ID kept, marked removed); FR-030 added;
+  one [NEEDS CLARIFICATION] added to FR-029. Spec still names wire fields and client env vars where
+  they are the requirement (API compatibility is the product).

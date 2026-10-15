@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-14
 
-**Status**: Draft
+**Status**: Draft (revised 2026-10-15 after the third audit)
 
 **Input**: User description: "`mrun serve` exposes OpenAI Chat Completions, Anthropic Messages (with count_tokens) and stateless OpenAI Responses on loopback, with streaming, tool calls and structured output, so Claude Code, Codex and OpenCode complete real tool loops against a local model. One internal request model; truthful usage and finish reasons; bounded queue; cancellation on disconnect."
 
@@ -13,10 +13,18 @@
 ### Session 2026-10-14
 
 - Q: Do models think when the client doesn't ask? → A: No. Thinking is enabled only by the request (Anthropic `thinking`, OpenAI `reasoning_effort` / `reasoning`). (Maintainer decision.)
-- Q: How are concurrent requests handled? → A: One generation at a time, FIFO queue (8 waiting, 600 s waiting deadline, revised after analysis); batching is a later feature. (Maintainer decision.)
+- Q: How are concurrent requests handled? → A: One generation at a time, FIFO queue (600 s waiting deadline; 16 waiting since 2026-10-15, matching D018); batching is a later feature. (Maintainer decision.)
 - Q: Default port? → A: 127.0.0.1:8484 (avoids Ollama 11434, LM Studio 1234, llama.cpp 8080); `--port` and `MRUN_SERVER_PORT` override.
 - Q: Are non-strict tool calls constrained? → A: Tool-call syntax is always parsed with the model's native format; argument schemas are enforced by constrained decoding only for strict tools and JSON response formats, keeping the default fast path unconstrained.
 - Q: What does `count_tokens` count? → A: Exactly the tokens mrun would process for that request with the loaded model's tokenizer and template.
+
+### Session 2026-10-15 (third audit)
+
+- Anthropic `diagnostics` (old FR-023) is dropped: no supported client sends `diagnostics.previous_message_id`. The field is accepted and ignored.
+- Keepalives are per API, because Codex's SSE parser drops comment lines and aborts after 300 s without an event: Responses sends `response.in_progress` events, Anthropic `ping`, Chat SSE comments.
+- Client cache hints are gone (003 dropped session and breakpoint hints): `cache_control`, `prompt_cache_key` and client session headers do not affect the cache.
+- A strict schema llguidance cannot compile runs unconstrained with a `strict-unsupported` warning instead of failing.
+- `tool_choice: none` uses a fixed logit bias, not a grammar mask, so decode stays pipelined.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -41,6 +49,8 @@ confirm it completes with the tests passing, for each of the three clients.
    tool use, tool results and token counting all work without client-side errors.
 3. **Given** Codex pointed at mrun, **When** the developer runs a task, **Then** the Responses
    stream, function calls and function-call outputs work without client-side errors.
+4. **Given** Claude Code configured with mrun's capacity, **When** a session grows past that
+   capacity, **Then** Claude Code compacts on its own and the session continues.
 
 ---
 
@@ -59,13 +69,15 @@ oversize requests across all three APIs, checking status codes, error bodies and
 
 1. **Given** a completed request, **When** the response ends, **Then** usage reports input, cached
    input and output tokens, and they sum consistently.
-2. **Given** a request whose prompt alone does not fit (no room for output), **When** submitted, **Then** the API
-   returns the API-appropriate "context too long" error with the token numbers.
+2. **Given** a request whose prompt alone does not fit (no room for output), **When** submitted,
+   **Then** the API returns the API-appropriate "context too long" error with the token numbers.
 3. **Given** an unsupported parameter that changes meaning (for example image input), **When**
    submitted, **Then** the request is rejected naming the parameter; unknown harmless fields are
    ignored.
 4. **Given** generation stops at the output limit in the middle of a tool call, **When** the stream
    ends, **Then** the finish reason says length and no incomplete tool call is reported as complete.
+5. **Given** a streaming request whose headers are already sent, **When** it fails (for example the
+   queue deadline passes), **Then** the client receives the API's in-stream error event.
 
 ---
 
@@ -77,22 +89,25 @@ abandoned work immediately, and never wedges.
 **Why this priority**: Real agent traffic includes concurrency and disconnects; a stuck server ends
 the session.
 
-**Independent Test**: Fire overlapping requests, disconnect mid-stream and mid-queue, and stall a
-reader; verify queue order, prompt cancellation, timeouts and that the next request runs normally.
+**Independent Test**: Fire overlapping requests, disconnect mid-stream, mid-queue, mid-prefill and
+during a non-streaming request, and stall a reader; verify queue order, prompt cancellation,
+timeouts and that the next request runs normally.
 
 **Acceptance Scenarios**:
 
-1. **Given** a request in progress, **When** the client disconnects, **Then** generation stops
-   within 300 ms or one token and the next queued request starts.
+1. **Given** a request that is queued, prefilling, generating or non-streaming, **When** the client
+   closes the connection, **Then** its work stops within 300 ms and the next queued request starts.
 2. **Given** a full queue, **When** another request arrives, **Then** it is rejected immediately
    with a retry-after hint.
 3. **Given** a queued request waiting past its deadline (default 600 s), **When** the deadline
    passes, **Then** it is rejected with a timeout error and never starts; while it waits, streaming
-   clients receive keepalives.
+   clients receive keepalives that their idle timers count (including Codex, which ignores SSE
+   comments).
 
 ### Edge Cases
 
 - Tool definitions with deeply nested or very large schemas: rejected above documented limits.
+- A strict schema llguidance cannot compile: generated unconstrained, `strict-unsupported` warning.
 - Parallel tool calls requested: the model may emit several; each is reported with a stable id.
 - A tool result referencing an unknown call id: rejected with the id named.
 - Streaming split inside a multi-byte character or inside tool-call JSON: output stays valid.
@@ -101,6 +116,9 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   request, never mixed into the answer text.
 - `max_tokens` above capacity or absent: clamped / defaulted per FR-019; rejected only when the
   prompt itself does not fit.
+- History tool-call arguments that are not a JSON object, sent to a Qwen3-Coder or Qwen3.6
+  template: rendered as raw text with a warning (FR-004).
+- A streaming request queued for more than 300 s: the stream stays alive for every client.
 - Images inside tool results (Claude Code reading a PNG, Codex `view_image`): replaced per FR-020.
 - A browser page on the same machine calling the server: rejected by the Host/Origin policy.
 - Non-loopback bind requested: refused unless an explicit flag and an API key are configured.
@@ -118,43 +136,60 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   format) and non-streaming responses.
 - **FR-003**: All three APIs MUST support tool definitions, tool calls (including parallel calls)
   and tool results, translated through one internal request model so behavior is identical.
+  `tool_choice: none` keeps tools rendered (prefix stability) and applies a fixed −inf logit bias
+  to the tool-call opener tokens, so decoding stays pipelined; `required` and named choices are
+  enforced by grammar.
 - **FR-004**: Tool-call arguments MUST be valid JSON matching the declared schema when the client
-  requests strict tools (`strict: true` or equivalent), using constrained decoding. Non-strict
-  arguments are never modified. If they are not valid JSON: Chat Completions and Responses return
-  the call with its raw arguments string, and such raw strings are accepted unvalidated in later
-  history; Anthropic Messages (whose `input` must be an object) returns the model's raw call text
-  as a text block instead of a tool call. Either way a `tool-args-invalid` warning is reported per
-  FR-022. When streaming, argument text is forwarded as it arrives only where it is the model's raw
-  JSON (Qwen3 Hermes syntax on Chat/Responses); arguments synthesized from other syntaxes (Qwen3-Coder
-  XML) and all Anthropic `tool_use` input are buffered per call and emitted when the call closes,
-  so the fallback above is always possible. The tool-call envelope (for example a missing
-  `<tool_call>` opener before a declared function) MAY be recognized, because it does not change
-  argument content. Values are never coerced or evaluated (research §3); argument text that
-  contains the syntax's own closing tags (a file edit of a parser) MUST round-trip unchanged; a call
-  to an undeclared tool is passed through with a `tool-unknown` warning.
+  requests strict tools (`strict: true` or equivalent), using constrained decoding. A strict schema
+  that llguidance cannot compile is generated unconstrained with a `strict-unsupported` warning
+  (FR-022), never rejected. Non-strict arguments are never modified. If they are not valid JSON:
+  Chat Completions and Responses return the call with its raw arguments string, and such raw
+  strings are accepted unvalidated in later history; Anthropic Messages (whose `input` must be an
+  object) returns the model's raw call text as a text block instead of a tool call. Either way a
+  `tool-args-invalid` warning is reported. When streaming, argument text is forwarded as it arrives
+  only where it is the model's raw JSON (Qwen3 Hermes syntax on Chat/Responses); arguments
+  synthesized from other syntaxes (Qwen3-Coder and Qwen3.6 XML) and all Anthropic `tool_use` input
+  are buffered per call and emitted when the call closes, so the fallback above is always
+  possible. The tool-call envelope (for example a missing `<tool_call>` opener before a declared
+  function) MAY be recognized, because it does not change argument content. Values are never
+  coerced or evaluated (research §3); argument text that contains the syntax's own closing tags (a
+  file edit of a parser) MUST round-trip unchanged; a call to an undeclared tool is passed through
+  with a `tool-unknown` warning.
+  **History re-rendering is byte-stable per template**: Qwen3 renders string arguments verbatim,
+  so the previous reply re-renders exactly. Qwen3-Coder and Qwen3.6 re-serialize arguments
+  (`|items`, `tojson`), so the next turn may miss at the previous reply with cause `template`
+  (003). On those templates, history arguments that do not parse as a JSON object are rendered
+  verbatim in place of the parameter list, with a `history-args-raw` warning.
 - **FR-005**: Structured output (JSON schema response format) MUST be supported with the same
-  constrained decoding.
+  constrained decoding and the same `strict-unsupported` fallback.
 - **FR-006**: The Responses API MUST be stateless: `previous_response_id` and item references MUST
   be rejected with a clear error; `store: true` is accepted and nothing is stored.
-- **FR-007**: Usage MUST report input, cached input and output tokens with each API's semantics
-  (Anthropic `input_tokens` excludes cache reads; OpenAI totals include them;
-  `cache_creation_input_tokens` is always 0). Finish reasons MUST follow the mapping table in
+- **FR-007**: Usage MUST report input, cached input and output tokens with each API's semantics.
+  Cached tokens are `min(matched, P − 1)` for a prompt of `P` tokens, because the last prompt token
+  is always processed (003). Anthropic `input_tokens` excludes cache reads (`input_tokens +
+  cache_read_input_tokens = P`) and `cache_creation_input_tokens` is always 0 (mrun has no billed
+  cache writes; reporting 0 keeps clients' cost estimates at zero); OpenAI totals include cached
+  tokens. Finish reasons MUST follow the mapping table in
   [research](research.md#design-recommendations) (stop, stop sequence, length, context full, tool
   calls); errors are error events, never finish reasons.
 - **FR-008**: Errors MUST use each API's native error shape, with a message that names the cause
-  and, where possible, the fix. Queue-full and queue-timeout statuses follow
-  [contracts/api.md](contracts/api.md#status-codes).
+  and, where possible, the fix. Errors after response headers are sent use the API's in-stream form
+  (Anthropic `event: error` with `overloaded_error` for queue failures, Chat `data: {"error":…}`,
+  Responses `response.failed`). Status codes follow [contracts/api.md](contracts/api.md#status-codes).
 - **FR-009**: Requests MUST be validated before queuing against configurable limits (defaults: body
   8 MiB, 4,096 messages, 256 tools, schema 64 KiB and depth 16); errors name the limit and the
   setting that raises it.
-- **FR-010**: The server MUST run one generation at a time with a FIFO queue (default 8 waiting).
-  The queue deadline covers waiting time only (default 600 s, configurable); while a request
-  waits or its prompt is being processed, streaming responses MUST send response headers at once
-  and keepalives at least every 10 s (Anthropic `ping`, SSE comments), because Claude Code aborts a
-  stream after 300 s without bytes. Full-queue and deadline errors MUST be immediate and explicit;
-  `retry-after` is integer seconds, at most 60 (larger values stop Claude Code's retries).
-- **FR-011**: Client disconnect MUST cancel queued or running work promptly (within 300 ms or one
-  token) and release its reservation.
+- **FR-010**: The server MUST run one generation at a time with a FIFO queue (default 16 waiting).
+  The queue deadline covers waiting time only (default 600 s, configurable). While a request waits
+  or its prompt is processed, streaming responses MUST send headers at once and a keepalive at
+  least every 10 s that the client's idle timer counts: Responses `response.created` at once, then
+  `response.in_progress` (Codex drops SSE comments and aborts after 300 s without an event);
+  Anthropic `ping` (Claude Code aborts after 300 s without bytes); Chat SSE comments. Full-queue
+  and deadline errors MUST be immediate and explicit; `retry-after` is integer seconds, at most 60
+  (larger values stop Claude Code's retries).
+- **FR-011**: Client disconnect MUST cancel work promptly, within 300 ms, whether the request is
+  queued, prefilling, generating or non-streaming, and release its reservation. Disconnects are
+  detected by watching each connection for close, not only by failed writes.
 - **FR-012**: The server MUST bind to loopback by default and accept only loopback `Host` headers
   (`127.0.0.1`, `localhost`, `[::1]` with the server port), reject requests carrying a browser
   `Origin` other than the server's own, and send no CORS headers. Binding elsewhere MUST require an
@@ -182,36 +217,42 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   work); responses report the actual model id.
 - **FR-019**: When a request gives no output limit, mrun MUST apply a server default (16,384 tokens,
   configurable); when the requested limit exceeds what fits, mrun MUST clamp it to the available
-  capacity and report the clamp per FR-022. Rejection happens only when the prompt itself does not
-  fit.
+  capacity (001 FR-009) and report the applied limit (`x-mrun-max-tokens` header or `: mrun` SSE
+  comment) with a `max-tokens-clamped` warning. Rejection happens only when the prompt itself does
+  not fit.
 - **FR-020**: Images, audio and files in user messages MUST be rejected naming the JSON path. Images
   inside tool results MUST, by default, be replaced with the text `[image omitted: model has no
   vision input]` and an `image-omitted` warning reported per FR-022, so sessions that read an image
   file stay usable; `--reject-tool-images` restores strict rejection.
-- **FR-021**: `mrun serve --record <dir>` (debug aid for feature 005) MAY write request bodies, with
-  arrival and response-end times, to disk only when given on the command line (never via config
-  or environment), only on loopback, with files mode 0600, a startup warning, and a visible flag in `/mrun/status`.
+- **FR-021**: `mrun serve --record <dir>` (input to feature 005) MAY write, per request: the request
+  body, the allow-listed session headers (`x-claude-code-session-id`, `thread-id`,
+  `x-session-id`), arrival and response-end times, and the output token count, so `mrun bench` can
+  group conversations and replay reply lengths. Recording is enabled only on the command line
+  (never via config or environment), only on loopback, with files mode 0600, a startup warning,
+  and a visible flag in `/mrun/status`.
 - **FR-022**: Every response MUST report mrun metadata (cached and processed tokens, miss cause and
-  divergence from feature 003, effective output limit, warnings such as `tool-args-invalid`, `tool-unknown`,
-  `image-omitted`, `max-tokens-clamped`). Non-streaming responses carry it in `x-mrun-*` headers;
-  streaming responses carry it in SSE comment lines (`: mrun {json}`) emitted before the first
-  content event and before the final event, because headers are sent before the result is known.
-  Bodies stay strictly standard. The last request's metadata is also in `/mrun/status`.
-- **FR-023**: Anthropic Messages requests carrying `diagnostics.previous_message_id` MUST receive
-  the standard `diagnostics.cache_miss_reason` in the response (`model_changed`, `system_changed`,
-  `tools_changed`, `messages_changed` with `cache_missed_input_tokens`,
-  `previous_message_not_found`, `unavailable`), derived by comparing this prompt's fingerprint with
-  that message's (data model: Prompt Fingerprint, DiagnosticsIndex); `diagnostics` is `null` when the
-  prefix was fully reused. The index holds the last 256 message ids in memory only.
+  divergence from feature 003, effective output limit, warnings such as `tool-args-invalid`,
+  `tool-unknown`, `image-omitted`, `max-tokens-clamped`, `strict-unsupported`,
+  `history-args-raw`). Non-streaming responses carry it in `x-mrun-*` headers; streaming responses
+  carry it in SSE comment lines (`: mrun {json}`) emitted before the first content event and before
+  the final event, because headers are sent before the result is known. Bodies stay strictly
+  standard. The last request's metadata is also in `/mrun/status`.
+- **FR-023**: *Removed 2026-10-15* (Anthropic diagnostics: no supported client sends
+  `diagnostics.previous_message_id`). A `diagnostics` request field is accepted and ignored.
+- **FR-024**: Anthropic `context_management` (server-side context edits and compaction) MUST be
+  accepted and ignored: mrun never rewrites or summarizes client context, and Claude Code sends the
+  field by default. Claude Code compacts on its own based on `CLAUDE_CODE_MAX_CONTEXT_TOKENS`,
+  which `mrun launch` sets to mrun's capacity (004); it does not read `/v1/models`.
 - **FR-025**: Prompts MUST be rendered exactly as sent, with one named exception: the per-request
   nonce in Claude Code's attribution block (a leading system text starting with
   `x-anthropic-billing-header:`, field `cch=`) is replaced by a fixed value of the same length,
   because it changes on every request and would otherwise defeat all prefix reuse for users who
-  start Claude Code without `mrun launch` (same approach as llama.cpp). Nothing else in that block
-  or elsewhere is altered.
-- **FR-026**: While a streaming request is queued or its prompt is processed, keepalive comments
-  on OpenAI APIs and `/mrun/status` MUST carry progress (`queued` position, or `prefill`
-  processed/total tokens); Anthropic streams use plain `ping` events.
+  start Claude Code without `mrun launch` (same approach as llama.cpp; D021). Nothing else in that
+  block or elsewhere is altered.
+- **FR-026**: While a request is queued or its prompt is processed, progress (`queued` position,
+  or `prefill` processed/total tokens) MUST be visible in Chat Completions keepalive comments and
+  in `/mrun/status`. Anthropic `ping` and Responses `response.in_progress` keepalives carry no
+  progress.
 - **FR-027**: Responses `namespace` tools (Codex sends MCP and sub-agent tools this way on every
   request) MUST be flattened to functions named `<namespace>__<tool>` and calls MUST be returned
   with `name` and `namespace` restored; history items carrying `namespace` are re-joined the same
@@ -221,15 +262,17 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   (Responses) MUST be expanded at that position into the tool's rendered definition, so the prefix
   stays append-only; expanded tools are callable afterwards. A reference to an undeclared tool, or a
   request whose tools are all deferred, is 400 with Anthropic's wording.
-- **FR-029**: Mid-conversation system messages (Anthropic `role: "system"` with `cache_control`,
-  Responses `developer`/`system` items) MUST be rendered in place, never hoisted into the first
-  system block. Server-executed features mrun cannot run (`mcp_servers`, `container`,
-  `mcp_toolset`, `tool_search_tool_*`, `tool_addition`/`tool_removal` blocks) MUST be rejected
-  with 400 naming the field, so the model is never told about tools that do not exist.
-- **FR-024**: Anthropic `context_management` (server-side context edits and compaction) MUST be
-  accepted and ignored: mrun never rewrites or summarizes client context, and Claude Code sends the
-  field by default. Clients that depend on the edits keep working because their own compaction
-  takes over at the reported context window.
+- **FR-029**: Mid-conversation system messages (Anthropic `role: "system"`, Responses
+  `developer`/`system` items) MUST be rendered in place, never hoisted into the first system block.
+  Templates that reject non-leading system messages (Qwen3.5/3.6 raise "System message must be at
+  the beginning") receive them as a user turn at the same position, so the prompt stays
+  append-only. Server-executed features mrun cannot run
+  (`mcp_servers`, `container`, `mcp_toolset`, `tool_search_tool_*`, `tool_addition`/`tool_removal`
+  blocks) MUST be rejected with 400 naming the field, so the model is never told about tools that
+  do not exist.
+- **FR-030**: Client cache hints MUST NOT change behaviour: `cache_control` (anywhere) is accepted
+  and ignored, and `prompt_cache_key` and client session headers are ignored by the cache (003).
+  Session headers are used only for recording (FR-021).
 
 ### Key Entities
 
@@ -237,22 +280,27 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
   tools, tool choice, response format, sampling settings, limits, stream flag, reasoning control.
 - **Tool Call**: Call id, tool name, arguments, completion status.
 - **Usage**: Input tokens, cached input tokens, output tokens, reasoning tokens.
-- **Queue Entry**: Request, arrival time, deadline, cancellation signal.
+- **Queue Entry**: Request, arrival time, deadline, cancellation signal (fired by a connection
+  close watcher).
+- **Record** (only with `--record`): request body, session headers, arrival and end times, output
+  tokens.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
 - **SC-001**: OpenCode, Claude Code and Codex (pinned versions) each complete the scripted
-  read-edit-test task against the primary model with no client-side protocol errors, 5 of 5 runs.
+  read-edit-test task against the primary model with no client-side protocol errors, 5 of 5 runs;
+  one Claude Code run crosses the configured capacity and compacts without errors.
 - **SC-002**: The API conformance suite (at least 60 cases across the three APIs: streaming,
-  tools, errors, limits, cancellation) passes 100%.
-- **SC-003**: With strict tools, 100% of completed tool calls in the conformance and client suites
-  validate against their schemas.
+  tools, errors, limits, cancellation, keepalives) passes 100%.
+- **SC-003**: With strict tools whose schemas compile, 100% of completed tool calls in the
+  conformance and client suites validate against their schemas.
 - **SC-004**: Serving overhead is small: time to first token through the API is within 50 ms of
   the engine's own time to first token, and generation speed through the API is at least 97% of the
   engine's (measured by this feature's overhead test).
-- **SC-005**: After a client disconnect, the next queued request starts within 300 ms (p95).
+- **SC-005**: After a client disconnect in any phase (queued, prefilling, generating,
+  non-streaming), the request's work stops and the next queued request starts within 300 ms (p95).
 - **SC-006**: Default configuration exposes nothing beyond loopback, rejects non-loopback `Host`
   and foreign `Origin` headers, and writes no prompt content to disk or logs; `--record` cannot be
   enabled by config or environment (verified by an audit test).
@@ -262,12 +310,12 @@ reader; verify queue order, prompt cancellation, timeouts and that the next requ
 - Builds on the engine from feature 001; cross-request prefix reuse (and therefore large cached
   input numbers) arrives with feature 003. This feature reports cached tokens truthfully, which may
   be zero.
-- `mrun connect <client>` (feature 004) prints client configuration; for testing here, client
-  configs are written by hand.
-- Claude Code adds an attribution block to its system prompt; since v2.1.181 it is stable per
-  conversation for custom base URLs (earlier versions change it every turn). Feature 004's
-  `connect`/`launch` set `CLAUDE_CODE_ATTRIBUTION_HEADER=0` as hygiene. This feature does not
-  rewrite prompts.
+- `mrun connect` / `mrun launch` (feature 004) configure clients, including
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS` and `ENABLE_TOOL_SEARCH=auto:10`
+  for Claude Code; for testing here, client configs are written by hand.
+- Claude Code's attribution block is stable per conversation for custom base URLs since v2.1.181;
+  older versions change the `cch=` nonce every turn, which FR-025 neutralizes. Feature 004 sets
+  `CLAUDE_CODE_ATTRIBUTION_HEADER=0` as hygiene.
 - Vision input is out of scope (see FR-020 for how images are handled).
 - Real-client smoke tests (SC-001) use hand-written client configs; serving overhead (SC-004) is
   measured by an engine-vs-API timing test in this feature, so 002's gates do not depend on 004/005.
