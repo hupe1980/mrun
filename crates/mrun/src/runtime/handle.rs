@@ -1,9 +1,13 @@
 //! `EngineHandle`: owns an engine on a dedicated thread; callers stream events through a bounded
-//! channel (blocking `recv` or `recv_async`). A consumer that stops reading for the stall timeout
-//! cancels its request, and the engine never waits on that consumer again.
+//! channel (blocking `recv` or `recv_async`) and then read the request's `Finished` from a
+//! one-slot channel. A consumer that stops reading for the stall timeout cancels its request,
+//! and the engine never waits on that consumer again; `Finished` is still delivered.
 
 use crate::chat::tokenizer::Tokenizer;
-use crate::runtime::generate::{self, Event, EventSink, GenerateRequest, Session};
+use crate::runtime::generate::{
+    self, Event, EventSink, FinishReason, Finished, GenerateRequest, ReusePolicy, Stats,
+};
+use crate::runtime::session::Session;
 use flume::{Receiver, Sender, bounded, unbounded};
 use mrun_engine::{Engine, MemoryBudget, ModelInfo};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -20,8 +24,18 @@ enum Command {
     Generate {
         request: GenerateRequest,
         events: Sender<Event>,
+        finished: Sender<Finished>,
     },
     Reset,
+}
+
+impl std::fmt::Debug for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Generate { .. } => f.write_str("Generate"),
+            Self::Reset => f.write_str("Reset"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -31,12 +45,22 @@ pub struct EngineHandle {
     budget: MemoryBudget,
 }
 
-impl std::fmt::Debug for Command {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Generate { .. } => f.write_str("Generate"),
-            Self::Reset => f.write_str("Reset"),
-        }
+/// Receivers of one request: drain `events` (closed at the finish), then read `finished`.
+#[derive(Debug)]
+pub struct Generation {
+    pub events: Receiver<Event>,
+    pub finished: Receiver<Finished>,
+}
+
+impl Generation {
+    /// Blocks until the request ends, collecting its events.
+    pub fn wait(self) -> Result<(Vec<Event>, Finished), String> {
+        let events = self.events.iter().collect();
+        let finished = self
+            .finished
+            .recv()
+            .map_err(|_| "the engine thread has stopped".to_string())?;
+        Ok((events, finished))
     }
 }
 
@@ -85,13 +109,21 @@ impl EngineHandle {
         &self.budget
     }
 
-    /// Queues a request; events arrive on the returned receiver, ending with `Finished`.
-    pub fn generate(&self, request: GenerateRequest) -> Result<Receiver<Event>, String> {
-        let (events, receiver) = bounded(EVENT_CAPACITY);
+    /// Queues a request.
+    pub fn generate(&self, request: GenerateRequest) -> Result<Generation, String> {
+        let (events, events_rx) = bounded(EVENT_CAPACITY);
+        let (finished, finished_rx) = bounded(1);
         self.commands
-            .send(Command::Generate { request, events })
+            .send(Command::Generate {
+                request,
+                events,
+                finished,
+            })
             .map_err(|_| "the engine thread has stopped".to_string())?;
-        Ok(receiver)
+        Ok(Generation {
+            events: events_rx,
+            finished: finished_rx,
+        })
     }
 
     /// Forgets the conversation state.
@@ -105,20 +137,16 @@ impl EngineHandle {
 struct ChannelSink {
     events: Sender<Event>,
     stall_timeout: Duration,
-    /// Set once the consumer disconnected or stalled; later events are offered without waiting.
+    /// Set once the consumer disconnected or stalled; nothing more is sent to it.
     gone: bool,
 }
 
 impl EventSink for ChannelSink {
     fn send(&mut self, event: Event) -> bool {
-        if self.gone {
-            // `Finished` still reaches a consumer that has room again; nothing blocks the engine.
-            let _ = self.events.try_send(event);
-            return false;
+        if !self.gone {
+            self.gone = self.events.send_timeout(event, self.stall_timeout).is_err();
         }
-        let delivered = self.events.send_timeout(event, self.stall_timeout).is_ok();
-        self.gone = !delivered;
-        delivered
+        !self.gone
     }
 }
 
@@ -131,7 +159,11 @@ fn worker<E: Engine>(
     let mut session = Session::default();
     for command in inbox {
         match command {
-            Command::Generate { request, events } => {
+            Command::Generate {
+                request,
+                events,
+                finished,
+            } => {
                 let mut sink = ChannelSink {
                     events,
                     stall_timeout,
@@ -139,17 +171,21 @@ fn worker<E: Engine>(
                 };
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
                     let mut detok = tokenizer.stream();
-                    generate::generate(engine, &mut session, &mut detok, request, &mut sink);
+                    generate::generate(engine, &mut session, &mut detok, request, &mut sink)
                 }));
-                if outcome.is_err() {
-                    // A panic left engine state unknown: start over and tell the consumer.
+                // Close the event stream first so a consumer draining it moves on to `Finished`.
+                drop(sink);
+                let done = outcome.unwrap_or_else(|_| {
+                    // A panic left the engine state unknown: start over.
                     session.clear(engine);
-                    sink.send(Event::Finished {
-                        reason: generate::FinishReason::Error("internal error; state reset".into()),
+                    Finished {
+                        reason: FinishReason::Error("internal error; state reset".into()),
                         prefilled: 0,
-                        stats: generate::Stats::default(),
-                    });
-                }
+                        stats: Stats::default(),
+                    }
+                });
+                // The slot is empty and never waited on; this fails only if the consumer left.
+                let _ = finished.try_send(done);
             }
             Command::Reset => session.clear(engine),
         }
@@ -160,9 +196,11 @@ fn worker<E: Engine>(
 mod tests {
     use super::*;
     use crate::chat::tokenizer::test_support::byte_tokenizer;
-    use crate::runtime::generate::FinishReason;
     use crate::runtime::scripted::ScriptedEngine;
     use mrun_engine::{CancelToken, Sampling};
+    use std::future::Future;
+    use std::pin::pin;
+    use std::task::{Context, Poll, Wake, Waker};
 
     fn request(tokenizer: &Tokenizer, prompt: &str) -> GenerateRequest {
         GenerateRequest {
@@ -171,37 +209,113 @@ mod tests {
             max_tokens: 100,
             stop: Vec::new(),
             cancel: CancelToken::new(),
+            generation_start: None,
         }
     }
 
-    #[test]
-    fn worker_streams_events_and_survives_a_dropped_consumer() {
+    fn spawn(
+        engine: impl FnOnce() -> ScriptedEngine + Send + 'static,
+    ) -> (EngineHandle, Arc<Tokenizer>) {
         let tokenizer = Arc::new(byte_tokenizer());
-        let script = tokenizer.encode(&"z".repeat(200)).unwrap();
         let handle = EngineHandle::spawn(
-            move || Ok(ScriptedEngine::new(script, 10_000)),
+            move || Ok(engine()),
             tokenizer.clone(),
             Duration::from_millis(50),
         )
         .unwrap();
+        (handle, tokenizer)
+    }
+
+    fn long_script(tokenizer: &Tokenizer) -> Vec<u32> {
+        tokenizer.encode(&"z".repeat(200)).unwrap()
+    }
+
+    #[test]
+    fn worker_streams_events_and_survives_a_dropped_consumer() {
+        let script = long_script(&byte_tokenizer());
+        let (handle, tokenizer) = spawn(move || ScriptedEngine::new(script, 10_000));
         assert_eq!(handle.info().identity, "scripted");
 
-        // A consumer that never reads: the request is cancelled after the stall timeout.
-        let abandoned = handle.generate(request(&tokenizer, "first")).unwrap();
-        drop(abandoned);
+        drop(handle.generate(request(&tokenizer, "first")).unwrap());
 
-        let events: Vec<_> = handle
+        let (events, finished) = handle
             .generate(request(&tokenizer, "second"))
             .unwrap()
-            .iter()
-            .collect();
-        assert!(matches!(
-            events.last(),
-            Some(Event::Finished {
-                reason: FinishReason::Length,
-                ..
-            })
-        ));
+            .wait()
+            .unwrap();
+        assert_eq!(finished.reason, FinishReason::Length);
+        assert!(matches!(events[0], Event::Started { .. }));
+    }
+
+    #[test]
+    fn finished_arrives_although_the_consumer_never_reads_events() {
+        let script = long_script(&byte_tokenizer());
+        let (handle, tokenizer) = spawn(move || ScriptedEngine::new(script, 10_000));
+        let stalled = handle.generate(request(&tokenizer, "q")).unwrap();
+        let finished = stalled.finished.recv().unwrap();
+        assert_eq!(finished.reason, FinishReason::Cancelled);
+        assert_eq!(stalled.events.len(), EVENT_CAPACITY);
+        // The worker keeps serving.
+        let (_, next) = handle
+            .generate(request(&tokenizer, "again"))
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(next.reason, FinishReason::Length);
+    }
+
+    #[test]
+    fn a_panic_finishes_with_an_error_and_the_worker_survives() {
+        let (handle, tokenizer) = spawn(|| {
+            let mut engine = ScriptedEngine::new(Vec::new(), 100);
+            engine.panic_on_forward = true;
+            engine
+        });
+        for _ in 0..2 {
+            let (_, finished) = handle
+                .generate(request(&tokenizer, "q"))
+                .unwrap()
+                .wait()
+                .unwrap();
+            assert!(matches!(finished.reason, FinishReason::Error(_)));
+            assert_eq!(finished.prefilled, 0);
+        }
+    }
+
+    #[test]
+    fn async_consumer_receives_events_and_finished() {
+        struct Unpark(thread::Thread);
+        impl Wake for Unpark {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        fn block_on<T>(future: impl Future<Output = T>) -> T {
+            let waker = Waker::from(Arc::new(Unpark(thread::current())));
+            let mut context = Context::from_waker(&waker);
+            let mut future = pin!(future);
+            loop {
+                match future.as_mut().poll(&mut context) {
+                    Poll::Ready(value) => return value,
+                    Poll::Pending => thread::park(),
+                }
+            }
+        }
+
+        let script = byte_tokenizer().encode("hey").unwrap();
+        let (handle, tokenizer) = spawn(move || ScriptedEngine::new(script, 1_000));
+        let generation = handle.generate(request(&tokenizer, "q")).unwrap();
+        let (text, finished) = block_on(async {
+            let mut text = String::new();
+            while let Ok(event) = generation.events.recv_async().await {
+                if let Event::Token { text: piece, .. } = event {
+                    text.push_str(&piece);
+                }
+            }
+            (text, generation.finished.recv_async().await.unwrap())
+        });
+        assert_eq!(text, "hey");
+        assert_eq!(finished.reason, FinishReason::Stop { stop: None });
     }
 
     #[test]

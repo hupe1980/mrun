@@ -47,15 +47,13 @@ struct RunArgs {
     /// Let models that support it think before answering.
     #[arg(long)]
     think: bool,
-    /// Prompt-processing chunk size in tokens.
-    #[arg(long, default_value_t = 2048)]
-    chunk: u32,
     /// Fraction of physical memory mrun may plan with.
     #[arg(long, default_value_t = 0.75)]
     memory_fraction: f64,
-    /// Memory kept free for other applications and mrun's host heap, in GiB.
-    #[arg(long, default_value_t = 8)]
-    reserve_gib: u64,
+    /// Memory kept free for other applications and mrun's host heap, in GiB
+    /// [default: physical memory / 6, clamped to 2..=8].
+    #[arg(long)]
+    reserve_gib: Option<u64>,
     /// Allow a budget above the automatic one.
     #[arg(long)]
     allow_over: bool,

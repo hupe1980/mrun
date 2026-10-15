@@ -1,9 +1,10 @@
-//! The generation loop, generic over [`Engine`]: admission, prefill of all but the
-//! last prompt token, decode with stop and UTF-8 handling, exactly one `Finished` event.
+//! The per-request generation loop, generic over [`Engine`] and a [`ReusePolicy`]: admission,
+//! reuse, prefill of all but the last prompt token, pipelined decode with stop and UTF-8
+//! handling, and a finish that leaves the state holding committed tokens only.
 
 use crate::chat::stop::StopMatcher;
 use crate::chat::tokenizer::StreamDecoder;
-use mrun_engine::{CancelToken, Engine, EngineError, Sampling};
+use mrun_engine::{CancelToken, Checkpoint, Engine, EngineError, PrefillPlan, Sampling};
 use std::time::{Duration, Instant};
 
 /// Receives events; returns `false` when the consumer is gone (the request is then cancelled).
@@ -26,6 +27,8 @@ pub struct GenerateRequest {
     pub max_tokens: u32,
     pub stop: Vec<String>,
     pub cancel: CancelToken,
+    /// Position where the generation header starts; hybrids checkpoint there for the next turn.
+    pub generation_start: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,7 +41,7 @@ pub enum FinishReason {
     Cancelled,
     /// Refused before any processing (capacity, invalid input).
     Rejected(String),
-    /// The engine failed; the session was reset.
+    /// The engine failed; the state was reset.
     Error(String),
 }
 
@@ -59,6 +62,7 @@ pub enum Event {
     Started {
         prompt: u32,
         cached: u32,
+        max_tokens: u32,
     },
     Progress {
         done: u32,
@@ -68,221 +72,325 @@ pub enum Event {
         id: u32,
         text: String,
     },
-    Finished {
-        reason: FinishReason,
-        /// Prompt tokens held in the attention state when the request ended.
-        prefilled: u32,
-        stats: Stats,
-    },
 }
 
-/// The conversation state mirrored from the engine: exactly the tokens in its active cache.
+/// The single final report of a request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Finished {
+    pub reason: FinishReason,
+    /// Prompt tokens held in the state when the request ended.
+    pub prefilled: u32,
+    pub stats: Stats,
+}
+
+/// Owned form of a [`PrefillPlan`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ChunkPlan {
+    pub boundaries: Vec<u32>,
+    pub checkpoints: Vec<u32>,
+}
+
+impl ChunkPlan {
+    pub fn as_plan(&self) -> PrefillPlan<'_> {
+        PrefillPlan {
+            boundaries: &self.boundaries,
+            checkpoints: &self.checkpoints,
+        }
+    }
+}
+
+/// Decides which state a request reuses and what is kept after it.
+pub trait ReusePolicy {
+    /// Leaves the engine holding a prefix of the prompt of at most `prompt.len() − 1` tokens
+    /// and returns its length.
+    fn prepare(
+        &mut self,
+        engine: &mut dyn Engine,
+        request: &GenerateRequest,
+    ) -> Result<u32, EngineError>;
+    /// Chunk ends and checkpoints for prefilling the prompt from `keep`.
+    fn plan(&self, engine: &dyn Engine, request: &GenerateRequest, keep: u32) -> ChunkPlan;
+    /// Frees cached state after `NeedsMemory{bytes}`; `false` when nothing is left to free.
+    fn evict(&mut self, engine: &mut dyn Engine, bytes: u64) -> bool;
+    /// Prefill paused for memory pressure; it resumes when this returns.
+    fn on_yield(&mut self, _engine: &mut dyn Engine) {}
+    /// Records a finished request. The engine holds `committed[..target]` (plus possibly
+    /// uncommitted tokens beyond it); the policy cuts it to a prefix of `committed`, takes
+    /// ownership of `captured` and returns the length the state holds.
+    fn commit(
+        &mut self,
+        engine: &mut dyn Engine,
+        committed: &[u32],
+        target: u32,
+        captured: Vec<Checkpoint>,
+    ) -> u32;
+    /// Forgets all state (after an engine error or a panic).
+    fn clear(&mut self, engine: &mut dyn Engine);
+}
+
+/// Progress of one request, used to decide what is committed at the finish.
 #[derive(Debug, Default)]
-pub struct Session {
-    kv_tokens: Vec<u32>,
+struct Turn {
+    /// Prompt tokens confirmed in the state.
+    prefilled: u32,
+    /// The last prompt token has been fed.
+    decoding: bool,
+    /// Output tokens fed and confirmed.
+    forwarded: u32,
+    /// Sampled output tokens (EOS excluded).
+    output: Vec<u32>,
+    /// Byte offset in the decoded text where each output token's text ends, once complete.
+    text_ends: Vec<usize>,
+    decoded_bytes: usize,
+    emitted_bytes: usize,
+    captured: Vec<Checkpoint>,
 }
 
-impl Session {
-    pub fn tokens(&self) -> &[u32] {
-        &self.kv_tokens
-    }
-
-    pub fn clear<E: Engine>(&mut self, engine: &mut E) {
-        engine.reset();
-        self.kv_tokens.clear();
+impl Turn {
+    /// Output tokens whose text was fully emitted.
+    fn committed_output(&self) -> usize {
+        self.text_ends
+            .iter()
+            .take_while(|&&end| end <= self.emitted_bytes)
+            .count()
     }
 }
 
-/// Runs one request to completion and sends exactly one `Finished` event.
-pub fn generate<E: Engine>(
+/// Runs one request to completion; the result is its only `Finished`.
+pub fn generate<E: Engine, P: ReusePolicy>(
     engine: &mut E,
-    session: &mut Session,
+    policy: &mut P,
     detok: &mut StreamDecoder<'_>,
     request: GenerateRequest,
     sink: &mut dyn EventSink,
-) {
+) -> Finished {
     let mut stats = Stats {
         prompt_tokens: request.prompt.len() as u32,
         ..Stats::default()
     };
-    let mut prefilled = 0;
-    let reason = run(
-        engine,
-        session,
-        detok,
-        &request,
-        sink,
-        &mut stats,
-        &mut prefilled,
-    );
-    if matches!(reason, FinishReason::Error(_)) {
-        session.clear(engine);
-        prefilled = 0;
-    }
-    sink.send(Event::Finished {
+    let mut turn = Turn::default();
+    let reason = match run(engine, policy, detok, &request, sink, &mut stats, &mut turn) {
+        Ok(reason) => reason,
+        Err(message) => FinishReason::Error(message),
+    };
+    let prefilled = match reason {
+        FinishReason::Rejected(_) => 0,
+        FinishReason::Error(_) => {
+            for checkpoint in turn.captured {
+                engine.drop_checkpoint(checkpoint.id);
+            }
+            policy.clear(engine);
+            0
+        }
+        _ => {
+            let prompt = &request.prompt;
+            let shown = turn.committed_output();
+            let mut committed = prompt.clone();
+            committed.extend_from_slice(&turn.output[..shown]);
+            let target = if turn.decoding {
+                prompt.len() as u32 + turn.forwarded.min(shown as u32)
+            } else {
+                turn.prefilled
+            };
+            let reached = policy.commit(engine, &committed, target, turn.captured);
+            reached.min(prompt.len() as u32)
+        }
+    };
+    Finished {
         reason,
         prefilled,
         stats,
-    });
+    }
 }
 
-fn run<E: Engine>(
+/// Retries `op` after the policy evicts, while `NeedsMemory` can be satisfied.
+fn with_memory<E: Engine, P: ReusePolicy, T>(
     engine: &mut E,
-    session: &mut Session,
+    policy: &mut P,
+    mut op: impl FnMut(&mut E) -> Result<T, EngineError>,
+) -> Result<T, String> {
+    loop {
+        match op(engine) {
+            Err(EngineError::NeedsMemory { bytes }) if policy.evict(engine, bytes) => {}
+            result => return result.map_err(|error| error.to_string()),
+        }
+    }
+}
+
+/// Returns the finish reason, or `Err` with a message when the engine failed.
+fn run<E: Engine, P: ReusePolicy>(
+    engine: &mut E,
+    policy: &mut P,
     detok: &mut StreamDecoder<'_>,
     request: &GenerateRequest,
     sink: &mut dyn EventSink,
     stats: &mut Stats,
-    prefilled: &mut u32,
-) -> FinishReason {
+    turn: &mut Turn,
+) -> Result<FinishReason, String> {
     let prompt = &request.prompt;
+    let cancel = &request.cancel;
     if prompt.is_empty() {
-        return FinishReason::Rejected("the prompt is empty".into());
+        return Ok(FinishReason::Rejected("the prompt is empty".into()));
     }
     if request.max_tokens == 0 {
-        return FinishReason::Rejected("max tokens must be at least 1".into());
+        return Ok(FinishReason::Rejected(
+            "max tokens must be at least 1".into(),
+        ));
     }
     if let Err(message) = request.sampling.validate() {
-        return FinishReason::Rejected(message);
+        return Ok(FinishReason::Rejected(message));
     }
     let mut matcher = match StopMatcher::new(request.stop.clone()) {
         Ok(matcher) => matcher,
-        Err(error) => return FinishReason::Rejected(error.to_string()),
+        Err(error) => return Ok(FinishReason::Rejected(error.to_string())),
     };
-    // Refuse only a prompt that leaves no room for one output token; otherwise clamp the
-    // output limit to what fits, so large client defaults never turn away a turn that fits.
+    // Refuse only a prompt that leaves no room for one output token; clamp the output limit.
     let capacity = engine.budget().kv_capacity_tokens;
     let Some(room) = u32::try_from(prompt.len())
         .ok()
         .and_then(|len| capacity.checked_sub(len))
         .filter(|room| *room > 0)
     else {
-        return FinishReason::Rejected(
-            EngineError::Capacity {
-                requested: (prompt.len() as u64 + 1).min(u64::from(u32::MAX)) as u32,
-                available: capacity,
-            }
-            .to_string(),
-        );
+        let requested = (prompt.len() as u64 + 1).min(u64::from(u32::MAX)) as u32;
+        let error = EngineError::Capacity {
+            requested,
+            available: capacity,
+        };
+        return Ok(FinishReason::Rejected(error.to_string()));
     };
-    let max_tokens = request.max_tokens.min(room);
-    stats.max_tokens = max_tokens;
+    let len = prompt.len() as u32;
+    let limit = request.max_tokens.min(room);
+    stats.max_tokens = limit;
 
-    // Admit before touching the cache, so a rejected request leaves the conversation intact.
-    match engine.reserve(prompt.len() as u32 + max_tokens) {
-        Ok(()) => {}
-        Err(error @ EngineError::Capacity { .. }) => {
-            return FinishReason::Rejected(error.to_string());
-        }
-        Err(error) => return FinishReason::Error(error.to_string()),
-    }
-
-    // Reuse the longest exact prefix, always leaving the last prompt token to process.
-    let common = session
-        .kv_tokens
-        .iter()
-        .zip(prompt)
-        .take_while(|(a, b)| a == b)
-        .count()
-        .min(prompt.len() - 1);
-    engine.trim(common as u32);
-    session.kv_tokens.truncate(common);
-    *prefilled = common as u32;
-    stats.cached_tokens = common as u32;
+    let keep = policy
+        .prepare(engine, request)
+        .map_err(|error| error.to_string())?;
+    turn.prefilled = keep;
+    engine
+        .reserve(keep, len + limit)
+        .map_err(|error| error.to_string())?;
+    stats.cached_tokens = keep;
     if !sink.send(Event::Started {
-        prompt: prompt.len() as u32,
-        cached: common as u32,
+        prompt: len,
+        cached: keep,
+        max_tokens: limit,
     }) {
-        return FinishReason::Cancelled;
+        return Ok(FinishReason::Cancelled);
     }
 
     let started = Instant::now();
-    let pending = &prompt[common..prompt.len() - 1];
-    let total_pending = pending.len() as u32;
+    let plan = policy.plan(engine, request, keep);
+    let pending = &prompt[keep as usize..prompt.len() - 1];
+    let total = pending.len() as u32;
+    let mut done = 0;
     let mut consumer_gone = false;
-    let done = match engine.prefill(pending, &request.cancel, &mut |done| {
-        if !consumer_gone
-            && !sink.send(Event::Progress {
-                done,
-                total: total_pending,
-            })
-        {
-            consumer_gone = true;
-            request.cancel.cancel();
+    while done < total {
+        let filled = with_memory(engine, policy, |engine| {
+            engine.prefill(
+                &pending[done as usize..],
+                &plan.as_plan(),
+                cancel,
+                &mut |n| {
+                    if !consumer_gone
+                        && !sink.send(Event::Progress {
+                            done: done + n,
+                            total,
+                        })
+                    {
+                        consumer_gone = true;
+                        cancel.cancel();
+                    }
+                },
+            )
+        })?;
+        done += filled.committed;
+        turn.prefilled = keep + done;
+        turn.captured.extend(filled.checkpoints);
+        if filled.yielded {
+            cancel.clear_yield();
+            policy.on_yield(engine);
+        } else if done < total {
+            return Ok(FinishReason::Cancelled);
         }
-    }) {
-        Ok(done) => done as usize,
-        Err(error) => return FinishReason::Error(error.to_string()),
-    };
-    session.kv_tokens.extend_from_slice(&pending[..done]);
-    *prefilled = (common + done) as u32;
-    if done < pending.len() {
-        return FinishReason::Cancelled;
     }
 
     let eos = engine.info().eos_tokens.clone();
     let mut last = prompt[prompt.len() - 1];
     let mut decode_started = None;
     loop {
-        if request.cancel.is_cancelled() {
-            return FinishReason::Cancelled;
+        if cancel.is_cancelled() {
+            return Ok(FinishReason::Cancelled);
         }
-        let next = match engine.decode(last, &request.sampling, None) {
-            Ok(next) => next,
-            Err(error) => return FinishReason::Error(error.to_string()),
-        };
-        session.kv_tokens.push(last);
+        let step = with_memory(engine, policy, |engine| engine.forward(last))?;
+        if turn.decoding {
+            turn.forwarded += 1;
+        } else {
+            turn.decoding = true;
+            turn.prefilled = len;
+        }
+        let pipeline = limit - stats.generated_tokens > 1;
+        let next = engine
+            .sample(step, &request.sampling, None, pipeline)
+            .map_err(|error| error.to_string())?;
         if decode_started.is_none() {
-            // The first decode step processes the last prompt token.
-            *prefilled = session.kv_tokens.len() as u32;
-            let elapsed = started.elapsed().as_secs_f64();
-            if elapsed > 0.0 {
-                stats.prefill_tps = (prompt.len() - common) as f64 / elapsed;
-            }
             // Time to first token: the first sampled token, even if its text is held back.
-            stats.ttft = Some(started.elapsed());
+            let elapsed = started.elapsed();
+            stats.ttft = Some(elapsed);
+            if elapsed.as_secs_f64() > 0.0 {
+                stats.prefill_tps = f64::from(len - keep) / elapsed.as_secs_f64();
+            }
             decode_started = Some(Instant::now());
         }
         if eos.contains(&next) {
-            flush(&mut matcher, next, sink);
-            return finish_decode(stats, decode_started, FinishReason::Stop { stop: None });
+            flush(&mut matcher, next, sink, turn);
+            return Ok(finish_decode(
+                stats,
+                decode_started,
+                FinishReason::Stop { stop: None },
+            ));
         }
         stats.generated_tokens += 1;
-        let text = match detok.step(next) {
-            Ok(text) => text,
-            Err(error) => return FinishReason::Error(error.to_string()),
-        };
-        if let Some(text) = text {
+        turn.output.push(next);
+        if let Some(text) = detok.step(next).map_err(|error| error.to_string())? {
+            turn.decoded_bytes += text.len();
+            let ends = turn.output.len() - turn.text_ends.len();
+            turn.text_ends
+                .extend(std::iter::repeat_n(turn.decoded_bytes, ends));
             let fed = matcher.feed(&text);
-            if !fed.emit.is_empty()
-                && !sink.send(Event::Token {
-                    id: next,
-                    text: fed.emit,
-                })
-            {
-                return FinishReason::Cancelled;
+            if !emit(sink, next, fed.emit, turn) {
+                return Ok(FinishReason::Cancelled);
             }
             if let Some(stop) = fed.stopped {
-                return finish_decode(
+                return Ok(finish_decode(
                     stats,
                     decode_started,
                     FinishReason::Stop { stop: Some(stop) },
-                );
+                ));
             }
         }
-        if stats.generated_tokens >= max_tokens {
-            flush(&mut matcher, next, sink);
-            return finish_decode(stats, decode_started, FinishReason::Length);
+        if stats.generated_tokens >= limit {
+            flush(&mut matcher, next, sink, turn);
+            return Ok(finish_decode(stats, decode_started, FinishReason::Length));
         }
         last = next;
     }
 }
 
-fn flush(matcher: &mut StopMatcher, id: u32, sink: &mut dyn EventSink) {
-    let rest = matcher.finish();
-    if !rest.is_empty() {
-        sink.send(Event::Token { id, text: rest });
+/// Sends `text` (if any); `false` when the consumer is gone.
+fn emit(sink: &mut dyn EventSink, id: u32, text: String, turn: &mut Turn) -> bool {
+    if text.is_empty() {
+        return true;
     }
+    let bytes = text.len();
+    let delivered = sink.send(Event::Token { id, text });
+    if delivered {
+        turn.emitted_bytes += bytes;
+    }
+    delivered
+}
+
+fn flush(matcher: &mut StopMatcher, id: u32, sink: &mut dyn EventSink, turn: &mut Turn) {
+    emit(sink, id, matcher.finish(), turn);
 }
 
 fn finish_decode(
@@ -304,16 +412,20 @@ mod tests {
     use super::*;
     use crate::chat::tokenizer::Tokenizer;
     use crate::chat::tokenizer::test_support::byte_tokenizer;
-    use crate::runtime::scripted::ScriptedEngine;
+    use crate::runtime::scripted::{KV_BYTES, ScriptedEngine};
+    use crate::runtime::session::Session;
+
+    const RB: u64 = 1_000;
 
     struct Run {
         events: Vec<Event>,
+        finished: Finished,
         engine: ScriptedEngine,
         session: Session,
     }
 
-    fn ids(tokenizer: &Tokenizer, text: &str) -> Vec<u32> {
-        tokenizer.encode(text).unwrap()
+    fn ids(text: &str) -> Vec<u32> {
+        byte_tokenizer().encode(text).unwrap()
     }
 
     fn request(prompt: Vec<u32>, max_tokens: u32) -> GenerateRequest {
@@ -323,48 +435,44 @@ mod tests {
             max_tokens,
             stop: Vec::new(),
             cancel: CancelToken::new(),
+            generation_start: None,
         }
+    }
+
+    fn generate_into(
+        engine: &mut ScriptedEngine,
+        session: &mut Session,
+        tokenizer: &Tokenizer,
+        request: GenerateRequest,
+        sink: &mut dyn EventSink,
+    ) -> Finished {
+        let finished = generate(engine, session, &mut tokenizer.stream(), request, sink);
+        assert_eq!(
+            engine.tokens(),
+            session.tokens(),
+            "session mirrors the state"
+        );
+        assert!(!engine.has_pending());
+        assert!(session.committed().starts_with(session.tokens()));
+        finished
     }
 
     fn run_with(engine: ScriptedEngine, session: Session, request: GenerateRequest) -> Run {
-        let tokenizer = byte_tokenizer();
-        let mut engine = engine;
-        let mut session = session;
+        let (mut engine, mut session) = (engine, session);
         let mut events = Vec::new();
-        generate(
+        let finished = generate_into(
             &mut engine,
             &mut session,
-            &mut tokenizer.stream(),
+            &byte_tokenizer(),
             request,
             &mut events,
         );
-        assert_eq!(
-            engine.active_tokens(),
-            session.tokens(),
-            "session mirrors the engine cache"
-        );
         Run {
             events,
+            finished,
             engine,
             session,
         }
-    }
-
-    fn finished(events: &[Event]) -> (&FinishReason, u32, &Stats) {
-        let finished: Vec<_> = events
-            .iter()
-            .filter_map(|event| match event {
-                Event::Finished {
-                    reason,
-                    prefilled,
-                    stats,
-                } => Some((reason, *prefilled, stats)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(finished.len(), 1, "exactly one Finished: {events:?}");
-        assert!(matches!(events.last(), Some(Event::Finished { .. })));
-        finished[0]
     }
 
     fn text(events: &[Event]) -> String {
@@ -377,85 +485,88 @@ mod tests {
             .collect()
     }
 
+    fn concat(parts: &[&[u32]]) -> Vec<u32> {
+        parts.concat()
+    }
+
     #[test]
     fn streams_text_until_eos_and_reports_stats() {
-        let tokenizer = byte_tokenizer();
-        let engine = ScriptedEngine::new(ids(&tokenizer, "Hi €!"), 1_000);
         let run = run_with(
-            engine,
+            ScriptedEngine::new(ids("Hi €!"), 1_000),
             Session::default(),
-            request(ids(&tokenizer, "hello"), 50),
+            request(ids("hello"), 50),
         );
         assert_eq!(text(&run.events), "Hi €!");
-        let (reason, prefilled, stats) = finished(&run.events);
+        let Finished {
+            reason,
+            prefilled,
+            stats,
+        } = &run.finished;
         assert_eq!(*reason, FinishReason::Stop { stop: None });
-        assert_eq!(prefilled, 5);
-        assert_eq!(stats.prompt_tokens, 5);
-        assert_eq!(stats.generated_tokens, 7);
+        assert_eq!(*prefilled, 5);
+        assert_eq!((stats.prompt_tokens, stats.generated_tokens), (5, 7));
+        assert_eq!(stats.max_tokens, 50);
         assert!(stats.ttft.is_some());
         assert_eq!(
             run.events[0],
             Event::Started {
                 prompt: 5,
-                cached: 0
+                cached: 0,
+                max_tokens: 50
             }
         );
+        // The pipelined EOS step was trimmed; prompt and reply stay.
+        assert_eq!(run.session.tokens(), ids("helloHi €!"));
     }
 
     #[test]
     fn follow_up_turn_processes_only_new_tokens() {
-        let tokenizer = byte_tokenizer();
-        let engine = ScriptedEngine::new(ids(&tokenizer, "ok"), 1_000);
         let first = run_with(
-            engine,
+            ScriptedEngine::new(ids("ok"), 1_000),
             Session::default(),
-            request(ids(&tokenizer, "abc"), 10),
+            request(ids("abc"), 10),
         );
-        let mut prompt = first.session.tokens().to_vec();
-        prompt.extend(ids(&tokenizer, "ok xyz"));
+        let prompt = concat(&[first.session.tokens(), &ids(" xyz")]);
         let mut engine = first.engine;
         engine.processed.clear();
         let second = run_with(engine, first.session, request(prompt.clone(), 10));
-        // The session holds "abc" plus the generated "ok" (the EOS token is never fed).
         assert_eq!(
             second.events[0],
             Event::Started {
                 prompt: prompt.len() as u32,
-                cached: 5
+                cached: 5,
+                max_tokens: 10
             }
         );
-        assert_eq!(second.engine.processed.len(), prompt.len() - 5);
+        assert!(second.engine.processed.starts_with(&prompt[5..]));
     }
 
     #[test]
     fn edited_history_reuses_only_the_common_prefix() {
-        let tokenizer = byte_tokenizer();
-        let engine = ScriptedEngine::new(Vec::new(), 1_000);
         let first = run_with(
-            engine,
+            ScriptedEngine::new(Vec::new(), 1_000),
             Session::default(),
-            request(ids(&tokenizer, "abcdef"), 1),
+            request(ids("abcdef"), 1),
         );
-        let second = run_with(
-            first.engine,
-            first.session,
-            request(ids(&tokenizer, "abXdef"), 1),
-        );
+        let second = run_with(first.engine, first.session, request(ids("abXdef"), 1));
         assert_eq!(
             second.events[0],
             Event::Started {
                 prompt: 6,
-                cached: 2
+                cached: 2,
+                max_tokens: 1
             }
         );
     }
 
     #[test]
     fn identical_prompt_reprocesses_only_the_last_token() {
-        let tokenizer = byte_tokenizer();
-        let engine = ScriptedEngine::new(Vec::new(), 1_000);
-        let prompt = ids(&tokenizer, "same prompt");
-        let first = run_with(engine, Session::default(), request(prompt.clone(), 1));
+        let prompt = ids("same prompt");
+        let first = run_with(
+            ScriptedEngine::new(Vec::new(), 1_000),
+            Session::default(),
+            request(prompt.clone(), 1),
+        );
         let mut engine = first.engine;
         engine.processed.clear();
         let second = run_with(engine, first.session, request(prompt.clone(), 1));
@@ -463,89 +574,99 @@ mod tests {
     }
 
     #[test]
-    fn stop_sequence_ends_generation_without_showing_it() {
-        let tokenizer = byte_tokenizer();
-        let engine = ScriptedEngine::new(ids(&tokenizer, "answer</done>more"), 1_000);
-        let mut req = request(ids(&tokenizer, "q"), 50);
+    fn stop_sequence_is_neither_shown_nor_committed() {
+        let mut req = request(ids("q"), 50);
         req.stop = vec!["</done>".into()];
-        let run = run_with(engine, Session::default(), req);
+        let run = run_with(
+            ScriptedEngine::new(ids("answer</done>more"), 1_000),
+            Session::default(),
+            req,
+        );
         assert_eq!(text(&run.events), "answer");
-        let (reason, _, _) = finished(&run.events);
         assert_eq!(
-            *reason,
+            run.finished.reason,
             FinishReason::Stop {
                 stop: Some("</done>".into())
             }
         );
+        assert_eq!(run.session.committed(), ids("qanswer"));
+        assert_eq!(run.session.tokens(), ids("qanswer"));
     }
 
     #[test]
-    fn output_limit_ends_with_length() {
-        let tokenizer = byte_tokenizer();
-        let engine = ScriptedEngine::new(ids(&tokenizer, "abcdefgh"), 1_000);
-        let run = run_with(engine, Session::default(), request(ids(&tokenizer, "q"), 3));
+    fn output_limit_ends_with_length_and_keeps_the_fed_tokens() {
+        let run = run_with(
+            ScriptedEngine::new(ids("abcdefgh"), 1_000),
+            Session::default(),
+            request(ids("q"), 3),
+        );
         assert_eq!(text(&run.events), "abc");
-        let (reason, _, stats) = finished(&run.events);
-        assert_eq!(*reason, FinishReason::Length);
-        assert_eq!(stats.generated_tokens, 3);
+        assert_eq!(run.finished.reason, FinishReason::Length);
+        assert_eq!(run.finished.stats.generated_tokens, 3);
+        assert_eq!(run.session.committed(), ids("qabc"));
+        // The last sampled token was never fed.
+        assert_eq!(run.session.tokens(), ids("qab"));
+    }
+
+    #[test]
+    fn incomplete_character_is_neither_shown_nor_committed() {
+        let run = run_with(
+            ScriptedEngine::new(ids("a€"), 1_000),
+            Session::default(),
+            request(ids("q"), 2),
+        );
+        assert_eq!(text(&run.events), "a");
+        assert_eq!(run.session.committed(), ids("qa"));
     }
 
     #[test]
     fn output_limit_is_clamped_to_capacity() {
-        let tokenizer = byte_tokenizer();
-        let prompt = ids(&tokenizer, "0123456789");
         let run = run_with(
-            ScriptedEngine::new(ids(&tokenizer, "xyz"), 12),
+            ScriptedEngine::new(ids("xyz"), 12),
             Session::default(),
-            request(prompt, 100),
+            request(ids("0123456789"), 100),
         );
-        let (reason, _, stats) = finished(&run.events);
-        assert_eq!(*reason, FinishReason::Length);
-        assert_eq!(stats.max_tokens, 2);
-        assert_eq!(stats.generated_tokens, 2);
+        assert_eq!(run.finished.reason, FinishReason::Length);
+        assert_eq!(run.finished.stats.max_tokens, 2);
+        assert_eq!(run.finished.stats.generated_tokens, 2);
     }
 
     #[test]
     fn prompt_without_room_for_output_is_rejected() {
-        let tokenizer = byte_tokenizer();
-        let prompt = ids(&tokenizer, "0123456789");
+        let prompt = ids("0123456789");
         let at = run_with(
-            ScriptedEngine::new(ids(&tokenizer, "xyz"), 11),
+            ScriptedEngine::new(ids("xyz"), 11),
             Session::default(),
             request(prompt.clone(), 3),
         );
-        assert_eq!(*finished(&at.events).0, FinishReason::Length);
+        assert_eq!(at.finished.reason, FinishReason::Length);
         let over = run_with(
-            ScriptedEngine::new(ids(&tokenizer, "xyz"), 10),
+            ScriptedEngine::new(ids("xyz"), 10),
             Session::default(),
             request(prompt, 3),
         );
-        let (reason, prefilled, _) = finished(&over.events);
-        assert!(matches!(reason, FinishReason::Rejected(message) if message.contains("11 tokens")));
-        assert_eq!(prefilled, 0);
-        assert_eq!(
-            over.engine.processed.len(),
-            0,
-            "nothing processed when rejected"
+        assert!(
+            matches!(&over.finished.reason, FinishReason::Rejected(message) if message.contains("11 tokens"))
         );
+        assert_eq!(over.finished.prefilled, 0);
+        assert!(over.engine.processed.is_empty(), "nothing processed");
     }
 
     #[test]
     fn rejected_request_keeps_the_cached_conversation() {
-        let tokenizer = byte_tokenizer();
         let first = run_with(
             ScriptedEngine::new(Vec::new(), 20),
             Session::default(),
-            request(ids(&tokenizer, "abcdefgh"), 1),
+            request(ids("abcdefgh"), 1),
         );
         let cached = first.session.tokens().to_vec();
         let rejected = run_with(
             first.engine,
             first.session,
-            request(ids(&tokenizer, "0123456789abcdefghijk"), 1),
+            request(ids("0123456789abcdefghijk"), 1),
         );
         assert!(matches!(
-            finished(&rejected.events).0,
+            rejected.finished.reason,
             FinishReason::Rejected(_)
         ));
         assert_eq!(rejected.session.tokens(), cached);
@@ -553,81 +674,205 @@ mod tests {
 
     #[test]
     fn invalid_requests_are_rejected_up_front() {
-        let tokenizer = byte_tokenizer();
-        for (prompt, max_tokens) in [(Vec::new(), 5), (ids(&tokenizer, "q"), 0)] {
+        let mut bad_stop = request(ids("q"), 5);
+        bad_stop.stop = vec!["s".into(); 5];
+        let mut bad_sampling = request(ids("q"), 5);
+        bad_sampling.sampling.top_p = 0.0;
+        for req in [
+            request(Vec::new(), 5),
+            request(ids("q"), 0),
+            bad_stop,
+            bad_sampling,
+        ] {
             let run = run_with(
                 ScriptedEngine::new(Vec::new(), 100),
                 Session::default(),
-                request(prompt, max_tokens),
+                req,
             );
-            assert!(matches!(finished(&run.events).0, FinishReason::Rejected(_)));
+            assert!(matches!(run.finished.reason, FinishReason::Rejected(_)));
         }
-        let mut req = request(ids(&tokenizer, "q"), 5);
-        req.stop = vec!["s".into(); 5];
-        let run = run_with(
-            ScriptedEngine::new(Vec::new(), 100),
-            Session::default(),
-            req,
-        );
-        assert!(matches!(finished(&run.events).0, FinishReason::Rejected(_)));
     }
 
     #[test]
-    fn cancel_during_prefill_keeps_processed_prefix_consistent() {
-        let tokenizer = byte_tokenizer();
-        let mut engine = ScriptedEngine::new(ids(&tokenizer, "never"), 10_000);
-        engine.cancel_granularity = 100;
-        let prompt = ids(&tokenizer, &"x".repeat(1_000));
-        let req = request(prompt, 10);
-        let cancel = req.cancel.clone();
-        let mut session = Session::default();
-        let mut events = Vec::new();
-        struct CancelAfterProgress<'a>(&'a mut Vec<Event>, CancelToken);
-        impl EventSink for CancelAfterProgress<'_> {
+    fn cancel_mid_chunk_keeps_whole_chunks() {
+        let mut engine = ScriptedEngine::new_hybrid(ids("never"), 10_000, RB);
+        // Four layers per chunk: layer 6 is inside the second chunk.
+        engine.cancel_after_layers = Some(6);
+        let prompt = ids(&"x".repeat(1_000));
+        let mut req = request(prompt.clone(), 10);
+        req.generation_start = Some(400);
+        let run = run_with(engine, Session::default(), req);
+        assert_eq!(run.finished.reason, FinishReason::Cancelled);
+        assert_eq!(run.finished.prefilled, 400);
+        assert_eq!(run.session.tokens(), &prompt[..400]);
+        assert_eq!(run.session.checkpoints().len(), 1);
+        assert!(text(&run.events).is_empty());
+    }
+
+    #[test]
+    fn cancel_during_decode_keeps_exactly_the_shown_tokens() {
+        struct CancelAfterTokens(Vec<Event>, CancelToken);
+        impl EventSink for CancelAfterTokens {
             fn send(&mut self, event: Event) -> bool {
-                if matches!(event, Event::Progress { done: 200, .. }) {
+                self.0.push(event);
+                if self.0.len() == 3 {
                     self.1.cancel();
                 }
-                self.0.push(event);
                 true
             }
         }
-        generate(
-            &mut engine,
-            &mut session,
-            &mut tokenizer.stream(),
-            req,
-            &mut CancelAfterProgress(&mut events, cancel),
-        );
-        let (reason, prefilled, _) = finished(&events);
-        assert_eq!(*reason, FinishReason::Cancelled);
-        assert_eq!(prefilled, 200);
-        assert_eq!(engine.active_tokens(), session.tokens());
-        assert!(text(&events).is_empty());
+        let tokenizer = byte_tokenizer();
+        let req = request(ids("q"), 50);
+        let mut sink = CancelAfterTokens(Vec::new(), req.cancel.clone());
+        let mut engine = ScriptedEngine::new(ids("abcdef"), 1_000);
+        let mut session = Session::default();
+        let finished = generate_into(&mut engine, &mut session, &tokenizer, req, &mut sink);
+        assert_eq!(finished.reason, FinishReason::Cancelled);
+        assert_eq!(text(&sink.0), "ab");
+        assert_eq!(session.committed(), ids("qab"));
+        // "b" was only fed as a pending pipelined step.
+        assert_eq!(session.tokens(), ids("qa"));
     }
 
     #[test]
     fn consumer_gone_cancels() {
-        struct Gone(usize);
+        struct Gone;
         impl EventSink for Gone {
-            fn send(&mut self, event: Event) -> bool {
-                if let Event::Finished { reason, .. } = event {
-                    assert_eq!(reason, FinishReason::Cancelled);
-                    self.0 += 1;
-                }
+            fn send(&mut self, _: Event) -> bool {
                 false
             }
         }
         let tokenizer = byte_tokenizer();
-        let mut engine = ScriptedEngine::new(ids(&tokenizer, "abc"), 100);
-        let mut sink = Gone(0);
-        generate(
-            &mut engine,
+        let finished = generate_into(
+            &mut ScriptedEngine::new(ids("abc"), 100),
             &mut Session::default(),
-            &mut tokenizer.stream(),
-            request(ids(&tokenizer, "q"), 10),
-            &mut sink,
+            &tokenizer,
+            request(ids("q"), 10),
+            &mut Gone,
         );
-        assert_eq!(sink.0, 1);
+        assert_eq!(finished.reason, FinishReason::Cancelled);
+    }
+
+    #[test]
+    fn needs_memory_without_cache_to_evict_fails_and_resets() {
+        let first = run_with(
+            ScriptedEngine::new(ids("ok"), 10_000).with_state_capacity_bytes(300 * KV_BYTES),
+            Session::default(),
+            request(ids("abc"), 5),
+        );
+        assert_eq!(first.finished.reason, FinishReason::Stop { stop: None });
+        let failed = run_with(
+            first.engine,
+            first.session,
+            request(ids("abcdefghijklmnop"), 1_000),
+        );
+        assert!(
+            matches!(&failed.finished.reason, FinishReason::Error(message) if message.contains("bytes")),
+            "{:?}",
+            failed.finished.reason
+        );
+        assert_eq!(failed.finished.prefilled, 0);
+        assert!(failed.session.tokens().is_empty());
+        assert_eq!(failed.engine.allocated(), 0);
+    }
+
+    #[test]
+    fn needs_memory_evicts_the_older_session_checkpoint() {
+        // Room for the live state plus two checkpoints, not three.
+        let mut engine = ScriptedEngine::new_hybrid(Vec::new(), 1_000, RB)
+            .with_state_capacity_bytes(1_000 + 3 * RB);
+        let mut session = Session::default();
+        let tokenizer = byte_tokenizer();
+        let mut prompt = Vec::new();
+        for turn in 0..3 {
+            let start = prompt.len() as u32 + 3;
+            prompt.extend(ids("user"));
+            prompt.extend(ids("|reply"));
+            let mut req = request(prompt.clone(), 1);
+            req.generation_start = Some(start);
+            let finished =
+                generate_into(&mut engine, &mut session, &tokenizer, req, &mut Vec::new());
+            assert_eq!(
+                finished.reason,
+                FinishReason::Stop { stop: None },
+                "turn {turn}"
+            );
+            assert!(session.checkpoints().len() <= 2);
+        }
+        assert_eq!(engine.checkpoint_count(), 2);
+        let positions: Vec<_> = session.checkpoints().iter().map(|c| c.position).collect();
+        assert_eq!(positions, [13, 23]);
+    }
+
+    #[test]
+    fn hybrid_stop_sequence_falls_back_to_the_generation_checkpoint() {
+        let prompt = ids("<sys><user>hi<asst>");
+        let start = 15;
+        let mut req = request(prompt.clone(), 50);
+        req.stop = vec!["</done>".into()];
+        req.generation_start = Some(start);
+        let run = run_with(
+            ScriptedEngine::new_hybrid(ids("answer</done>"), 1_000, RB),
+            Session::default(),
+            req,
+        );
+        assert_eq!(text(&run.events), "answer");
+        assert_eq!(run.session.committed(), concat(&[&prompt, &ids("answer")]));
+        assert_eq!(run.session.tokens(), &prompt[..start as usize]);
+    }
+
+    #[test]
+    fn hybrid_next_turn_resumes_from_the_deepest_checkpoint() {
+        let first_prompt = ids("<user>hi<asst>");
+        let mut req = request(first_prompt.clone(), 50);
+        req.generation_start = Some(8);
+        let first = run_with(
+            ScriptedEngine::new_hybrid(ids("hello there"), 1_000, RB),
+            Session::default(),
+            req,
+        );
+        assert_eq!(first.session.tokens(), ids("<user>hi<asst>hello there"));
+
+        // The template re-renders the reply differently: divergence inside it.
+        let prompt = ids("<user>hi<asst>hello world<user>more<asst>");
+        let mut req = request(prompt.clone(), 1);
+        req.generation_start = Some(prompt.len() as u32 - 6);
+        let mut engine = first.engine;
+        engine.processed.clear();
+        let second = run_with(engine, first.session, req);
+        assert_eq!(
+            second.events[0],
+            Event::Started {
+                prompt: prompt.len() as u32,
+                cached: 8,
+                max_tokens: 1
+            }
+        );
+        assert!(second.engine.processed.starts_with(&prompt[8..]));
+        assert_eq!(second.finished.reason, FinishReason::Stop { stop: None });
+        let positions: Vec<_> = second
+            .session
+            .checkpoints()
+            .iter()
+            .map(|c| c.position)
+            .collect();
+        assert_eq!(positions, [8, prompt.len() as u32 - 6]);
+    }
+
+    #[test]
+    fn yield_resumes_prefill_with_identical_chunks() {
+        let prompt = ids(&"y".repeat(500));
+        let chunks = |yield_after: Option<u64>| {
+            let mut engine = ScriptedEngine::new_hybrid(Vec::new(), 1_000, RB);
+            engine.yield_after_layers = yield_after;
+            let mut req = request(prompt.clone(), 1);
+            req.generation_start = Some(200);
+            let run = run_with(engine, Session::default(), req);
+            assert_eq!(run.finished.reason, FinishReason::Stop { stop: None });
+            run.engine.chunks
+        };
+        let straight = chunks(None);
+        assert_eq!(straight, [(0, 200), (200, 499)]);
+        assert_eq!(chunks(Some(2)), straight);
     }
 }
