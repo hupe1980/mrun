@@ -64,8 +64,8 @@ description: "Tasks for 009 Image Input"
 - [ ] T030 [P] `mrun bench --suite vision` cells: encoder time per size, TTFT overhead cold and warm; add the suite to the 005 contract and 004 CLI contract when it lands
 - [ ] T031 [P] Site page `site/content/docs/images.md` (sources, limits, no remote fetching, memory cost, `--no-vision`); update 002/003/004 public docs where behaviour changes
 - [ ] T032 [P] Audit test: with images in requests, server logs, `/mrun/status`, `/metrics` and error messages contain no pixels, raw bytes or digests (FR-016)
-- [ ] T034 Cross-spec request to 010's owner (do not edit 010 here): add `fn vision(&self, cfg) -> Option<VisionSpec>` to the family contract (default `None`) and extend the locality rule to `models/blocks/vision/**`; T014 depends on it
 - [ ] T033 When this feature lands, reconcile upstream specs: 002 FR-020 (images accepted with vision), 002 contract metadata, 003 contract and data model (key symbols, `image` cause, offsets), 004 CLI contract, 005 contract, 008 metrics contract
+- [ ] T034 Cross-spec request to 010's owner (do not edit 010 here): add `fn vision(&self, cfg) -> Option<VisionSpec>` to the family contract (default `None`) and extend the locality rule to `models/blocks/vision/**`; T014 depends on it
 
 ## Dependencies
 
@@ -74,7 +74,7 @@ description: "Tasks for 009 Image Input"
   003: store (T020–T023). 004: launch, pull (T026, T027). 005: trace stats and harness (T004, T029).
   008: `/metrics` exporter (T003).
 - T007 → T008 → T009/T010 → T011 → T012 → T013 → T014 → T015 → T016 → T017 → T018 (MVP) → T019;
-  T020 → T021 → T022 → T023 → T024; T025–T028 after T018; T027 → T014 when T001 found no tower; T029–T033 last.
+  T020 → T021 → T022 → T023 → T024; T025–T028 after T018; T027 → T014 when T001 found no tower; T034 → T014; T029–T033 last.
 
 ## Parallel opportunities
 

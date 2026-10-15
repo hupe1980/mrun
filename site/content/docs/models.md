@@ -47,7 +47,8 @@ among the models above by running the `mrun bench` agent suite before each relea
   message, and where the reply starts, while it processes a prompt, and resumes from the nearest one;
   see [Prefix cache](@/docs/prefix-cache.md).
 
-Other checkpoints of a supported family in MLX format also work by repository name:
+Other checkpoints of a supported family in MLX format load by repository name as tier 2: the
+architecture is supported, but that model is not validated (`mrun show` says so).
 
 ```sh
 mrun pull mlx-community/Qwen3-14B-4bit

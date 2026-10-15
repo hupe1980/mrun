@@ -27,7 +27,7 @@ Revisions: mlx-lm `ba8a08f` (2026-10-10), mlx-vlm `4623cf9` (2026-10-14), Codex 
 
 - **Finding [V]**: mlx-lm drops it at load and at convert: `qwen3_5.py:429-433` and
   `qwen3_5_moe.py:23-27` skip every key starting with `vision_tower` or `model.visual`; `convert`
-  loads through `sanitize` (as for `mtp.*`, see 006 R1). A repository converted with mlx-lm is
+  loads through `sanitize` (which also drops `mtp.*`). A repository converted with mlx-lm is
   therefore text-only.
 - **Finding [U]**: The `mlx-community/Qwen3.6-35B-A3B-*` repositories (4-bit, mxfp4, bf16) were
   converted with mlx-vlm 0.4.4 and their cards show image prompts, so they carry the vision tower;
