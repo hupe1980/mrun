@@ -8,6 +8,7 @@ pub mod messages;
 pub mod model;
 pub mod run;
 pub mod sse;
+pub mod status;
 
 use crate::cli::serve::{Readiness, ServerState};
 use axum::Router;
@@ -30,6 +31,8 @@ pub fn router(state: ServerState) -> Router {
         .route("/api/hello", head(hello).get(hello))
         .route("/v1/chat/completions", post(chat_completions::handle))
         .route("/v1/messages", post(messages::handle))
+        .route("/v1/models", get(status::models))
+        .route("/mrun/status", get(status::status))
         .route("/v1/messages/count_tokens", post(messages::count_tokens))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(

@@ -8,6 +8,7 @@
 use crate::api::model::{
     ApiError, ApiKind, ChatRequest, ErrorKind, Finish, GenEvent, Usage, Warning,
 };
+use crate::api::status::{Active, Tracker};
 use crate::chat::render::{self, RenderContext, RenderLog};
 use crate::chat::syntax::registry::ChatSyntax;
 use crate::chat::syntax::{ParseEnd, ParseLog, ParseOut, ParserConfig};
@@ -16,6 +17,7 @@ use crate::runtime::generate::{Event, FinishReason, GenerateRequest};
 use crate::runtime::handle::SubmitError;
 use mrun_engine::CancelToken;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -64,6 +66,7 @@ pub async fn start(
     request: ChatRequest,
     args: &ServeArgs,
     timing: Timing,
+    tracker: Arc<Tracker>,
 ) -> Result<Turn, ApiError> {
     let syntax = ChatSyntax::get(loaded.syntax);
     let rendering = render_request(&loaded, &request).await?;
@@ -116,6 +119,9 @@ pub async fn start(
         timing,
         calls_seen: 0,
         reasoning_tokens: 0,
+        tracker,
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        generating: false,
     };
     tokio::spawn(relay.run(generation));
     Ok(Turn {
@@ -179,10 +185,26 @@ struct Relay {
     timing: Timing,
     calls_seen: u32,
     reasoning_tokens: u32,
+    tracker: Arc<Tracker>,
+    id: u64,
+    generating: bool,
 }
 
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 impl Relay {
-    async fn run(mut self, generation: crate::runtime::handle::Generation) {
+    async fn run(self, generation: crate::runtime::handle::Generation) {
+        let tracker = self.tracker.clone();
+        let id = self.id;
+        self.relay(generation).await;
+        tracker.update(|active| {
+            if active.as_ref().is_some_and(|a| a.id == id) {
+                *active = None;
+            }
+        });
+    }
+
+    async fn relay(mut self, generation: crate::runtime::handle::Generation) {
         let arrived = Instant::now();
         let mut started = false;
         loop {
@@ -229,6 +251,17 @@ impl Relay {
                             max_tokens,
                         } => {
                             started = true;
+                            let (id, api) = (self.id, self.api);
+                            self.tracker.update(|active| {
+                                *active = Some(Active {
+                                    id,
+                                    api,
+                                    prompt_tokens: prompt,
+                                    cached,
+                                    phase: "prefill",
+                                    progress: cached,
+                                });
+                            });
                             let started = GenEvent::Started {
                                 input: prompt,
                                 cached,
@@ -239,8 +272,25 @@ impl Relay {
                             }
                             continue;
                         }
-                        Event::Progress { .. } => continue,
+                        Event::Progress { done, .. } => {
+                            let id = self.id;
+                            self.tracker.update(|active| {
+                                if let Some(a) = active.as_mut().filter(|a| a.id == id) {
+                                    a.progress = done;
+                                }
+                            });
+                            continue;
+                        }
                         Event::Token { id, text, .. } => {
+                            if !self.generating {
+                                self.generating = true;
+                                let me = self.id;
+                                self.tracker.update(|active| {
+                                    if let Some(a) = active.as_mut().filter(|a| a.id == me) {
+                                        a.phase = "generating";
+                                    }
+                                });
+                            }
                             self.parser.feed(id, &text, &mut out);
                             if out
                                 .events

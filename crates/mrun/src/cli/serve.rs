@@ -6,6 +6,7 @@
 use crate::api;
 use crate::api::decode::DecodeOptions;
 use crate::api::run::Timing;
+use crate::api::status::Tracker;
 use crate::chat::template::ChatTemplate;
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::handle::EngineHandle;
@@ -97,6 +98,7 @@ pub struct ServerState {
     pub args: Arc<ServeArgs>,
     pub readiness: watch::Receiver<Readiness>,
     pub timing: Timing,
+    pub tracker: Arc<Tracker>,
 }
 
 impl ServerState {
@@ -180,6 +182,7 @@ pub async fn start_with(
         args,
         readiness: readiness.clone(),
         timing,
+        tracker: Arc::new(Tracker::default()),
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let app = api::router(state);
@@ -263,7 +266,12 @@ pub fn run(args: ServeArgs, factory: EngineFactory) -> u8 {
         eprintln!("mrun listening on {url} (loading model)");
         match server.loaded().await {
             Ok(loaded) => {
-                eprintln!("mrun serving {} at {url}", loaded.model_id);
+                let syntax = crate::chat::syntax::registry::ChatSyntax::get(loaded.syntax).name;
+                eprintln!(
+                    "mrun serving {} ({}, {syntax}) at {url}",
+                    loaded.model_id,
+                    loaded.handle.info().family
+                );
                 eprintln!("  next: mrun launch claude-code   (or codex, opencode)");
             }
             Err(error) => {

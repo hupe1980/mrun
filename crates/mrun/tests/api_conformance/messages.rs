@@ -272,3 +272,52 @@ async fn xapi_disconnect_while_queued_releases_slot() {
     let reply = server.post("/v1/messages", &user("c")).await;
     assert_eq!(reply.json()["content"][0]["text"], "after");
 }
+
+#[tokio::test]
+async fn status_and_models_report_the_machine() {
+    let server = common::start_with(&["busy busy busy"], slow(10_000, 60_000, 50)).await;
+    let models = server
+        .client
+        .get(server.url("/v1/models"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(models["data"][0]["id"], "scripted-model");
+    assert_eq!(models["data"][0]["context_window"], 8192);
+    assert_eq!(models["data"][0]["max_model_len"], 8192);
+    assert_eq!(models["data"][0]["max_output_tokens"], 8191);
+
+    let client = server.client.clone();
+    let url = server.url("/v1/messages");
+    let running = tokio::spawn(async move { client.post(url).json(&user("a")).send().await });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let status = server
+        .client
+        .get(server.url("/mrun/status"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(status["schema_version"], 1);
+    assert_eq!(status["model"]["syntax"], "hermes_json");
+    assert_eq!(status["budget"]["kv_capacity_tokens"], 8192);
+    assert_eq!(status["active"]["api"], "messages");
+    assert_eq!(status["active"]["phase"], "generating");
+    assert_eq!(status["queued"], 0);
+    running.await.unwrap().unwrap();
+    let after: Value = server
+        .client
+        .get(server.url("/mrun/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(after["active"].is_null());
+}

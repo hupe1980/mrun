@@ -62,7 +62,14 @@ pub async fn start(
     request: crate::api::model::ChatRequest,
 ) -> Result<Turn, ApiError> {
     let loaded = ready(state)?;
-    run::start(loaded, request, &state.args, state.timing).await
+    run::start(
+        loaded,
+        request,
+        &state.args,
+        state.timing,
+        state.tracker.clone(),
+    )
+    .await
 }
 
 /// Collects a non-streaming turn; returns the folded result and in-band warnings.
