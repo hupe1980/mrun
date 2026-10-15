@@ -73,3 +73,22 @@ jobs:
           key: mlx-sys-${{ runner.os }}-${{ hashFiles('crates/mlx-sys/build.rs', 'Cargo.lock', 'rust-toolchain.toml') }}-mlxc-a341b49
       - name: Build mrun-engine with MLX (Metal)
         run: cargo build --locked -p mrun-engine --features mlx
+
+  macos-release:
+    name: macOS (release build, macOS 15 target)
+    # The configuration the release workflow ships (008 FR-015): arm64, deployment target 15.0,
+    # vendored MLX with its Metal library.
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Release build with MLX
+        run: cargo build --locked --release -p mrun --features mlx
+      - name: Smoke-test the binary
+        run: ./target/release/mrun --version

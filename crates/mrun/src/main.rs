@@ -12,7 +12,7 @@ use std::process::ExitCode;
 
 /// Local inference server for coding agents on Apple Silicon.
 #[derive(Debug, Parser)]
-#[command(name = "mrun", version, about, propagate_version = true)]
+#[command(name = "mrun", version = mrun::cli::version::LONG, about, propagate_version = true)]
 struct Cli {
     /// Print only warnings and errors.
     #[arg(short, long, global = true)]

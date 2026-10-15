@@ -14,9 +14,9 @@ needs 001–004 complete.
 
 ## Phase 1: Setup
 
-- [ ] T001 `crates/mrun/build.rs`: embed git commit, build date, vendored MLX/mlx-c versions; `crates/mrun/src/cli/version.rs` long `--version`; snapshot test
-- [ ] T002 [P] `CHANGELOG.md` (Keep a Changelog, `Unreleased`) and `RELEASING.md` (steps per research R8)
-- [ ] T003 [P] Add one job to `.github/workflows/ci.yml` (owned by 001 T004a): macOS arm64 release-configuration build with `MACOSX_DEPLOYMENT_TARGET=15.0`, vendored MLX and Metal library (FR-015). Nothing else in `ci.yml` changes here
+- [X] T001 `crates/mrun/build.rs`: embed git commit, build date, vendored MLX/mlx-c versions; `crates/mrun/src/cli/version.rs` long `--version`; snapshot test *Note*: `crates/mrun/build.rs` (commit from `MRUN_BUILD_COMMIT` or git, `SOURCE_DATE_EPOCH`-aware date, MLX pins checked against `mlx-sys` by a unit test) and `cli/version.rs`; unit tests instead of a snapshot.
+- [X] T002 [P] `CHANGELOG.md` (Keep a Changelog, `Unreleased`) and `RELEASING.md` (steps per research R8) *Note*: `CHANGELOG.md`, `RELEASING.md` (with the release checklist).
+- [X] T003 [P] Add one job to `.github/workflows/ci.yml` (owned by 001 T004a): macOS arm64 release-configuration build with `MACOSX_DEPLOYMENT_TARGET=15.0`, vendored MLX and Metal library (FR-015). Nothing else in `ci.yml` changes here *Note*: job `macos-release` (release build with `--features mlx`, deployment target 15.0, `--version` smoke test).
 
 ## Phase 2: Foundational
 
@@ -25,9 +25,9 @@ needs 001–004 complete.
 
 ## Phase 3: US1 — install and start an agent (P1) 🎯 MVP
 
-- [ ] T006 [US1] `scripts/release/{package.sh, sign.sh}`: tarball layout per data model, ad-hoc signing (`codesign -s -`), verification (`codesign --verify --strict`), `SHA256SUMS`. (Developer ID, notarization, `syspolicy_check`, SBOM: removed, 0.1 scope cut, 2026-10-15)
-- [ ] T007 [US1] `.github/workflows/release.yml`: version/changelog check, build (`MACOSX_DEPLOYMENT_TARGET=15.0`), T006 scripts, GitHub Release (pre-release for `-rc.N`), tap pull request for final releases (FR-001, FR-002, FR-012–FR-014)
-- [ ] T008 [US1] `packaging/homebrew/mrun.rb.tmpl` + `hupe1980/homebrew-tap` repository: arm64/Sequoia requirements (`depends_on macos: :sequoia`), libexec install + `write_exec_script`, completions, caveats (`brew upgrade`, restart a running server), `test do`; `brew audit --strict` in the tap CI (FR-003)
+- [X] T006 [US1] `scripts/release/{package.sh, sign.sh}`: tarball layout per data model, ad-hoc signing (`codesign -s -`), verification (`codesign --verify --strict`), `SHA256SUMS`. (Developer ID, notarization, `syspolicy_check`, SBOM: removed, 0.1 scope cut, 2026-10-15) *Note*: `scripts/release/{package.sh,sign.sh}`; a `NOTICE` file was added for the tarball layout.
+- [X] T007 [US1] `.github/workflows/release.yml`: version/changelog check, build (`MACOSX_DEPLOYMENT_TARGET=15.0`), T006 scripts, GitHub Release (pre-release for `-rc.N`), tap pull request for final releases (FR-001, FR-002, FR-012–FR-014) *Note*: `.github/workflows/release.yml`; the tap pull request needs a `TAP_TOKEN` secret. Unverified until the T009 dry run (for example where the cross-target build leaves `mlx.metallib`).
+- [X] T008 [US1] `packaging/homebrew/mrun.rb.tmpl` + `hupe1980/homebrew-tap` repository: arm64/Sequoia requirements (`depends_on macos: :sequoia`), libexec install + `write_exec_script`, completions, caveats (`brew upgrade`, restart a running server), `test do`; `brew audit --strict` in the tap CI (FR-003) *Note*: `packaging/homebrew/mrun.rb.tmpl`; creating the `hupe1980/homebrew-tap` repository and its CI is outside this repository.
 - [ ] T009 [US1] Dry run of the release workflow on a fork (SC-005); fix findings
 - [ ] T010 [US1] SC-001 on clean accounts on the target Mac (3 runs), including the check that a Homebrew install shows no Gatekeeper prompt; document the `xattr` step for browser-downloaded tarballs; record results in the `RELEASING.md` checklist
 
@@ -40,8 +40,8 @@ needs 001–004 complete.
 
 ## Phase 5: US3 — no idle sleep while working (P2)
 
-- [ ] T015 [P] [US3] `crates/mrun/src/platform/macos/power.rs`: IOPM assertion create/release (`objc2-io-kit` or documented `extern "C"`); no-op on Linux
-- [ ] T016 [US3] `crates/mrun/src/runtime/power.rs`: queue-driven state machine (acquire on queued/started, release 60 s after empty); `crates/mrun/tests/power_state.rs` with a fake clock; `/mrun/status` `power` field (FR-009)
+- [X] T015 [P] [US3] `crates/mrun/src/platform/macos/power.rs`: IOPM assertion create/release (`objc2-io-kit` or documented `extern "C"`); no-op on Linux *Note*: `runtime/power.rs` `Caffeinate` holds a `caffeinate -i -w <pid>` child (the same IOPM idle-sleep assertion, no unsafe FFI; it ends with mrun); `NoAssertion` elsewhere.
+- [X] T016 [US3] `crates/mrun/src/runtime/power.rs`: queue-driven state machine (acquire on queued/started, release 60 s after empty); `crates/mrun/tests/power_state.rs` with a fake clock; `/mrun/status` `power` field (FR-009) *Note*: `PowerState` (acquire on queued/running, release 60 s after empty) with a fake-clock unit test in `runtime/power.rs`; serve polls the queue each second; `/mrun/status` `power`.
 - [ ] T017 [US3] SC-004 on the target Mac with a 1-minute idle-sleep setting
 
 ## Phase 6: US4 — metrics (P2) — Removed
@@ -57,7 +57,7 @@ needs 001–004 complete.
 - [ ] T023 Run quickstart scenarios; record results
 - [ ] T024 Fold cross-spec changes into the 001–005 contracts and specs/README index (plan "Cross-spec changes")
 - [ ] T025 *Removed (0.1 scope cut, 2026-10-15; Later)*: `runtime/lazy.rs` lazy engine creation (D022)
-- [ ] T026 [P] `crates/mrun/tests/version_offline.rs`: `--version` with networking blocked (no socket opened) (FR-004, FR-011)
+- [X] T026 [P] `crates/mrun/tests/version_offline.rs`: `--version` with networking blocked (no socket opened) (FR-004, FR-011) *Note*: `tests/version_offline.rs` (runs under `unshare -rn` where permitted).
 
 ## Dependencies
 

@@ -68,6 +68,17 @@ pub async fn models(State(state): State<ServerState>) -> Response {
     .into_response()
 }
 
+fn power_json(state: &ServerState) -> Value {
+    let power = state
+        .power
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match power.held_since() {
+        Some(since) => json!({"assertion": true, "since": crate::api::record::rfc3339_of(since)}),
+        None => json!({"assertion": false}),
+    }
+}
+
 /// A miss report as `/mrun/status` and the `: mrun` comment show it.
 pub fn miss_json(miss: &MissReport) -> Value {
     json!({
@@ -129,7 +140,7 @@ pub async fn status(State(state): State<ServerState>) -> Response {
         "queued": 0,
         "cache": Value::Null,
         "recording": state.args.record.is_some(),
-        "power": {"assertion": false},
+        "power": power_json(&state),
         "last": Value::Null,
     });
     if let Ok(loaded) = handler::ready(&state) {

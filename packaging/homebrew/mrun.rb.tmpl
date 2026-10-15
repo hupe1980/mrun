@@ -1,0 +1,35 @@
+# Homebrew formula for mrun, rendered by .github/workflows/release.yml into
+# hupe1980/homebrew-tap/Formula/mrun.rb. Placeholders: {{VERSION}}, {{URL}}, {{SHA256}}.
+class Mrun < Formula
+  desc "Local inference server for coding agents on Apple Silicon"
+  homepage "https://github.com/hupe1980/mrun"
+  url "{{URL}}"
+  version "{{VERSION}}"
+  sha256 "{{SHA256}}"
+  license any_of: ["MIT", "Apache-2.0"]
+
+  depends_on arch: :arm64
+  depends_on macos: :sequoia
+
+  def install
+    # The binary finds mlx.metallib next to itself, so both stay together in libexec.
+    libexec.install "bin/mrun", "bin/mlx.metallib"
+    bin.write_exec_script libexec/"mrun"
+    bash_completion.install "completions/mrun.bash" => "mrun"
+    zsh_completion.install "completions/_mrun"
+    fish_completion.install "completions/mrun.fish"
+  end
+
+  def caveats
+    <<~EOS
+      Upgrade with `brew upgrade mrun`, then restart a running server:
+        mrun stop && mrun serve --detach
+      Models are stored in the shared Hugging Face cache (~/.cache/huggingface/hub).
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/mrun --version")
+    assert_match "mrun", shell_output("#{bin}/mrun completions bash")
+  end
+end

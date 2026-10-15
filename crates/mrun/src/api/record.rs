@@ -76,10 +76,12 @@ impl Recorder {
 
 /// UTC time with milliseconds, e.g. `2026-10-15T08:30:00.123Z`.
 pub fn rfc3339_now() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    rfc3339(now.as_secs(), now.subsec_millis())
+    rfc3339_of(SystemTime::now())
+}
+
+pub fn rfc3339_of(time: SystemTime) -> String {
+    let at = time.duration_since(UNIX_EPOCH).unwrap_or_default();
+    rfc3339(at.as_secs(), at.subsec_millis())
 }
 
 fn rfc3339(secs: u64, millis: u32) -> String {

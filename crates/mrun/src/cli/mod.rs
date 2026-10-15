@@ -9,6 +9,7 @@ pub mod ps;
 pub mod serve;
 pub mod server;
 pub mod stop;
+pub mod version;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

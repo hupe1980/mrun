@@ -1,0 +1,86 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Check tag, version and changelog agree
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          base="${tag%%-rc.*}"
+          if [[ "${base}" != "${version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match workspace version ${version}" >&2; exit 1
+          fi
+          if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for ${version}" >&2; exit 1
+          fi
+          echo "version=${tag}" >> "${GITHUB_OUTPUT}"
+          if [[ "${tag}" == *-rc.* ]]; then echo "prerelease=true" >> "${GITHUB_OUTPUT}"; else echo "prerelease=false" >> "${GITHUB_OUTPUT}"; fi
+
+      - name: Install toolchain from rust-toolchain.toml
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-darwin
+
+      - name: Build
+        env:
+          MRUN_BUILD_COMMIT: ${{ github.sha }}
+        run: cargo build --release --locked --target aarch64-apple-darwin -p mrun --features mlx
+
+      - name: Sign and smoke-test
+        run: scripts/release/sign.sh target/aarch64-apple-darwin/release/mrun
+
+      - name: Package
+        id: package
+        run: |
+          tarball="$(scripts/release/package.sh "${{ steps.version.outputs.version }}" target/aarch64-apple-darwin/release dist)"
+          echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
+          echo "sha256=$(cut -d' ' -f1 dist/SHA256SUMS)" >> "${GITHUB_OUTPUT}"
+
+      - name: Release notes from the changelog
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          awk -v v="${version%%-rc.*}" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > dist/NOTES.md
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [[ "${{ steps.version.outputs.prerelease }}" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "${GITHUB_REF_NAME}" "${{ steps.package.outputs.tarball }}" dist/SHA256SUMS \
+            --title "mrun ${{ steps.version.outputs.version }}" --notes-file dist/NOTES.md "${flags[@]}"
+
+      - name: Open the tap pull request (final releases)
+        if: steps.version.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/mrun-${version}-macos-arm64.tar.gz"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/hupe1980/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          sed -e "s|{{VERSION}}|${version}|" -e "s|{{URL}}|${url}|" -e "s|{{SHA256}}|${{ steps.package.outputs.sha256 }}|" \
+            packaging/homebrew/mrun.rb.tmpl > tap/Formula/mrun.rb
+          cd tap
+          git checkout -b "mrun-${version}"
+          git add Formula/mrun.rb
+          git -c user.name="mrun release" -c user.email="release@users.noreply.github.com" commit -m "mrun ${version}"
+          git push origin "mrun-${version}"
+          gh pr create --repo hupe1980/homebrew-tap --title "mrun ${version}" --body "Release ${GITHUB_REF_NAME}."

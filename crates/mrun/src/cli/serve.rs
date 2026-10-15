@@ -13,6 +13,7 @@ use crate::chat::constrain::GrammarEnv;
 use crate::chat::template::ChatTemplate;
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::handle::EngineHandle;
+use crate::runtime::power::{Action, PowerState};
 use mrun_engine::{ModelInfo, Sampling, SyntaxId};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -106,6 +107,8 @@ pub struct ServerState {
     pub tracker: Arc<Tracker>,
     /// `--record`: request bodies written for trace replay.
     pub recorder: Option<Arc<Recorder>>,
+    /// The idle-sleep assertion's state, for `/mrun/status`.
+    pub power: Arc<std::sync::Mutex<PowerState>>,
 }
 
 impl ServerState {
@@ -195,7 +198,13 @@ pub async fn start_with(
         timing,
         tracker: Arc::new(Tracker::default()),
         recorder,
+        power: Arc::new(std::sync::Mutex::new(PowerState::default())),
     };
+    tokio::spawn(keep_awake(
+        readiness.clone(),
+        state.power.clone(),
+        crate::runtime::power::platform_assertion(),
+    ));
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let app = api::router(state);
     let task = tokio::spawn(async move {
@@ -214,6 +223,40 @@ pub async fn start_with(
         shutdown: Some(shutdown_tx),
         task,
     })
+}
+
+/// Holds the idle-sleep assertion while requests are queued or running (008 FR-009).
+async fn keep_awake(
+    readiness: watch::Receiver<Readiness>,
+    power: Arc<std::sync::Mutex<PowerState>>,
+    mut assertion: Box<dyn crate::runtime::power::Assertion>,
+) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    loop {
+        tick.tick().await;
+        let busy = match &*readiness.borrow() {
+            Readiness::Ready(loaded) => {
+                let queue = loaded.handle.queue();
+                queue.running() || queue.waiting() > 0
+            }
+            _ => false,
+        };
+        let action = power
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observe(
+                busy,
+                std::time::Instant::now(),
+                std::time::SystemTime::now(),
+            );
+        match action {
+            Some(Action::Acquire) => {
+                assertion.acquire();
+            }
+            Some(Action::Release) => assertion.release(),
+            None => {}
+        }
+    }
 }
 
 /// Resolves on SIGTERM or Ctrl-C.

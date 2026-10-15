@@ -2,6 +2,7 @@
 
 pub mod generate;
 pub mod handle;
+pub mod power;
 pub mod queue;
 #[cfg(any(test, feature = "test-support"))]
 pub mod scripted;
