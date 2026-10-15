@@ -1,10 +1,12 @@
-//! `EngineHandle`: owns an engine on a dedicated thread; async callers stream events through a
-//! bounded channel. A consumer that stops reading for the stall timeout cancels its request.
+//! `EngineHandle`: owns an engine on a dedicated thread; callers stream events through a bounded
+//! channel (blocking `recv` or `recv_async`). A consumer that stops reading for the stall timeout
+//! cancels its request, and the engine never waits on that consumer again.
 
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::generate::{self, Event, EventSink, GenerateRequest, Session};
-use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use flume::{Receiver, Sender, bounded, unbounded};
 use mrun_engine::{Engine, MemoryBudget, ModelInfo};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -27,7 +29,6 @@ pub struct EngineHandle {
     commands: Sender<Command>,
     info: ModelInfo,
     budget: MemoryBudget,
-    stall_timeout: Duration,
 }
 
 impl std::fmt::Debug for Command {
@@ -73,7 +74,6 @@ impl EngineHandle {
             commands,
             info,
             budget,
-            stall_timeout,
         })
     }
 
@@ -83,10 +83,6 @@ impl EngineHandle {
 
     pub fn budget(&self) -> &MemoryBudget {
         &self.budget
-    }
-
-    pub fn stall_timeout(&self) -> Duration {
-        self.stall_timeout
     }
 
     /// Queues a request; events arrive on the returned receiver, ending with `Finished`.
@@ -109,11 +105,20 @@ impl EngineHandle {
 struct ChannelSink {
     events: Sender<Event>,
     stall_timeout: Duration,
+    /// Set once the consumer disconnected or stalled; later events are offered without waiting.
+    gone: bool,
 }
 
 impl EventSink for ChannelSink {
     fn send(&mut self, event: Event) -> bool {
-        self.events.send_timeout(event, self.stall_timeout).is_ok()
+        if self.gone {
+            // `Finished` still reaches a consumer that has room again; nothing blocks the engine.
+            let _ = self.events.try_send(event);
+            return false;
+        }
+        let delivered = self.events.send_timeout(event, self.stall_timeout).is_ok();
+        self.gone = !delivered;
+        delivered
     }
 }
 
@@ -130,9 +135,21 @@ fn worker<E: Engine>(
                 let mut sink = ChannelSink {
                     events,
                     stall_timeout,
+                    gone: false,
                 };
-                let mut detok = tokenizer.stream();
-                generate::generate(engine, &mut session, &mut detok, request, &mut sink);
+                let outcome = catch_unwind(AssertUnwindSafe(|| {
+                    let mut detok = tokenizer.stream();
+                    generate::generate(engine, &mut session, &mut detok, request, &mut sink);
+                }));
+                if outcome.is_err() {
+                    // A panic left engine state unknown: start over and tell the consumer.
+                    session.clear(engine);
+                    sink.send(Event::Finished {
+                        reason: generate::FinishReason::Error("internal error; state reset".into()),
+                        prefilled: 0,
+                        stats: generate::Stats::default(),
+                    });
+                }
             }
             Command::Reset => session.clear(engine),
         }

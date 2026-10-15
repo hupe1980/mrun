@@ -60,7 +60,24 @@ impl Sampling {
     };
 
     pub fn is_greedy(&self) -> bool {
-        self.temperature <= 0.0
+        self.temperature == 0.0
+    }
+
+    /// Rejects values that would produce NaN logits or an empty candidate set.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.temperature.is_finite() || self.temperature < 0.0 {
+            return Err(format!(
+                "temperature must be 0 or more, got {}",
+                self.temperature
+            ));
+        }
+        if !(self.top_p > 0.0 && self.top_p <= 1.0) {
+            return Err(format!("top_p must be in (0, 1], got {}", self.top_p));
+        }
+        if !(0.0..=1.0).contains(&self.min_p) {
+            return Err(format!("min_p must be in [0, 1], got {}", self.min_p));
+        }
+        Ok(())
     }
 }
 
@@ -210,6 +227,31 @@ mod tests {
         assert!(!token.is_cancelled());
         clone.cancel();
         assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn invalid_sampling_is_rejected() {
+        for bad in [
+            Sampling {
+                temperature: f32::NAN,
+                ..Sampling::GREEDY
+            },
+            Sampling {
+                temperature: -1.0,
+                ..Sampling::GREEDY
+            },
+            Sampling {
+                top_p: 0.0,
+                ..Sampling::GREEDY
+            },
+            Sampling {
+                min_p: 1.5,
+                ..Sampling::GREEDY
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+        assert!(Sampling::GREEDY.validate().is_ok());
     }
 
     #[test]

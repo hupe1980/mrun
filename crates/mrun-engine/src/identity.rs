@@ -14,11 +14,13 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 /// Files besides `*.safetensors` that determine output.
-const OUTPUT_FILES: [&str; 4] = [
+const OUTPUT_FILES: [&str; 6] = [
     "config.json",
     "tokenizer.json",
     "tokenizer_config.json",
     "chat_template.jinja",
+    "generation_config.json",
+    "special_tokens_map.json",
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1,5 +1,6 @@
 //! Chat templates from the model's own files, rendered with MiniJinja (Python-compatible methods).
 
+use minijinja::value::Kwargs;
 use minijinja::{Environment, Error, ErrorKind, Value};
 use serde::Serialize;
 use std::fs;
@@ -43,8 +44,18 @@ impl ChatTemplate {
         bos_token: String,
         eos_token: String,
     ) -> Result<Self, TemplateError> {
+        // Match Hugging Face's Jinja environment: block tags eat their trailing newline and
+        // leading indentation, and `tojson` is Python's `json.dumps` (no HTML escaping).
         let mut env = Environment::new();
+        env.set_syntax(
+            minijinja::syntax::SyntaxConfig::builder()
+                .trim_blocks(true)
+                .lstrip_blocks(true)
+                .build()
+                .map_err(|error| TemplateError::Render(error.to_string()))?,
+        );
         env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+        env.add_filter("tojson", tojson);
         env.add_function(
             "raise_exception",
             |message: String| -> Result<Value, Error> {
@@ -128,6 +139,58 @@ impl ChatTemplate {
     }
 }
 
+/// `json.dumps(value, ensure_ascii=False, indent=indent)` as Hugging Face templates expect.
+fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
+    let indent: Option<usize> = kwargs.get("indent")?;
+    kwargs.assert_all_used()?;
+    let json = serde_json::to_value(&value)
+        .map_err(|error| Error::new(ErrorKind::InvalidOperation, error.to_string()))?;
+    let mut out = String::new();
+    python_dumps(&json, indent, 0, &mut out);
+    Ok(Value::from_safe_string(out))
+}
+
+fn python_dumps(value: &serde_json::Value, indent: Option<usize>, depth: usize, out: &mut String) {
+    use serde_json::Value as Json;
+    let newline = |out: &mut String, depth: usize| {
+        if let Some(width) = indent {
+            out.push('\n');
+            out.extend(std::iter::repeat_n(' ', width * depth));
+        }
+    };
+    // Python separators: ", " without indent, "," with indent (the newline follows).
+    let item_separator = if indent.is_some() { "," } else { ", " };
+    match value {
+        Json::Array(items) if !items.is_empty() => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(item_separator);
+                }
+                newline(out, depth + 1);
+                python_dumps(item, indent, depth + 1, out);
+            }
+            newline(out, depth);
+            out.push(']');
+        }
+        Json::Object(map) if !map.is_empty() => {
+            out.push('{');
+            for (index, (key, item)) in map.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(item_separator);
+                }
+                newline(out, depth + 1);
+                out.push_str(&serde_json::to_string(key).unwrap_or_default());
+                out.push_str(": ");
+                python_dumps(item, indent, depth + 1, out);
+            }
+            newline(out, depth);
+            out.push('}');
+        }
+        other => out.push_str(&serde_json::to_string(other).unwrap_or_default()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +225,43 @@ mod tests {
             )
             .unwrap();
         assert!(on.ends_with("<|im_start|>assistant"));
+    }
+
+    #[test]
+    fn tojson_matches_python_json_dumps() {
+        let template =
+            ChatTemplate::new("{{ tools | tojson }}|{{ tools[0] | tojson(indent=2) }}".to_string())
+                .unwrap();
+        let tools = serde_json::json!([{"name": "grep", "description": "a < b & c's", "n": [1, 2.5], "e": {}}]);
+        let text = template
+            .render(
+                &serde_json::json!([]),
+                &RenderOptions {
+                    tools: Some(tools),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            text,
+            "[{\"name\": \"grep\", \"description\": \"a < b & c's\", \"n\": [1, 2.5], \"e\": {}}]|{\n  \"name\": \"grep\",\n  \"description\": \"a < b & c's\",\n  \"n\": [\n    1,\n    2.5\n  ],\n  \"e\": {}\n}"
+        );
+    }
+
+    #[test]
+    fn block_tags_trim_like_hugging_face() {
+        let template = ChatTemplate::new(
+            "{% for m in messages %}\n  {% if m %}{{ m.content }}{% endif %}\n{% endfor %}"
+                .to_string(),
+        )
+        .unwrap();
+        let text = template
+            .render(
+                &serde_json::json!([{"content": "a"}, {"content": "b"}]),
+                &RenderOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(text, "ab", "Jinja trim_blocks + lstrip_blocks semantics");
     }
 
     #[test]

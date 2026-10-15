@@ -6,17 +6,6 @@ use crate::chat::tokenizer::StreamDecoder;
 use mrun_engine::{CancelToken, Engine, EngineError, Sampling};
 use std::time::{Duration, Instant};
 
-/// Turns generated token ids into text without splitting characters.
-pub trait Detokenizer {
-    fn step(&mut self, id: u32) -> Result<Option<String>, String>;
-}
-
-impl Detokenizer for StreamDecoder<'_> {
-    fn step(&mut self, id: u32) -> Result<Option<String>, String> {
-        StreamDecoder::step(self, id).map_err(|error| error.to_string())
-    }
-}
-
 /// Receives events; returns `false` when the consumer is gone (the request is then cancelled).
 pub trait EventSink {
     fn send(&mut self, event: Event) -> bool;
@@ -108,7 +97,7 @@ impl Session {
 pub fn generate<E: Engine>(
     engine: &mut E,
     session: &mut Session,
-    detok: &mut dyn Detokenizer,
+    detok: &mut StreamDecoder<'_>,
     request: GenerateRequest,
     sink: &mut dyn EventSink,
 ) {
@@ -140,7 +129,7 @@ pub fn generate<E: Engine>(
 fn run<E: Engine>(
     engine: &mut E,
     session: &mut Session,
-    detok: &mut dyn Detokenizer,
+    detok: &mut StreamDecoder<'_>,
     request: &GenerateRequest,
     sink: &mut dyn EventSink,
     stats: &mut Stats,
@@ -152,6 +141,9 @@ fn run<E: Engine>(
     }
     if request.max_tokens == 0 {
         return FinishReason::Rejected("max tokens must be at least 1".into());
+    }
+    if let Err(message) = request.sampling.validate() {
+        return FinishReason::Rejected(message);
     }
     let mut matcher = match StopMatcher::new(request.stop.clone()) {
         Ok(matcher) => matcher,
@@ -228,7 +220,7 @@ fn run<E: Engine>(
         return FinishReason::Cancelled;
     }
 
-    let eos = &engine.info().eos_tokens.clone();
+    let eos = engine.info().eos_tokens.clone();
     let mut last = prompt[prompt.len() - 1];
     let mut decode_started = None;
     loop {
@@ -247,27 +239,28 @@ fn run<E: Engine>(
             if elapsed > 0.0 {
                 stats.prefill_tps = (prompt.len() - common) as f64 / elapsed;
             }
+            // Time to first token: the first sampled token, even if its text is held back.
+            stats.ttft = Some(started.elapsed());
             decode_started = Some(Instant::now());
         }
         if eos.contains(&next) {
-            flush(&mut matcher, next, sink, stats, started);
+            flush(&mut matcher, next, sink);
             return finish_decode(stats, decode_started, FinishReason::Stop { stop: None });
         }
         stats.generated_tokens += 1;
         let text = match detok.step(next) {
             Ok(text) => text,
-            Err(error) => return FinishReason::Error(error),
+            Err(error) => return FinishReason::Error(error.to_string()),
         };
         if let Some(text) = text {
             let fed = matcher.feed(&text);
-            if !fed.emit.is_empty() {
-                stats.ttft.get_or_insert_with(|| started.elapsed());
-                if !sink.send(Event::Token {
+            if !fed.emit.is_empty()
+                && !sink.send(Event::Token {
                     id: next,
                     text: fed.emit,
-                }) {
-                    return FinishReason::Cancelled;
-                }
+                })
+            {
+                return FinishReason::Cancelled;
             }
             if let Some(stop) = fed.stopped {
                 return finish_decode(
@@ -278,23 +271,16 @@ fn run<E: Engine>(
             }
         }
         if stats.generated_tokens >= max_tokens {
-            flush(&mut matcher, next, sink, stats, started);
+            flush(&mut matcher, next, sink);
             return finish_decode(stats, decode_started, FinishReason::Length);
         }
         last = next;
     }
 }
 
-fn flush(
-    matcher: &mut StopMatcher,
-    id: u32,
-    sink: &mut dyn EventSink,
-    stats: &mut Stats,
-    started: Instant,
-) {
+fn flush(matcher: &mut StopMatcher, id: u32, sink: &mut dyn EventSink) {
     let rest = matcher.finish();
     if !rest.is_empty() {
-        stats.ttft.get_or_insert_with(|| started.elapsed());
         sink.send(Event::Token { id, text: rest });
     }
 }

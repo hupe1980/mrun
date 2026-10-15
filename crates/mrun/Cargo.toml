@@ -12,7 +12,7 @@ authors.workspace = true
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
-crossbeam-channel.workspace = true
+flume.workspace = true
 minijinja.workspace = true
 minijinja-contrib.workspace = true
 mrun-engine.workspace = true

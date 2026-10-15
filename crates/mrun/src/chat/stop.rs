@@ -84,11 +84,6 @@ impl StopMatcher {
     pub fn finish(&mut self) -> String {
         std::mem::take(&mut self.held)
     }
-
-    /// Bytes currently held back.
-    pub fn held_len(&self) -> usize {
-        self.held.len()
-    }
 }
 
 #[cfg(test)]
