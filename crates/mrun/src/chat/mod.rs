@@ -2,6 +2,7 @@
 
 pub mod limits;
 pub mod prompt;
+pub mod render;
 pub mod stop;
 pub mod syntax;
 pub mod template;

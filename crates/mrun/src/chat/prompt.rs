@@ -15,6 +15,9 @@ pub enum Role {
 pub struct MessageMark {
     pub start: u32,
     pub role: Role,
+    /// Index of the API message this mark renders; `None` for text the template inserts
+    /// (a default system prompt).
+    pub message: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

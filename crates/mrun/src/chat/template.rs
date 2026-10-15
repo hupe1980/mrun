@@ -31,6 +31,8 @@ pub struct RenderOptions {
     /// template's default applies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Qwen3.6: render reasoning of every replayed assistant turn, not only the current loop.
+    pub preserve_thinking: bool,
 }
 
 #[derive(Debug)]
@@ -146,6 +148,7 @@ impl ChatTemplate {
                 tools => Value::from(minijinja::value::Serde(&options.tools)),
                 add_generation_prompt => options.add_generation_prompt,
                 enable_thinking => options.enable_thinking,
+                preserve_thinking => options.preserve_thinking,
                 reasoning_effort => options
                     .reasoning_effort
                     .as_deref()

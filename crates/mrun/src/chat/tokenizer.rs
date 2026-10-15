@@ -6,6 +6,9 @@ use std::path::Path;
 #[error("tokenizer: {0}")]
 pub struct TokenizerError(String);
 
+/// Byte range of a token in the encoded text.
+pub type Span = (usize, usize);
+
 /// Thin wrapper over `tokenizers::Tokenizer` (built without network features).
 #[derive(Debug, Clone)]
 pub struct Tokenizer {
@@ -21,6 +24,17 @@ impl Tokenizer {
 
     pub fn from_inner(inner: tokenizers::Tokenizer) -> Self {
         Self { inner }
+    }
+
+    /// Like [`Self::encode`], with each token's byte range in `text`.
+    pub fn encode_with_offsets(
+        &self,
+        text: &str,
+    ) -> Result<(Vec<u32>, Vec<Span>), TokenizerError> {
+        self.inner
+            .encode(text, false)
+            .map(|encoding| (encoding.get_ids().to_vec(), encoding.get_offsets().to_vec()))
+            .map_err(|error| TokenizerError(error.to_string()))
     }
 
     /// Encodes already-rendered text; special tokens in the text are recognized, none are added.
@@ -77,7 +91,26 @@ pub mod test_support {
     use tokenizers::pre_tokenizers::byte_level::ByteLevel;
     use tokenizers::{AddedToken, decoders::byte_level::ByteLevel as ByteLevelDecoder};
 
-    /// Byte-level tokenizer with one token per byte plus `<|im_start|>`, `<|im_end|>`.
+    /// Added tokens of the byte tokenizer: ChatML, Qwen tool and thinking tags, Harmony markers.
+    pub const SPECIAL: [&str; 15] = [
+        "<|im_start|>",
+        "<|im_end|>",
+        "<tool_call>",
+        "</tool_call>",
+        "<tool_response>",
+        "</tool_response>",
+        "<think>",
+        "</think>",
+        "<|start|>",
+        "<|end|>",
+        "<|message|>",
+        "<|channel|>",
+        "<|constrain|>",
+        "<|call|>",
+        "<|return|>",
+    ];
+
+    /// Byte-level tokenizer with one token per byte plus the [`SPECIAL`] added tokens.
     pub fn byte_tokenizer() -> Tokenizer {
         let mut alphabet: Vec<char> = ByteLevel::alphabet().into_iter().collect();
         alphabet.sort_unstable();
@@ -94,10 +127,7 @@ pub mod test_support {
         inner.with_pre_tokenizer(Some(ByteLevel::new(false, true, false)));
         inner.with_decoder(Some(ByteLevelDecoder::default()));
         inner
-            .add_special_tokens([
-                AddedToken::from("<|im_start|>", true),
-                AddedToken::from("<|im_end|>", true),
-            ])
+            .add_special_tokens(SPECIAL.map(|token| AddedToken::from(token, true)))
             .expect("add special tokens");
         Tokenizer::from_inner(inner)
     }
