@@ -1,0 +1,1 @@
+Edit config.json: set the server port to 9090, set workers to 4, set the logging level to "debug", and add "import" to the end of the features list. Keep everything else unchanged and keep the file valid JSON.

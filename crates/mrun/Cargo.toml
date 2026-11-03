@@ -1,0 +1,71 @@
+[package]
+name = "mrun"
+description = "Local inference server for coding agents on Apple Silicon"
+readme = "../../README.md"
+keywords = ["llm", "inference", "apple-silicon", "mlx", "agents"]
+categories = ["command-line-utilities", "science"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["mlx", "app"]
+# `ScriptedEngine` and test fixtures, for integration tests and the test suites of later features.
+test-support = []
+# The MLX engine (builds MLX from source once; Metal needs Xcode, `MLX_SYS_METAL=0` builds CPU
+# only). `--no-default-features` builds the engine-agnostic parts alone (fast Linux CI).
+mlx = ["engine", "mrun-engine/mlx"]
+# nuvec instead of MLX (spec 016): `--no-default-features --features nuvec`.
+nuvec = ["engine", "mrun-engine/nuvec"]
+# Set by a backend feature: the engine-dependent CLI parts (serve, run, doctor's GPU checks).
+engine = []
+# `mrun ui`'s native window and menu bar item (macOS; spec 018). Without it `mrun ui` opens the
+# browser. The shell crates exist for macOS targets only, so the feature is inert elsewhere.
+app = ["dep:tao", "dep:wry", "dep:tray-icon", "dep:muda"]
+
+[dependencies]
+axum = "0.8"
+base64 = "0.22.1"
+clap = { version = "4.6.7", features = ["derive", "env", "string"] }
+flume.workspace = true
+minijinja.workspace = true
+minijinja-contrib.workspace = true
+mrun-engine.workspace = true
+mrun-runpod.workspace = true
+serde.workspace = true
+sha2.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokenizers.workspace = true
+tokio = { version = "1.53", features = ["rt-multi-thread", "net", "signal", "macros", "sync", "time", "process", "io-util"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy", "stream"] }
+sha1 = "0.11"
+tempfile.workspace = true
+toml.workspace = true
+llguidance = { version = "1.9.1", default-features = false, features = ["lark"] }
+toktrie = "1.9.1"
+clap_complete = "4.6"
+indicatif = { version = "0.18", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tao = { version = "0.37.2", optional = true }
+wry = { version = "0.57.1", optional = true }
+tray-icon = { version = "0.26.1", optional = true }
+muda = { version = "0.21.2", optional = true }
+
+[[example]]
+name = "token_agreement"
+required-features = ["engine"]
+
+[dev-dependencies]
+# Integration tests are built against the library with `test-support`.
+mrun = { path = ".", default-features = false, features = ["test-support"] }
+mrun-engine = { workspace = true, features = ["test-support"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "test-util"] }
+
+[lints]
+workspace = true

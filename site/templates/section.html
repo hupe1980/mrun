@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block body_class %}docs{% endblock body_class %}
+
+{% block content %}
+<div class="wrap docs-index">
+  <h1>{{ section.title }}</h1>
+  <div class="prose">{{ section.content | safe }}</div>
+  <div class="cards">
+    {%- for p in section.pages %}
+    <a class="card card-link" href="{{ p.permalink }}">
+      <h2>{{ p.title }}</h2>
+      <p>{{ p.description }}</p>
+    </a>
+    {%- endfor %}
+  </div>
+</div>
+{% endblock content %}

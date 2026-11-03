@@ -1,0 +1,23 @@
+# Rapid-MLX, defaults (prompt cache on). It serves Chat Completions and the Anthropic Messages API,
+# so it runs the agent cells as well as the synthetic ones. Unverified (D057): llama.cpp, Ollama,
+# oMLX and mlx-lm are verified first; this profile's cells are reported but kept out of the
+# headline summary until its flags are checked against a pinned release.
+name = "rapid-mlx"
+release = "unpinned"
+verified = false
+url = "http://127.0.0.1:8000"
+apis = ["chat", "messages"]
+health = "/v1/models"
+ignore_eos = "none"
+flags = []
+# Radix cache; MTP/prompt-lookup speculation is [U] (Later).
+speculation = "unknown"
+lanes = 1
+start = "rapid-mlx serve <model> --port 8000 (context length {context}; best exact configuration: radix prompt cache on, its MTP or prompt lookup where available)"
+manual_reset = "Restart Rapid-MLX"
+
+[model]
+name = ""
+format = "mlx"
+bits_per_weight = 4.5
+kv_format = "bf16"

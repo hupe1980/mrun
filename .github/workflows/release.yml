@@ -1,0 +1,320 @@
+name: release
+
+# Two macOS artifacts per release (D044, 008 FR-001):
+#   mrun-X.Y.Z-macos26-arm64.tar.gz  SDK >= 26.2 and MACOSX_DEPLOYMENT_TARGET=26.2: MLX's NAX
+#                                    kernels are compiled (used at runtime on an M5).
+#   mrun-X.Y.Z-macos15-arm64.tar.gz  MACOSX_DEPLOYMENT_TARGET=15.0: no NAX.
+# The tap formula picks one by the full macOS version (packaging/homebrew/mrun.rb.tmpl).
+#
+# The NAX build needs a hosted image with Xcode 26.2 or later (`macos-26`). If GitHub's image
+# ships an older SDK, the job fails before building; run it on a self-hosted Apple Silicon runner
+# with Xcode >= 26.2 instead by setting the repository variable NAX_RUNNER (for example
+# `self-hosted`), which replaces `macos-26` below.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  checks: read
+  actions: read
+
+env:
+  # nuvec (spec 016, FR-009): a missing precompiled metallib fails the build instead of embedding
+  # shader sources. No effect while the release builds the MLX backend.
+  NUVEC_REQUIRE_METALLIB: "1"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Check tag, version and changelog agree
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          base="${tag%%-rc.*}"
+          if [[ "${base}" != "${version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match workspace version ${version}" >&2; exit 1
+          fi
+          sys_version="$(grep -m1 '^version = ' crates/mrun-mlx-sys/Cargo.toml | cut -d'"' -f2)"
+          if [[ "${sys_version}" != "${version}" ]]; then
+            echo "crates/mrun-mlx-sys/Cargo.toml has version ${sys_version}, the workspace ${version}" >&2; exit 1
+          fi
+          if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for ${version}" >&2; exit 1
+          fi
+          echo "version=${tag}" >> "${GITHUB_OUTPUT}"
+          if [[ "${tag}" == *-rc.* ]]; then echo "prerelease=true" >> "${GITHUB_OUTPUT}"; else echo "prerelease=false" >> "${GITHUB_OUTPUT}"; fi
+
+      # Releases ship only commits CI passed on: the tag must point at a commit whose CI run
+      # (push to main) succeeded. Waits while that run is still in progress.
+      - name: Require a green CI run on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for _ in $(seq 1 90); do
+            runs="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow ci.yml --commit "${GITHUB_SHA}" \
+              --json status,conclusion --jq '[.[] | "\(.status):\(.conclusion)"] | join(" ")')"
+            if [[ " ${runs} " == *" completed:success "* ]]; then
+              echo "CI is green on ${GITHUB_SHA}"; exit 0
+            fi
+            unfinished="$(tr ' ' '\n' <<< "${runs}" | grep -v '^completed:' || true)"
+            if [[ -n "${runs}" && -z "${unfinished}" ]]; then
+              echo "CI did not pass on ${GITHUB_SHA}: ${runs}" >&2; exit 1
+            fi
+            echo "waiting for CI on ${GITHUB_SHA} (${runs:-no run yet})"
+            sleep 60
+          done
+          echo "no successful CI run on ${GITHUB_SHA} after 90 minutes; push the commit to main first" >&2
+          exit 1
+
+  build:
+    needs: check
+    name: build (${{ matrix.variant }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - variant: macos15
+            runner: macos-15
+            deployment_target: "15.0"
+            nax: false
+          - variant: macos26
+            runner: nax
+            deployment_target: "26.2"
+            nax: true
+    runs-on: ${{ matrix.runner == 'nax' && (vars.NAX_RUNNER || 'macos-26') || matrix.runner }}
+    timeout-minutes: 120
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+      # The NAX build fails at compile time when its metallib has no *_nax kernels
+      # (crates/mrun-mlx-sys/build.rs); the 15.0 build leaves it unset.
+      MLX_SYS_REQUIRE_NAX: ${{ matrix.nax && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      # NAX is compiled only when both the SDK and the deployment target are >= 26.2 (D044).
+      - name: Select the newest Xcode and check the SDK
+        id: sdk
+        run: |
+          if [[ "${{ matrix.nax }}" == "true" ]]; then
+            xcode="$(ls -d /Applications/Xcode_26*.app /Applications/Xcode.app 2>/dev/null | sort -V | tail -n 1 || true)"
+            if [[ -n "${xcode}" ]]; then sudo xcode-select -s "${xcode}/Contents/Developer"; fi
+          fi
+          sdk="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK ${sdk} ($(xcode-select -p)), deployment target ${MACOSX_DEPLOYMENT_TARGET}"
+          echo "version=${sdk}" >> "${GITHUB_OUTPUT}"
+          if [[ "${{ matrix.nax }}" == "true" ]]; then
+            lowest="$(printf '%s\n%s\n' "26.2" "${sdk}" | sort -V | head -n 1)"
+            if [[ "${lowest}" != "26.2" ]]; then
+              echo "the NAX build needs SDK >= 26.2, this runner has ${sdk}; set NAX_RUNNER to a runner with Xcode >= 26.2" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Install toolchain from rust-toolchain.toml
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-darwin
+
+      # The MLX build of this configuration; NAX depends on SDK and deployment target, so both
+      # are in the key (same key as CI's macOS release jobs, D034, D044).
+      - name: Point the MLX build cache at the user cache directory
+        run: echo "MLX_SYS_CACHE_DIR=${HOME}/Library/Caches/mrun-mlx-sys" >> "${GITHUB_ENV}"
+      - name: Restore the MLX build
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Caches/mrun-mlx-sys
+          key: mlx-${{ runner.os }}-${{ runner.arch }}-dt-${{ env.MACOSX_DEPLOYMENT_TARGET }}-sdk-${{ steps.sdk.outputs.version }}-${{ hashFiles('crates/mrun-mlx-sys/build.rs', 'crates/mrun-mlx-sys/patches/**') }}
+
+      # `--version` shows the 7-character commit, as a build from a checkout does.
+      - name: Build
+        run: MRUN_BUILD_COMMIT="${GITHUB_SHA::7}" cargo build --release --locked --target aarch64-apple-darwin -p mrun
+
+      # The binary embeds mlx.metallib (D034): sign and smoke-test it on its own. The extracted
+      # metallib is exactly the embedded one, so the NAX check reads it.
+      - name: Sign and smoke-test
+        run: |
+          scripts/release/sign.sh target/aarch64-apple-darwin/release/mrun
+          alone="$(mktemp -d)"
+          cp target/aarch64-apple-darwin/release/mrun "${alone}/mrun"
+          "${alone}/mrun" --version | tee version.txt
+          # The embedded kernels extract on first MLX use; doctor's gpu-kernels check must pass.
+          home="$(mktemp -d)"
+          HOME="${home}" "${alone}/mrun" doctor | tee doctor.txt || true
+          grep -q '^ok    gpu-kernels' doctor.txt
+          metallib="$(ls "${home}"/Library/Caches/mrun/mlx-*.metallib | head -n 1)"
+          echo "METALLIB=${metallib}" >> "${GITHUB_ENV}"
+
+      # mlx-serve's check (sixth audit §3): a NAX build whose metallib has no `*_nax` kernels
+      # silently loses the M5 prefill gain, so it fails the release; the 15.0 build should have none.
+      - name: Check the NAX kernels in the metallib
+        run: |
+          count="$(strings -a "${METALLIB}" | grep -c '_nax' || true)"
+          echo "${count} strings with _nax in ${METALLIB}"
+          if [[ "${{ matrix.nax }}" == "true" && "${count}" -eq 0 ]]; then
+            echo "the NAX build's metallib has no _nax kernels (SDK ${{ steps.sdk.outputs.version }}, target ${MACOSX_DEPLOYMENT_TARGET})" >&2
+            exit 1
+          fi
+          if [[ "${{ matrix.nax }}" == "false" && "${count}" -ne 0 ]]; then
+            echo "::warning::the 15.0 build's metallib has ${count} strings with _nax; check that it loads on macOS 15"
+          fi
+          # The same rule as mrun-mlx-sys's build.rs (MLX_SYS_REQUIRE_NAX is set for the job).
+          scripts/release/check_nax.sh "${METALLIB}" "${MACOSX_DEPLOYMENT_TARGET}"
+          # `mrun --version` names the build half of the numerics class (008 FR-004, T030).
+          if [[ "${{ matrix.nax }}" == "true" ]]; then
+            grep -q ' numerics nax compiled, ' version.txt
+          else
+            grep -q ' numerics no nax, ' version.txt
+          fi
+
+      - name: Package
+        run: |
+          version="${{ needs.check.outputs.version }}"
+          tarball="$(scripts/release/package.sh "${version}" target/aarch64-apple-darwin/release staging)"
+          mkdir -p dist
+          mv "${tarball}" "dist/mrun-${version}-${{ matrix.variant }}-arm64.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mrun-${{ matrix.variant }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # The remote-GPU agent (013, D064): a Linux build of mrun without MLX that `mrun cloud up`
+  # has pods fetch and check by sha256. glibc 2.28 so it runs on every vLLM image.
+  agent:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Install toolchain, zig and cargo-zigbuild
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add x86_64-unknown-linux-gnu
+          pip install ziglang
+          cargo install cargo-zigbuild --locked
+      - name: Build the agent
+        run: |
+          MRUN_BUILD_COMMIT="${GITHUB_SHA::7}" cargo zigbuild --release --locked \
+            --target x86_64-unknown-linux-gnu.2.28 --no-default-features -p mrun
+      - name: Smoke-test and checksum
+        run: |
+          version="${{ needs.check.outputs.version }}"
+          name="mrun-${version}-x86_64-unknown-linux-gnu"
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/release/mrun "dist/${name}"
+          "dist/${name}" agent --help > /dev/null
+          (cd dist && sha256sum "${name}" > "${name}.sha256" && cat "${name}.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mrun-agent
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [check, build, agent]
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        id: sums
+        run: |
+          cd dist
+          shasum -a 256 mrun-*-arm64.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          for variant in macos15 macos26; do
+            echo "${variant}=$(grep "mrun-${VERSION}-${variant}-arm64.tar.gz" SHA256SUMS | cut -d' ' -f1)" >> "${GITHUB_OUTPUT}"
+          done
+
+      - name: Release notes from the changelog
+        run: |
+          awk -v v="${VERSION%%-rc.*}" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > dist/NOTES.md
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [[ "${{ needs.check.outputs.prerelease }}" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "${GITHUB_REF_NAME}" dist/mrun-*-arm64.tar.gz dist/SHA256SUMS \
+            dist/mrun-*-x86_64-unknown-linux-gnu dist/mrun-*-x86_64-unknown-linux-gnu.sha256 \
+            --title "mrun ${VERSION}" --notes-file dist/NOTES.md "${flags[@]}"
+
+      - name: Install toolchain from rust-toolchain.toml
+        if: needs.check.outputs.prerelease == 'false'
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # Final releases only, in dependency order; a crate version already on crates.io is skipped,
+      # so a re-run after a partial publish continues where it stopped. Without the secret the
+      # step does nothing (forks, dry runs).
+      - name: Publish to crates.io (final releases)
+        if: needs.check.outputs.prerelease == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          export MRUN_BUILD_COMMIT="${GITHUB_SHA::7}"
+          if [[ -z "${CARGO_REGISTRY_TOKEN}" ]]; then
+            echo "CARGO_REGISTRY_TOKEN is not set; skipping crates.io"; exit 0
+          fi
+          published() {
+            curl -fsS -o /dev/null -A "mrun-release (github.com/${GITHUB_REPOSITORY})" \
+              "https://crates.io/api/v1/crates/$1/${VERSION}"
+          }
+          if published mrun-mlx-sys; then echo "mrun-mlx-sys ${VERSION} already published"; else
+            cargo publish --locked --manifest-path crates/mrun-mlx-sys/Cargo.toml
+          fi
+          for crate in mrun-engine mrun-runpod mrun; do
+            if published "${crate}"; then echo "${crate} ${VERSION} already published"; else
+              cargo publish --locked -p "${crate}"
+            fi
+          done
+
+      - name: Open the tap pull request (final releases)
+        if: needs.check.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/hupe1980/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          sed -e "s|{{VERSION}}|${VERSION}|" \
+            -e "s|{{URL_MACOS26}}|${base}/mrun-${VERSION}-macos26-arm64.tar.gz|" \
+            -e "s|{{SHA256_MACOS26}}|${{ steps.sums.outputs.macos26 }}|" \
+            -e "s|{{URL_MACOS15}}|${base}/mrun-${VERSION}-macos15-arm64.tar.gz|" \
+            -e "s|{{SHA256_MACOS15}}|${{ steps.sums.outputs.macos15 }}|" \
+            packaging/homebrew/mrun.rb.tmpl > tap/Formula/mrun.rb
+          if grep -q '{{' tap/Formula/mrun.rb; then echo "unrendered placeholder in the formula" >&2; exit 1; fi
+          cd tap
+          git checkout -b "mrun-${VERSION}"
+          git add Formula/mrun.rb
+          git -c user.name="mrun release" -c user.email="release@users.noreply.github.com" commit -m "mrun ${VERSION}"
+          git push origin "mrun-${VERSION}"
+          gh pr create --repo hupe1980/homebrew-tap --title "mrun ${VERSION}" --body "Release ${GITHUB_REF_NAME}."

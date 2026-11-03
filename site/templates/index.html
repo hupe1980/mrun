@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block body_class %}home{% endblock body_class %}
+
+{% block structured_data %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "mrun",
+  "description": {{ config.description | json_encode | safe }},
+  "url": "{{ config.base_url }}/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS (Apple Silicon)",
+  "license": ["https://opensource.org/licenses/MIT", "https://www.apache.org/licenses/LICENSE-2.0"],
+  "codeRepository": "{{ config.extra.repo }}",
+  "programmingLanguage": "Rust",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+{% endblock structured_data %}
+
+{% block content %}
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Local inference for coding agents · Apple Silicon</p>
+      <h1>Your agent's context,<br><span class="accent">computed once.</span></h1>
+      <p class="lead">mrun runs Qwen3.6, or Qwen3.5 on smaller Macs, and serves Claude Code, Codex and OpenCode. It reuses model state exactly across turns, subagents and tool calls, explains every cache miss, and stays inside a memory budget fixed at startup.</p>
+      <div class="cta">
+        <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
+        <a class="button ghost" href="{{ config.extra.repo }}" rel="noopener">Star on GitHub</a>
+      </div>
+      <p class="status-pill"><span class="dot" aria-hidden="true"></span>In development — not released yet</p>
+    </div>
+    <figure class="terminal" aria-label="Example terminal session">
+      <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+<pre><code><span class="c-prompt">$</span> mrun pull qwen3.6
+<span class="c-dim">mlx-community/Qwen3.6-35B-A3B-4bit · 20.4 GB · Apache-2.0</span>
+<span class="c-ok">✓</span> fits this machine: up to 262,144 tokens of context
+<span class="c-prompt">$</span> mrun serve --detach
+<span class="c-ok">✓</span> serving on http://127.0.0.1:8484
+<span class="c-prompt">$</span> mrun launch claude-code
+<span class="c-dim">turn 12 · 41,203 cached · 618 processed</span></code></pre>
+      <figcaption class="c-dim">Illustrative session on a 48 GB Mac; output abridged.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <h2 class="section-title">Built for the way agents work</h2>
+    <p class="section-lead">Coding agents resend tens of thousands of tokens of instructions, tool schemas and history on every turn. On a laptop, re-reading that context dominates the wait. mrun is designed around that loop.</p>
+    <div class="cards">
+      <article class="card">
+        <h3>Exact prefix cache</h3>
+        <p>The longest identical token prefix is reused across turns, subagents and edited history. Switching to a subagent moves the main conversation aside instead of throwing it away. Inside a tool loop the model's own reply is spliced back as the exact tokens it generated, so tool loops always hit.</p>
+      </article>
+      <article class="card">
+        <h3>Every miss explained</h3>
+        <p>Each response reports cached and processed tokens. When reuse breaks, mrun names the cause (<code>new</code>, <code>diverged</code>, <code>evicted</code>, <code>gap</code>, <code>disabled</code>) and the message where the prompt changed, so you can fix it.</p>
+      </article>
+      <article class="card">
+        <h3>Predictable memory</h3>
+        <p>Weights, sequence state, cache and scratch are budgeted at startup against unified memory. Requests that cannot fit are refused up front with the numbers. Under memory pressure, mrun sheds cache first.</p>
+      </article>
+      <article class="card">
+        <h3>Fast interruption</h3>
+        <p>Cancellation is checked after every model layer and every token, and the prompt chunks already processed are kept for the retry.</p>
+      </article>
+      <article class="card">
+        <h3>Three APIs, one binary</h3>
+        <p>OpenAI Chat Completions, Anthropic Messages and OpenAI Responses with streaming, tool calls and structured output — the protocols Claude Code, Codex and OpenCode actually speak.</p>
+      </article>
+      <article class="card">
+        <h3>Private by default</h3>
+        <p>Loopback only, no telemetry, no prompt logging, offline after <code>mrun pull</code>. Tools run in your agent, never in the server.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section alt">
+  <div class="wrap">
+    <h2 class="section-title">See what the cache does</h2>
+    <p class="section-lead"><code>mrun ui</code> opens a window and a menu bar item: the memory budget, every request's reuse and why any part was recomputed, a chat with the local model, models that fit your Mac, and one-click agent setup.</p>
+    {%- set shots = [
+      ["now.png", "Now: the memory budget, a prompt being read, and the reuse of recent requests"],
+      ["chat.png", "Chat: each reply's reuse, time to first token and speed"],
+      ["models.png", "Models: a fit verdict for this Mac"],
+      ["agents.png", "Agents: connect Claude Code, Codex or OpenCode"]
+    ] %}
+    <div class="shots">
+      {%- for shot in shots %}
+      {%- set url = get_url(path="screenshots/" ~ shot[0]) %}
+      <figure class="screenshot">
+        <a href="{{ url }}" title="Open full size"><img src="{{ url }}" alt="{{ shot[1] }}" width="1100" height="720" loading="lazy" decoding="async"></a>
+        <figcaption>{{ shot[1] }}</figcaption>
+      </figure>
+      {%- endfor %}
+    </div>
+    <a class="link-arrow" href="{{ get_url(path='@/docs/ui.md') }}">The mrun window</a>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap two-col">
+    <div>
+      <h2 class="section-title">How it works</h2>
+      <ol class="steps">
+        <li><strong>Your agent sends the whole conversation</strong> over one of three standard APIs.</li>
+        <li><strong>mrun renders and tokenizes it</strong> with the model's own chat template.</li>
+        <li><strong>The prefix cache finds the longest identical token prefix</strong> and moves its state back in — or simply continues the live conversation.</li>
+        <li><strong>Only the new tokens are processed</strong> on the GPU with Apple's MLX, in chunks that can be interrupted.</li>
+        <li><strong>Tokens stream back</strong> with exact usage numbers and a cache report.</li>
+      </ol>
+      <a class="link-arrow" href="{{ get_url(path='@/docs/how-it-works.md') }}">Read the design overview</a>
+    </div>
+    <div class="flow" aria-hidden="true">
+      <div class="flow-node">Claude Code · Codex · OpenCode</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node">Chat Completions · Messages · Responses</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node accent-border">Prefix cache · memory budget</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node">MLX on the Apple GPU</div>
+    </div>
+  </div>
+</section>
+
+<section class="section alt">
+  <div class="wrap">
+    <h2 class="section-title">Works with your agent</h2>
+    <div class="clients">
+      <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#claude-code"><strong>Claude Code</strong><span>Anthropic Messages</span></a>
+      <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#codex"><strong>Codex CLI</strong><span>OpenAI Responses</span></a>
+      <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#opencode"><strong>OpenCode</strong><span>Chat Completions</span></a>
+      <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#other-clients"><strong>Aider, Continue, Cline, Zed…</strong><span>Chat Completions</span></a>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <h2 class="section-title">Honest numbers only</h2>
+    <p class="section-lead"><code>mrun bench</code> replays real agent sessions against mrun and other local servers with their prompt caches enabled. Results are published with dates, settings and every losing cell.</p>
+    <a class="link-arrow" href="{{ get_url(path='@/docs/benchmarks.md') }}">How we benchmark</a>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap final-cta">
+    <h2>Run your coding agent locally, without the wait.</h2>
+    <div class="cta">
+      <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Read the docs</a>
+      <a class="button ghost" href="{{ get_url(path='@/docs/roadmap.md') }}">See the roadmap</a>
+    </div>
+  </div>
+</section>
+{% endblock content %}

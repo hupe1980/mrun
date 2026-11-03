@@ -1,0 +1,176 @@
+//! Machine state for a run (005 FR-006, FR-012, D038), read from macOS command-line tools:
+//! `sysctl`, `sw_vers`, `pmset` (power source, Low Power Mode) and `vm_stat`.
+//!
+//! The thermal state is `NSProcessInfo.processInfo.thermalState`, read through the Objective-C
+//! bridge of JavaScript for Automation (`osascript -l JavaScript`, part of macOS): the real
+//! Foundation value without FFI or `unsafe` in mrun. Elsewhere every value is "unknown" or 0
+//! (driver tests on Linux).
+
+use crate::bench::result::{Machine, SystemMemory};
+use std::process::Command;
+
+fn run(program: &str, args: &[&str]) -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let out = Command::new(program).args(args).output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn sysctl(name: &str) -> Option<String> {
+    run("/usr/sbin/sysctl", &["-n", name])
+}
+
+pub fn machine() -> Machine {
+    let pmset = run("/usr/bin/pmset", &["-g"]).unwrap_or_default();
+    let batt = run("/usr/bin/pmset", &["-g", "batt"]).unwrap_or_default();
+    Machine {
+        chip: sysctl("machdep.cpu.brand_string").unwrap_or_else(|| "unknown".into()),
+        memory_bytes: sysctl("hw.memsize")
+            .and_then(|m| m.parse().ok())
+            .unwrap_or(0),
+        macos: run("/usr/bin/sw_vers", &["-productVersion"]).unwrap_or_else(|| "unknown".into()),
+        power_source: power_source(&batt),
+        low_power: low_power(&pmset),
+        per_system: Vec::new(),
+    }
+}
+
+/// Free memory, swap and load before a system runs.
+pub fn snapshot(system: &str) -> SystemMemory {
+    SystemMemory {
+        system: system.into(),
+        free_memory_before: run("/usr/bin/vm_stat", &[]).map_or(0, |v| free_memory(&v)),
+        swap: sysctl("vm.swapusage").map_or(0, |s| swap_used(&s)),
+        load_average: sysctl("vm.loadavg").and_then(|l| load_average(&l)),
+    }
+}
+
+const THERMAL_SCRIPT: &str = "ObjC.import('Foundation'); $.NSProcessInfo.processInfo.thermalState";
+
+/// `nominal`, `fair`, `serious`, `critical` (`NSProcessInfoThermalState`), or `unknown`.
+pub fn thermal() -> String {
+    run(
+        "/usr/bin/osascript",
+        &["-l", "JavaScript", "-e", THERMAL_SCRIPT],
+    )
+    .map_or_else(|| "unknown".into(), |t| thermal_state(&t).into())
+}
+
+fn power_source(batt: &str) -> String {
+    if batt.contains("'AC Power'") {
+        "AC".into()
+    } else if batt.contains("'Battery Power'") {
+        "battery".into()
+    } else {
+        "unknown".into()
+    }
+}
+
+fn low_power(pmset: &str) -> bool {
+    pmset.lines().any(|line| {
+        let mut words = line.split_whitespace();
+        words.next() == Some("lowpowermode") && words.next() == Some("1")
+    })
+}
+
+/// The `NSProcessInfoThermalState` value (0–3) as its name.
+fn thermal_state(value: &str) -> &'static str {
+    match value.trim() {
+        "0" => "nominal",
+        "1" => "fair",
+        "2" => "serious",
+        "3" => "critical",
+        _ => "unknown",
+    }
+}
+
+/// `(Pages free + Pages speculative) × page size` from `vm_stat`.
+fn free_memory(vm_stat: &str) -> u64 {
+    let page = vm_stat
+        .split("page size of ")
+        .nth(1)
+        .and_then(|r| r.split_whitespace().next())
+        .and_then(|n| n.parse::<u64>().ok())
+        .unwrap_or(16_384);
+    let pages = |name: &str| {
+        vm_stat
+            .lines()
+            .find_map(|l| l.strip_prefix(name))
+            .and_then(|r| r.trim().trim_end_matches('.').parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    (pages("Pages free:") + pages("Pages speculative:")) * page
+}
+
+/// `used = 1024.50M` from `sysctl vm.swapusage`, in bytes.
+fn swap_used(usage: &str) -> u64 {
+    usage
+        .split("used = ")
+        .nth(1)
+        .and_then(|r| r.split_whitespace().next())
+        .and_then(|v| {
+            let (n, unit) = v.split_at(v.len().saturating_sub(1));
+            let scale = match unit {
+                "K" => 1u64 << 10,
+                "M" => 1 << 20,
+                "G" => 1 << 30,
+                _ => return None,
+            };
+            n.parse::<f64>().ok().map(|n| (n * scale as f64) as u64)
+        })
+        .unwrap_or(0)
+}
+
+/// The 1-minute load of `{ 1.23 1.45 1.67 }`.
+fn load_average(loadavg: &str) -> Option<f64> {
+    loadavg
+        .trim_matches(|c| c == '{' || c == '}' || c == ' ')
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_macos_tool_output() {
+        assert_eq!(
+            power_source("Now drawing from 'AC Power'\n -InternalBattery-0 100%"),
+            "AC"
+        );
+        assert_eq!(power_source("Now drawing from 'Battery Power'"), "battery");
+        assert!(low_power(" sleep 1\n lowpowermode         1\n"));
+        assert!(!low_power(" lowpowermode 0"));
+        let vm = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:      100.\nPages active:    5.\nPages speculative: 20.\n";
+        assert_eq!(free_memory(vm), 120 * 16_384);
+        assert_eq!(
+            swap_used("total = 2048.00M  used = 1.50G  free = 0.50G  (encrypted)"),
+            3 << 29
+        );
+        assert_eq!(load_average("{ 1.23 1.45 1.67 }"), Some(1.23));
+        assert_eq!(thermal_state("0\n"), "nominal");
+        assert_eq!(thermal_state("1"), "fair");
+        assert_eq!(thermal_state("3"), "critical");
+        assert_eq!(thermal_state("error"), "unknown");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn thermal_state_comes_from_foundation() {
+        assert!(["nominal", "fair", "serious", "critical"].contains(&thermal().as_str()));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn other_platforms_get_the_stub() {
+        assert_eq!(machine().chip, "unknown");
+        assert_eq!(thermal(), "unknown");
+        assert_eq!(snapshot("mrun").free_memory_before, 0);
+    }
+}

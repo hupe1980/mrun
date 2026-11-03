@@ -1,0 +1,320 @@
+/* mrun's design tokens, after Apple's system (HIG, macOS 26; ported from speccoder).
+   Colour carries meaning, never decoration, and every state also has a symbol and a word.
+   Glass is for the layers that navigate (sidebar, toolbar, sheets); content sits on solid
+   surfaces. Reuse has one colour everywhere: what mrun did not have to compute. */
+
+:root {
+  color-scheme: light dark;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+  --rounded: ui-rounded, "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface-2: #f2f2f7;
+  --fill: rgba(120, 120, 128, 0.12);
+  --fill-2: rgba(120, 120, 128, 0.2);
+  --separator: rgba(60, 60, 67, 0.13);
+  --text: #1d1d1f;
+  --text-2: rgba(60, 60, 67, 0.82);
+  --muted: rgba(60, 60, 67, 0.6);
+  --faint: rgba(60, 60, 67, 0.3);
+
+  --accent: #007aff;
+  --accent-ink: #0062cc;
+  --accent-soft: rgba(0, 122, 255, 0.12);
+  --focus: rgba(0, 122, 255, 0.45);
+
+  /* States: fill (system colour) and ink (its increased-contrast variant, for text). */
+  --ready: #248a3d;      --ready-fill: #34c759;
+  --reading: #0040dd;    --reading-fill: #007aff;
+  --generating: #0071a4; --generating-fill: #32ade6;
+  --stopped: #6c6c70;    --stopped-fill: #8e8e93;
+  --failed: #d70015;     --failed-fill: #ff3b30;
+  --warn: #c93400;       --warn-fill: #ff9500;
+  --remote: #5e5ce6;     --remote-fill: #5e5ce6;
+
+  /* The budget's parts. */
+  --mem-weights: #8e8e93;
+  --mem-scratch: #aeaeb2;
+  --mem-context: #007aff;
+  --mem-checkpoints: #5ac8fa;
+  --mem-free: var(--fill);
+
+  /* Reuse: computed once, reused (solid) vs computed now (light). A recompute nobody intended
+     (019 tone "attention") is amber; an expected one is plain grey. */
+  --reused: #34c759;
+  --computed: rgba(120, 120, 128, 0.32);
+  --attention: #a35200;  --attention-fill: rgba(255, 149, 0, 0.7);
+
+  --glass: rgba(246, 246, 248, 0.72);
+  --glass-edge: rgba(255, 255, 255, 0.6);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-sheet: 0 24px 80px rgba(0, 0, 0, 0.28);
+
+  --r-sm: 6px;
+  --r: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e;
+    --surface: #242426;
+    --surface-2: #2c2c2e;
+    --fill: rgba(120, 120, 128, 0.24);
+    --fill-2: rgba(120, 120, 128, 0.32);
+    --separator: rgba(84, 84, 88, 0.6);
+    --text: #f5f5f7;
+    --text-2: rgba(235, 235, 245, 0.82);
+    --muted: rgba(235, 235, 245, 0.6);
+    --faint: rgba(235, 235, 245, 0.3);
+    --accent: #0a84ff;
+    --accent-ink: #409cff;
+    --accent-soft: rgba(10, 132, 255, 0.2);
+    --ready: #30d158;      --ready-fill: #30d158;
+    --reading: #409cff;    --reading-fill: #0a84ff;
+    --generating: #64d2ff; --generating-fill: #64d2ff;
+    --stopped: #98989d;    --stopped-fill: #8e8e93;
+    --failed: #ff6961;     --failed-fill: #ff453a;
+    --warn: #ffb340;       --warn-fill: #ff9f0a;
+    --remote: #7d7aff;     --remote-fill: #7d7aff;
+    --mem-weights: #636366;
+    --mem-scratch: #48484a;
+    --mem-context: #0a84ff;
+    --mem-checkpoints: #64d2ff;
+    --reused: #30d158;
+    --computed: rgba(120, 120, 128, 0.5);
+    --attention: #ffb340;  --attention-fill: rgba(255, 159, 10, 0.75);
+    --glass: rgba(36, 36, 38, 0.72);
+    --glass-edge: rgba(255, 255, 255, 0.08);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --separator: rgba(60, 60, 67, 0.4);
+    --muted: rgba(60, 60, 67, 0.85);
+    --fill: rgba(120, 120, 128, 0.24);
+    --computed: rgba(60, 60, 67, 0.55);
+    --attention-fill: #a35200;
+    --focus: #0040dd;
+    --glass: var(--surface);
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root {
+    --separator: rgba(235, 235, 245, 0.45);
+    --muted: rgba(235, 235, 245, 0.85);
+    --fill: rgba(120, 120, 128, 0.4);
+    --computed: rgba(235, 235, 245, 0.55);
+    --attention-fill: #ffb340;
+    --focus: #409cff;
+  }
+}
+
+/* Glass only where it navigates; solid when transparency is reduced. */
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--surface-2);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Buttons: push (bordered), primary (filled), plain (borderless). */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid var(--separator);
+  background: var(--surface);
+  box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.08);
+  cursor: default;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--surface-2);
+}
+.btn:disabled {
+  opacity: 0.45;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+.btn.primary:hover {
+  filter: brightness(1.06);
+}
+.btn.plain {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--accent-ink);
+}
+.btn.plain:hover {
+  background: var(--fill);
+}
+.btn.danger {
+  color: var(--failed);
+}
+.btn.large {
+  height: 34px;
+  padding: 0 18px;
+  font-size: 14px;
+  border-radius: var(--r);
+}
+
+.page-lede {
+  margin: 0 0 var(--s5);
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 62ch;
+}
+
+/* Skeleton rows (019 FR-017): the final layout's shape, no shimmer under Reduce Motion. */
+.skeleton {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--fill);
+  animation: skeleton 1.4s ease-in-out infinite;
+}
+@keyframes skeleton {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.card {
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  padding: var(--s4) var(--s5);
+}
+
+.section-title {
+  font: 600 11px/1 var(--font);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 var(--s3);
+}
+
+input[type="text"],
+input[type="search"],
+input[type="number"],
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 0.5px solid var(--separator);
+  border-radius: var(--r-sm);
+  padding: 5px 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* On/off preferences are switches, as in System Settings (019 FR-013): a native checkbox with
+   role="switch", so Space toggles it and VoiceOver says "switch, on". */
+input[type="checkbox"][role="switch"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  border-radius: 11px;
+  background: var(--fill-2);
+  position: relative;
+  transition: background 160ms var(--ease);
+}
+input[type="checkbox"][role="switch"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  transition: transform 160ms var(--ease);
+}
+input[type="checkbox"][role="switch"]:checked {
+  background: var(--accent);
+}
+input[type="checkbox"][role="switch"]:checked::after {
+  transform: translateX(16px);
+}
+input[type="checkbox"][role="switch"]:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}

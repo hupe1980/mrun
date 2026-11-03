@@ -1,0 +1,57 @@
+[package]
+name = "mrun-engine"
+description = "Engine contract, model identity and (with the `mlx` feature) the MLX engine for mrun"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords = ["llm", "inference", "mlx", "apple-silicon"]
+categories = ["science"]
+
+[features]
+# A tensor backend is built (set by `mlx` or `nuvec`; never alone). Off by default here (`mrun`
+# turns a backend on).
+engine = []
+# MLX through `mrun-mlx-sys`: builds MLX from source (CMake; Metal needs Xcode; on Linux
+# BLAS/LAPACK). Removed by spec 016 once nuvec passes its gates (D065).
+default = []
+mlx = ["engine", "dep:mlx-sys", "dep:zstd"]
+# nuvec, the pure-Rust MLX port (spec 016, D065): core only, pinned exactly.
+nuvec = ["engine", "dep:nuvec", "dep:nuvec-kernels"]
+# Tiny random-weight checkpoints for tests (`testing`; with a backend), shared with `mrun`'s suites.
+test-support = []
+
+[dependencies]
+mlx-sys = { workspace = true, optional = true }
+nuvec = { version = "=0.6.1", optional = true }
+# The kernel mode of the build above (`MODE`: precompiled or runtime; FR-009), not re-exported by
+# `nuvec`. Same version, so the same crate instance.
+nuvec-kernels = { version = "=0.6.1", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+# Decompresses the embedded mlx.metallib on first use (D034).
+zstd = { workspace = true, optional = true }
+
+[build-dependencies]
+sha2.workspace = true
+
+[lints]
+workspace = true
+
+[[example]]
+name = "generate"
+required-features = ["engine"]
+
+[[example]]
+name = "bench_engine"
+required-features = ["engine"]
+
+[[example]]
+name = "bench_qmm_rows"
+required-features = ["engine"]

@@ -1,0 +1,752 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hupe1980/mrun/crates/mrun/bench/result.schema.json",
+  "title": "mrun bench run result",
+  "description": "Hand-written contract of `mrun bench` results (005 data model, D038, D041, D044, D045, D053). Version 3: per-system lossy_kv, speculation, lanes and numerics; turn class, offset, gap and unreused; concurrent cells; splice hit rate per client; session and per-kind comparisons; comparability different-numerics. Version 2 added whole-session exclusion, the natural-stop quality pass, the canary truncation check and paired comparisons with bootstrap intervals.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 3
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": "string"
+    },
+    "mrun_version": {
+      "type": "string"
+    },
+    "machine": {
+      "type": "object",
+      "properties": {
+        "chip": {
+          "type": "string"
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "macos": {
+          "type": "string"
+        },
+        "power_source": {
+          "type": "string"
+        },
+        "low_power": {
+          "type": "boolean"
+        },
+        "per_system": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "system": {
+                "type": "string"
+              },
+              "free_memory_before": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "swap": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "load_average": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "system",
+              "free_memory_before",
+              "swap"
+            ]
+          }
+        }
+      },
+      "required": [
+        "chip",
+        "memory_bytes",
+        "macos",
+        "power_source",
+        "low_power",
+        "per_system"
+      ]
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "apis": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "chat",
+                "messages",
+                "responses"
+              ]
+            }
+          },
+          "context_length": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "model": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string"
+              },
+              "bits_per_weight": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "kv_format": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "format",
+              "bits_per_weight",
+              "kv_format"
+            ]
+          },
+          "lossy_kv": {
+            "type": "boolean"
+          },
+          "speculation": {
+            "type": "string"
+          },
+          "lanes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "numerics": {
+            "type": "object",
+            "properties": {
+              "nax": {
+                "enum": [
+                  "on",
+                  "off",
+                  "unknown"
+                ]
+              },
+              "gpu_family": {
+                "type": "string"
+              },
+              "backend": {
+                "enum": [
+                  "mlx",
+                  "nuvec"
+                ]
+              },
+              "backend_version": {
+                "type": "string"
+              },
+              "kernels": {
+                "enum": [
+                  "precompiled",
+                  "runtime",
+                  "unavailable"
+                ]
+              }
+            },
+            "required": [
+              "nax"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "release",
+          "verified",
+          "endpoint",
+          "apis",
+          "context_length",
+          "flags",
+          "model",
+          "lossy_kv",
+          "speculation",
+          "lanes",
+          "numerics"
+        ]
+      }
+    },
+    "resets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string"
+          },
+          "rep": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "step": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "system",
+          "rep",
+          "step",
+          "ok"
+        ]
+      }
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string"
+          },
+          "cell": {
+            "type": "string"
+          },
+          "api": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed",
+              "not-run",
+              "n/a"
+            ]
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "median": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "p95": {
+            "type": "number"
+          },
+          "iqr": {
+            "type": "number"
+          },
+          "unit": {
+            "enum": [
+              "ms",
+              "s",
+              "tok/s"
+            ]
+          },
+          "thermal_start": {
+            "enum": [
+              "nominal",
+              "fair",
+              "serious",
+              "critical",
+              "unknown"
+            ]
+          },
+          "thermal_end": {
+            "enum": [
+              "nominal",
+              "fair",
+              "serious",
+              "critical",
+              "unknown"
+            ]
+          },
+          "short_replies": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "quality": {
+            "type": "object",
+            "properties": {
+              "turns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "malformed_tool_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "early_eos": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length_capped": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "complete": {
+                "type": "boolean"
+              },
+              "failures": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "rep": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "rep",
+                    "error"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "turns",
+              "malformed_tool_calls",
+              "early_eos",
+              "length_capped",
+              "complete",
+              "failures"
+            ]
+          },
+          "truncation_check": {
+            "type": "string"
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rep": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "rep",
+                "error"
+              ]
+            }
+          },
+          "incomplete": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rep": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "rep",
+                "error"
+              ]
+            }
+          },
+          "complete_sessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "n": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "conversation": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "new",
+                    "repeated",
+                    "branching"
+                  ]
+                },
+                "ttft_ms": {
+                  "type": "number"
+                },
+                "tfut_ms": {
+                  "type": "number"
+                },
+                "input": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cached": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "output": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cause": {
+                  "enum": [
+                    "new",
+                    "diverged",
+                    "evicted",
+                    "gap",
+                    "disabled"
+                  ]
+                },
+                "message_index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "rep": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "message_role": {
+                  "type": "string"
+                },
+                "gap": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unreused": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "class": {
+                  "enum": [
+                    "main",
+                    "auxiliary"
+                  ]
+                },
+                "offset_ms": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "n",
+                "conversation",
+                "kind",
+                "ttft_ms",
+                "tfut_ms",
+                "input",
+                "cached",
+                "output",
+                "class"
+              ]
+            }
+          },
+          "session_s": {
+            "type": "number"
+          },
+          "session_times": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rep": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "s": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "rep",
+                "s"
+              ]
+            }
+          },
+          "class": {
+            "enum": [
+              "sequential",
+              "concurrent"
+            ]
+          },
+          "main_ttft": {
+            "type": "number"
+          },
+          "aux_ttft": {
+            "type": "number"
+          },
+          "lossy_kv": {
+            "type": "boolean"
+          },
+          "speculation": {
+            "type": "string"
+          },
+          "splice_hit_rate": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "client": {
+                  "enum": [
+                    "claude-code",
+                    "opencode",
+                    "codex",
+                    "other"
+                  ]
+                },
+                "eligible": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "spliced": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "rate": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "client",
+                "eligible",
+                "spliced",
+                "rate"
+              ]
+            }
+          }
+        },
+        "required": [
+          "system",
+          "cell",
+          "api",
+          "status",
+          "samples",
+          "min",
+          "median",
+          "max",
+          "unit",
+          "thermal_start",
+          "thermal_end",
+          "short_replies",
+          "failures",
+          "lossy_kv"
+        ]
+      }
+    },
+    "comparability": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "cell": {
+            "type": "string"
+          },
+          "system": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "same-weights",
+              "different-quantization",
+              "lossy-kv",
+              "different-numerics",
+              "n/a"
+            ]
+          }
+        },
+        "required": [
+          "cell",
+          "kind"
+        ]
+      }
+    },
+    "comparisons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "cell": {
+            "type": "string"
+          },
+          "system": {
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "paired-turns",
+              "paired-sessions",
+              "median-ratio"
+            ]
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "speedup": {
+            "type": "number",
+            "minimum": 0
+          },
+          "ci_low": {
+            "type": "number",
+            "minimum": 0
+          },
+          "ci_high": {
+            "type": "number",
+            "minimum": 0
+          },
+          "verdict": {
+            "enum": [
+              "mrun-faster",
+              "mrun-slower",
+              "within-noise"
+            ]
+          },
+          "headline": {
+            "type": "boolean"
+          },
+          "scope": {
+            "enum": [
+              "new",
+              "repeated",
+              "branching",
+              "session"
+            ]
+          }
+        },
+        "required": [
+          "cell",
+          "system",
+          "method",
+          "n",
+          "speedup",
+          "ci_low",
+          "ci_high",
+          "verdict",
+          "headline"
+        ]
+      }
+    },
+    "method": {
+      "type": "object",
+      "properties": {
+        "replay": {
+          "const": "in-order"
+        },
+        "reps": {
+          "type": "object",
+          "properties": {
+            "synthetic": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cancel": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "agent": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "synthetic",
+            "cancel",
+            "agent"
+          ]
+        },
+        "resamples": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "replay",
+        "reps",
+        "resamples",
+        "seed"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "started_at",
+    "finished_at",
+    "mrun_version",
+    "machine",
+    "systems",
+    "resets",
+    "cells",
+    "comparability",
+    "comparisons",
+    "method",
+    "warnings"
+  ]
+}

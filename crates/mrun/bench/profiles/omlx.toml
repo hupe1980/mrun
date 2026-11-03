@@ -1,0 +1,21 @@
+# oMLX, defaults (paged in-memory and SSD prompt cache).
+# Verified 2026-10-17 on the M4 Pro (T022): oMLX 0.7.0 (GitHub release wheel; not on PyPI) serves
+# Chat, Messages and Responses on port 8000. MTP needs MTP tensors (absent from
+# mlx-community/Qwen3.6-35B-A3B-4bit) and DFlash a separate draft checkpoint: speculation none.
+name = "omlx"
+release = "0.7.0"
+url = "http://127.0.0.1:8000"
+apis = ["chat", "messages", "responses"]
+health = "/v1/models"
+ignore_eos = "none"
+flags = ["--port 8000", "--paged-ssd-cache-dir <dir>"]
+speculation = "none"
+lanes = 1
+start = "omlx serve --model-dir <dir holding Qwen3.6-35B-A3B-4bit> --port 8000 --paged-ssd-cache-dir <dir> (context length {context}; best exact configuration: paged and SSD prompt cache on, bf16 KV, TurboQuant KV off; MTP/DFlash2 where the model has a drafter)"
+manual_reset = "Restart oMLX and clear its SSD cache directory"
+
+[model]
+name = "Qwen3.6-35B-A3B-4bit"
+format = "mlx"
+bits_per_weight = 4.5
+kv_format = "bf16"

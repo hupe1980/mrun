@@ -1,0 +1,1 @@
+Work through TODO.md one item at a time, in order. For each item: read the file it names, make the change, run 'python3 -m unittest' to check that item's tests now pass, then tick the item in TODO.md (change "[ ]" to "[x]") before you start the next one. Do not change test_ledger.py. When all eight items are ticked, run the tests once more and confirm everything passes.

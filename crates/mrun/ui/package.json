@@ -1,0 +1,28 @@
+{
+  "name": "mrun-ui",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "mrun's window: built to flat files the binary embeds at compile time (spec 018). Nothing is fetched from the network.",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "shots": "node scripts/shots.mjs"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "axe-core": "4.13.0",
+    "happy-dom": "21.0.1",
+    "puppeteer-core": "24.10.0",
+    "svelte": "5.57.1",
+    "svelte-check": "4.7.6",
+    "typescript": "5.9.3",
+    "vite": "8.3.0",
+    "vitest": "5.0.4"
+  },
+  "dependencies": {
+    "marked": "16.4.2"
+  }
+}

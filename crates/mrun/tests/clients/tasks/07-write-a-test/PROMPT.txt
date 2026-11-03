@@ -1,0 +1,1 @@
+Write test_clamp.py with unittest tests for clamp() in clamp.py: values below, inside and above the range, both boundaries, and the ValueError case. Run 'python3 -m unittest' to show they pass.

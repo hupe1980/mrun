@@ -1,0 +1,37 @@
+# Ollama, default caching, with mrun's context length (its small default would silently truncate
+# agent prompts). On Apple silicon its default engine is MLX since 0.40; it serves Chat
+# Completions, the Anthropic Messages API and Responses.
+# Verified 2026-10-17 on the M4 Pro (T022): Ollama 0.40.4; `qwen3.6:35b-a3b` resolves to NVFP4
+# safetensors on Apple silicon and runs on the MLX runner (`ollama show`: runner mlx). The default
+# tag has no MTP head (the `-mtp-` tags are separate GGUF builds): speculation none.
+name = "ollama"
+release = "0.40.4"
+url = "http://127.0.0.1:11434"
+apis = ["chat", "messages", "responses"]
+health = "/api/version"
+version_path = "/api/version"
+version_pointer = "/version"
+ignore_eos = "none"
+flags = ["OLLAMA_CONTEXT_LENGTH={context}", "OLLAMA_NUM_PARALLEL=1", "OLLAMA_FLASH_ATTENTION=1"]
+# MLX runner; no MTP head in the default tag.
+speculation = "none"
+lanes = 1
+start = "OLLAMA_CONTEXT_LENGTH={context} OLLAMA_NUM_PARALLEL=1 OLLAMA_FLASH_ATTENTION=1 ollama serve, model qwen3.6:35b-a3b (best exact configuration: MLX runner, default prompt caching on, unquantized KV)"
+
+[model]
+name = "qwen3.6:35b-a3b"
+# NVFP4 (4-bit floats, one FP8 scale per 16 weights), not MLX affine 4-bit: a different quantization.
+format = "mlx-nvfp4"
+bits_per_weight = 4.5
+kv_format = "unknown"
+
+# Unload, then load again.
+[[reset]]
+method = "POST"
+path = "/api/generate"
+body = '{"model": "{model}", "keep_alive": 0}'
+
+[[reset]]
+method = "POST"
+path = "/api/generate"
+body = '{"model": "{model}"}'

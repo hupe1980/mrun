@@ -1,0 +1,6 @@
+{
+  "name": "household",
+  "currency": "USD",
+  "accounts": ["checking", "savings", "card"],
+  "fiscal_year_start": "01-01"
+}

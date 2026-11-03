@@ -1,0 +1,29 @@
+# llama.cpp server (llama-server) on its default port 9931: prompt cache reuse on, one slot and
+# mrun's context length. `release` is the build the flags were checked against.
+# Verified 2026-10-17 on the M4 Pro (T022): Homebrew llama.cpp 0.7.0 (build 11669) serves Chat,
+# Messages and Responses, `ignore_eos` in the body; bartowski/Qwen_Qwen3.6-35B-A3B-GGUF Q4_K_M carries
+# the model's MTP (nextn) tensors, so its own MTP speculation runs (`--spec-type draft-mtp`,
+# draft acceptance about 0.8 on a code prompt).
+name = "llama.cpp"
+release = "0.7.0 (b11669)"
+url = "http://127.0.0.1:9931"
+apis = ["chat", "messages", "responses"]
+health = "/health"
+version_path = "/props"
+version_pointer = "/build_info"
+ignore_eos = "body"
+flags = ["-c {context}", "-np 1", "--ctx-checkpoints 32", "--cache-reuse 256", "--cache-ram 8192", "-fa on", "--jinja", "--spec-type draft-mtp"]
+# Lossless: drafts are verified by the target model.
+speculation = "mtp"
+lanes = 1
+start = "llama-server -m Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf --port 9931 -c {context} -np 1 --ctx-checkpoints 32 --cache-reuse 256 --cache-ram 8192 -fa on --jinja --spec-type draft-mtp (best exact configuration: context checkpoints and RAM prompt cache on, f16 KV, its MTP speculation on)"
+
+[model]
+name = "Qwen_Qwen3.6-35B-A3B-Q4_K_M"
+format = "gguf"
+bits_per_weight = 4.96
+kv_format = "f16"
+
+[[reset]]
+method = "POST"
+path = "/slots/0?action=erase"

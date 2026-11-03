@@ -1,0 +1,21 @@
+# The reference MLX server (mlx_lm.server), prompt cache defaults. It serves Chat Completions only
+# (no Messages, no Responses), so it runs the synthetic chat cells and no agent cells.
+# Verified 2026-10-17 on the M4 Pro (T022): mlx-lm 0.32.2 (mlx 0.32.4), Chat Completions only.
+name = "mlx-lm"
+release = "0.32.2"
+url = "http://127.0.0.1:8080"
+apis = ["chat"]
+suites = ["synthetic"]
+health = "/v1/models"
+ignore_eos = "none"
+flags = []
+speculation = "none"
+lanes = 1
+start = "mlx_lm.server --model mlx-community/Qwen3.6-35B-A3B-4bit --port 8080 (best exact configuration: its LRU prompt cache on)"
+manual_reset = "Restart mlx_lm.server"
+
+[model]
+name = "mlx-community/Qwen3.6-35B-A3B-4bit"
+format = "mlx"
+bits_per_weight = 4.5
+kv_format = "bf16"

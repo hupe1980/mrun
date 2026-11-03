@@ -1,0 +1,24 @@
+[package]
+name = "mrun-runpod"
+description = "A small RunPod client for mrun's remote GPU mode: pods, GPU types, network volumes, self-stop"
+keywords = ["runpod", "gpu", "cloud"]
+categories = ["api-bindings"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+axum = "0.8"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "sync"] }
+
+[lints]
+workspace = true

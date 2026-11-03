@@ -1,0 +1,63 @@
+# Homebrew formula for mrun, rendered by .github/workflows/release.yml into
+# hupe1980/homebrew-tap/Formula/mrun.rb. Placeholders: {{VERSION}}, {{URL_MACOS26}},
+# {{SHA256_MACOS26}}, {{URL_MACOS15}}, {{SHA256_MACOS15}}.
+#
+# Two builds (D044, 008 FR-003): the NAX build (SDK and deployment target 26.2; MLX's Neural
+# Accelerator kernels compiled, used on an M5) for macOS 26.2 and later, the 15.0 build
+# otherwise. The full version is compared, not the :tahoe symbol, so macOS 26.0 and 26.1 get the
+# 15.0 build (the NAX binary would not load there). After upgrading macOS to 26.2,
+# `brew reinstall mrun` switches to the NAX build.
+class Mrun < Formula
+  desc "Local inference server for coding agents on Apple Silicon"
+  homepage "https://github.com/hupe1980/mrun"
+  version "{{VERSION}}"
+  license any_of: ["MIT", "Apache-2.0"]
+
+  depends_on arch: :arm64
+  depends_on macos: :sequoia
+
+  # `on_macos` keeps `brew audit --strict` (FormulaAudit/MacOSOnLinux) quiet; mrun is macOS-only.
+  on_macos do
+    if MacOS.full_version >= "26.2"
+      url "{{URL_MACOS26}}"
+      sha256 "{{SHA256_MACOS26}}"
+    else
+      url "{{URL_MACOS15}}"
+      sha256 "{{SHA256_MACOS15}}"
+    end
+  end
+
+  def install
+    # A single binary: MLX's Metal kernels are embedded and extracted to ~/Library/Caches/mrun
+    # on first use.
+    bin.install "bin/mrun"
+    bash_completion.install "completions/mrun.bash" => "mrun"
+    zsh_completion.install "completions/_mrun"
+    fish_completion.install "completions/mrun.fish"
+  end
+
+  def caveats
+    build = if MacOS.full_version >= "26.2"
+      "This is the macOS 26.2 build (MLX's NAX kernels, used on an M5)."
+    else
+      "This is the macOS 15 build; after upgrading macOS to 26.2 or later,\n" \
+        "`brew reinstall mrun` installs the macOS 26.2 (NAX) build."
+    end
+    <<~EOS
+      Upgrade with `brew upgrade mrun`, then restart a running server:
+        mrun stop && mrun serve --detach
+      Models are stored in the shared Hugging Face cache (~/.cache/huggingface/hub).
+      MLX's GPU kernels are unpacked to ~/Library/Caches/mrun on first use.
+      #{build}
+    EOS
+  end
+
+  test do
+    version_line = shell_output("#{bin}/mrun --version")
+    assert_match version.to_s, version_line
+    # The numerics line names the build this Mac got (008 FR-004, T030).
+    numerics = (MacOS.full_version >= "26.2") ? "nax compiled" : "no nax"
+    assert_match " numerics #{numerics}, ", version_line
+    assert_match "mrun", shell_output("#{bin}/mrun completions bash")
+  end
+end

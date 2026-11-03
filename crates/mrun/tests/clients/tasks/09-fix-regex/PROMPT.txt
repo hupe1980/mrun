@@ -1,0 +1,1 @@
+The log parser in logparse.py fails its tests. Run 'python3 -m unittest', fix the regular expression (not the tests), and confirm all tests pass.

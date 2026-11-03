@@ -1,0 +1,1 @@
+One test in this project fails. Run 'python3 -m unittest', find the faulty module in the textkit package, fix the bug there (do not change the tests), and confirm all tests pass.

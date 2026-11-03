@@ -1,0 +1,1 @@
+Run the tests with 'python3 -m unittest', find the bug in stats.py, fix it, and run the tests again to confirm they pass.

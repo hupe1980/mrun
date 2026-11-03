@@ -1,0 +1,54 @@
+name: Hardware report
+description: Share mrun results from a Mac other than the M4 Pro 48 GB it is qualified on (D060).
+title: "Hardware report: <chip>, <memory> GB"
+labels: ["hardware-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. mrun is qualified on one Mac (M4 Pro, 48 GB); results from M1, M2, M3, M5
+        and 16–24 GB Macs are listed on the benchmarks page with your name. They never block a
+        release. See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md#hardware-reports).
+  - type: textarea
+    id: doctor
+    attributes:
+      label: mrun doctor --report
+      description: |
+        Paste the whole output of `mrun doctor --report`. It names the chip, memory, macOS,
+        numerics, pulled models and calibration; it contains no prompts and shows your home
+        directory as `~`.
+      placeholder: "### mrun hardware report ..."
+    validations:
+      required: true
+  - type: textarea
+    id: models
+    attributes:
+      label: Models run
+      description: Which models (aliases or repositories) you ran, and how (`mrun run`, `mrun serve` with a client, `mrun bench`).
+      placeholder: "qwen3.5 with mrun bench --suite agent; qwen3.6 with Claude Code"
+    validations:
+      required: true
+  - type: textarea
+    id: bench
+    attributes:
+      label: mrun bench result (optional)
+      description: |
+        Attach `result.json` (and `report.md`) written by `mrun bench`, or paste them here.
+        Say whether the Mac was otherwise idle.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else (optional)
+      description: Cancellation latency, memory pressure, crashes, how it felt with your coding agent.
+    validations:
+      required: false
+  - type: checkboxes
+    id: credit
+    attributes:
+      label: Credit
+      options:
+        - label: List these results with my GitHub handle on the benchmarks page.
+          required: false
