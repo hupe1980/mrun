@@ -638,9 +638,10 @@ async fn doctor_and_completions() {
     );
     assert!(text.contains("no model is pulled yet"), "{text}");
     if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        // A failed check (the platform): exit 7.
         assert_eq!(
             out.status.code(),
-            Some(8),
+            Some(7),
             "not an Apple Silicon Mac: {text}"
         );
     }
