@@ -6,6 +6,13 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-05
+
+### Fixed
+
+- `mrun` is on crates.io (`cargo install mrun`): 0.1.0 reached GitHub and Homebrew, but its
+  crates.io upload failed. The crates are now published with Trusted Publishing.
+
 ## [0.1.0] - 2026-11-05
 
 The first release.
@@ -56,5 +63,6 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/hupe1980/mrun/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/hupe1980/mrun/releases/tag/v0.1.0

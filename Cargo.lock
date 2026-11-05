@@ -2277,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "mrun"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2311,7 +2311,7 @@ dependencies = [
 
 [[package]]
 name = "mrun-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nuvec",
  "nuvec-kernels",
@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "mrun-runpod"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "reqwest",
