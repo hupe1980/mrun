@@ -19,10 +19,10 @@ Releases are cut from `main` by pushing a tag; `.github/workflows/release.yml` d
    finishes a draft but never overwrites a published release. Nothing is published if a step
    before publishing fails.
 5. Final releases: the workflow publishes to crates.io in dependency order, `mrun-engine` →
-   `mrun-runpod` → `mrun`, using `CARGO_REGISTRY_TOKEN` from the GitHub
-   environment `release` (see the owner setup at the top of `release.yml`). The job fails when
-   the token is missing; versions already on crates.io are skipped, so a re-run continues after a
-   partial publish. To publish by hand instead:
+   `mrun-runpod` → `mrun`, with Trusted Publishing from the GitHub environment `crates-io` (see
+   the owner setup at the top of `release.yml`): no token is stored. Versions already on
+   crates.io are skipped, so a re-run continues after a partial publish. To publish by hand
+   instead:
 
    ```sh
    cargo publish -p mrun-engine

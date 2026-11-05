@@ -19,12 +19,11 @@ name: release
 #   formulas), and a GitHub App installed on that repository only, with repository permission
 #   contents: read and write (speccoder's App serves; give mrun its own private key);
 # - GitHub environment `release`, deployment rule: tags `v*`, holding HOMEBREW_APP_ID and
-#   HOMEBREW_APP_PRIVATE_KEY (the App's ID and a private key) and CARGO_REGISTRY_TOKEN: a
-#   crates.io API token with the scopes publish-new and publish-update, limited to the crates
-#   `mrun` and `mrun-*`, with an expiry.
-#
-# Trusted publishing can only be set up for crates that already exist; after the first release it
-# can replace the token.
+#   HOMEBREW_APP_PRIVATE_KEY (the App's ID and a private key);
+# - GitHub environment `crates-io`, deployment rule: tags `v*`, and on crates.io a trusted
+#   publisher for each of `mrun-engine`, `mrun-runpod` and `mrun` (Settings → Trusted
+#   Publishing → GitHub: owner hupe1980, repository mrun, workflow release.yml, environment
+#   crates-io). The crates job then gets a short-lived token by OIDC; no token is stored.
 #
 # Third-party actions are pinned by commit: this workflow holds write tokens.
 
@@ -249,23 +248,26 @@ jobs:
   crates:
     needs: [check, release]
     if: needs.check.outputs.prerelease == 'false'
-    runs-on: macos-15
+    # `cargo publish` verifies by building, with NUVEC_REQUIRE_NAX: the build's SDK (>= 26.2).
+    runs-on: ${{ vars.NAX_RUNNER || 'macos-26' }}
     timeout-minutes: 120
-    environment: release
+    environment: crates-io
     permissions:
       contents: read
+      id-token: write
     env:
       VERSION: ${{ needs.check.outputs.version }}
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
-      - name: The token is there
-        run: |
-          [ -n "${CARGO_REGISTRY_TOKEN}" ] || { echo "CARGO_REGISTRY_TOKEN is not set in the environment release"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
       - run: rustup show active-toolchain || rustup toolchain install
+      # Trusted Publishing: crates.io exchanges this job's OIDC token for a 30-minute one.
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
       - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           export MRUN_BUILD_COMMIT="${GITHUB_SHA::7}"
           published() {
