@@ -249,7 +249,16 @@ async fn commands_without_a_server() {
         .to_string();
     for args in [
         strings(&["ps", "--port", &port]),
-        strings(&["launch", "claude-code", "--dry-run", "--port", &port]),
+        // A named model: the default depends on the machine's memory (none fits a small runner).
+        strings(&[
+            "launch",
+            "claude-code",
+            "--dry-run",
+            "--model",
+            "qwen3.5",
+            "--port",
+            &port,
+        ]),
     ] {
         let out = mrun(home.path(), &args).await;
         assert_eq!(
@@ -614,7 +623,14 @@ async fn help_shows_the_short_forms() {
 #[tokio::test]
 async fn doctor_and_completions() {
     let home = tempfile::tempdir().unwrap();
-    let out = mrun(home.path(), &strings(&["doctor", "--port", "1"])).await;
+    // A free port: Linux refuses an unprivileged probe of port 1, which doctor reports as taken.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+        .to_string();
+    let out = mrun(home.path(), &strings(&["doctor", "--port", &port])).await;
     let text = stdout(&out);
     assert!(
         text.contains("platform") && text.contains("info  clients"),
@@ -631,7 +647,7 @@ async fn doctor_and_completions() {
     // The hardware report (D060): Markdown, exit 0, the home directory shown as `~`.
     let out = mrun(
         home.path(),
-        &strings(&["doctor", "--report", "--port", "1"]),
+        &strings(&["doctor", "--report", "--port", &port]),
     )
     .await;
     let text = stdout(&out);
