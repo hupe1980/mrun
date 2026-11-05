@@ -38,7 +38,7 @@ pub fn render_json(ctx: &Ctx, manifest: &Manifest) -> serde_json::Value {
     serde_json::json!({
         "schema_version": 1,
         "name": manifest.name(),
-        "path": manifest.snapshot_dir(&ctx.paths),
+        "path": manifest.dir(&ctx.paths),
         "status": status.label(),
         "size": manifest.size(),
         "manifest": manifest,
@@ -49,7 +49,7 @@ pub fn render_json(ctx: &Ctx, manifest: &Manifest) -> serde_json::Value {
 }
 
 pub fn render(ctx: &Ctx, manifest: &Manifest) -> String {
-    let dir = manifest.snapshot_dir(&ctx.paths);
+    let dir = manifest.dir(&ctx.paths);
     let mut out = String::new();
     let mut line = |key: &str, value: String| {
         let _ = writeln!(out, "{:<14}{value}", format!("{key}:"));

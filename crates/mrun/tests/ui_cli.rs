@@ -241,7 +241,7 @@ async fn pull_json_without_yes_prints_confirm_and_needs_yes() {
     );
     assert_eq!(lines[2]["code"], "E002");
     assert_eq!(lines[2]["hint"], "pass --yes to download it anyway");
-    assert!(!ctx.paths.repo_dir(REPO).join("snapshots").exists());
+    assert!(!ctx.paths.models().exists());
 
     let buffer = Buffer::default();
     pull_json(&ctx, REPO, true, &JsonLines::to(buffer.clone()))

@@ -1,5 +1,5 @@
 //! 003 SC-009: the position-bound state captured inside a chunk by a segmented Gated DeltaNet
-//! scan (`MlxEngine::prefill_chunk_with_checkpoints`: the recurrence runs in segments that
+//! scan (`NuvecEngine::prefill_chunk_with_checkpoints`: the recurrence runs in segments that
 //! thread the state, the projections and the convolution run once over the whole chunk) is bit
 //! for bit the state of a chunk ending there, and a continuation from it equals one from the
 //! chunk end. Tiny hybrids always (CPU and Metal); `qwen3.5`/`qwen3.6` with `MRUN_TEST_MODELS`
@@ -10,13 +10,13 @@
 mod common;
 
 use common::{Device, load, logprobs, max_diff, on_each_device};
-use mrun_engine::{CancelToken, Engine, MlxEngine};
+use mrun_engine::{CancelToken, Engine, NuvecEngine};
 
-fn chunk(engine: &mut MlxEngine, tokens: &[u32]) {
+fn chunk(engine: &mut NuvecEngine, tokens: &[u32]) {
     assert!(engine.prefill_chunk(tokens, &CancelToken::new()).unwrap());
 }
 
-fn next(engine: &mut MlxEngine, last: u32) -> Vec<f32> {
+fn next(engine: &mut NuvecEngine, last: u32) -> Vec<f32> {
     let step = engine.forward(last).unwrap();
     logprobs(engine, &step)
 }
@@ -34,7 +34,7 @@ fn same(a: &[f32], b: &[f32], what: String) -> Result<(), String> {
 /// `tokens[at..]` (one chunk) and the last token: `(segmenting leaves the chunk's outputs
 /// unchanged, the captured state equals a chunk end's)`, each with its first difference.
 fn segmented_parity(
-    engine: &mut MlxEngine,
+    engine: &mut NuvecEngine,
     tokens: &[u32],
     at: u32,
     chunk_end: u32,
@@ -43,11 +43,11 @@ fn segmented_parity(
     let (last, body) = tokens.split_last().unwrap();
     let (at_u, end_u) = (at as usize, chunk_end as usize);
     let limit = tokens.len() as u32 + 4;
-    let fresh = |engine: &mut MlxEngine| {
+    let fresh = |engine: &mut NuvecEngine| {
         engine.reset_all();
         engine.set_limit(limit).unwrap();
     };
-    let segmented = |engine: &mut MlxEngine| {
+    let segmented = |engine: &mut NuvecEngine| {
         let inside = engine
             .prefill_chunk_with_checkpoints(&body[..end_u], &CancelToken::new(), &[at])
             .unwrap()

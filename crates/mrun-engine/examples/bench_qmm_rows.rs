@@ -1,9 +1,9 @@
-//! Batched quantized-matmul bandwidth probe (011 T001a, research R16): times MLX's
+//! Batched quantized-matmul bandwidth probe (011 T001a, research R16): times nuvec's
 //! `quantized_matmul` and `gather_qmm` on the weight shapes of real models with `[1, B, hidden]`
 //! inputs at B = 1, 2, 4, and models the aggregate decode ratio of B lanes.
 //!
 //! ```text
-//! cargo run --release -p mrun-engine --features mlx --example bench_qmm_rows -- \
+//! cargo run --release -p mrun-engine --features engine --example bench_qmm_rows -- \
 //!     [--step-ms qwen3=21.9,qwen3.5=17.0] [--reps 15]
 //! ```
 //!
@@ -227,7 +227,6 @@ fn run() -> Result<(), String> {
             other => return Err(format!("unexpected argument {other}")),
         }
     }
-    tensor::metallib::ensure()?;
     if !tensor::metal_available() {
         return Err("needs Metal".into());
     }

@@ -16,11 +16,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
-# Jobs that build MLX restore its install from the cache (D034): the build script keeps one
-# build per configuration in MLX_SYS_CACHE_DIR, so a warm cache skips the 15-40 minute CMake
-# build. The cache key covers everything the build script hashes into its configuration key that
-# can change in this repository: build.rs (pins, recipe), the patches and the deployment target.
-
 jobs:
   # The window's page (018): its tests, and that the committed, embedded `ui/dist` is what the
   # sources build (Rust jobs embed `dist` as committed and need no Node).
@@ -62,157 +57,80 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - name: Format
         run: cargo fmt --all --check
-      # The engine-agnostic parts only: `--no-default-features` leaves out the MLX engine.
+      # The engine-agnostic parts (the Linux agent): `--no-default-features` leaves out the engine.
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
       - name: Tests
         run: cargo test --locked --workspace --no-default-features
-      # 008 SC-007: the NAX check on fixture metallibs and the formula's tarball choice per
-      # macOS version (Ruby is on the image).
+      # The formula renders one archive with its checksum (Ruby is on the image).
       - name: Release tooling tests
         run: scripts/release/test.sh
 
   package:
     name: Package (cargo package dry runs)
-    # Every crate must stay publishable (D026, D034): no files outside the crate directories,
-    # complete `include` lists, path dependencies with versions.
+    # Every crate must stay publishable (D026): no files outside the crate directories, complete
+    # `include` lists, path dependencies with versions. Verification builds without the engine.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
-      # mrun-mlx-sys is not a workspace member, so it is packaged on its own. Verifying it would
-      # build MLX; its build is covered by the mlx-sys jobs below.
-      - name: Package mrun-mlx-sys
-        run: |
-          cargo package --locked --manifest-path crates/mrun-mlx-sys/Cargo.toml --list
-          cargo package --locked --manifest-path crates/mrun-mlx-sys/Cargo.toml --no-verify
-      # `cargo package --workspace` resolves the packaged manifests against crates.io, where
-      # members are overlaid from a temporary local registry but the excluded mrun-mlx-sys is not
-      # (it may not be published yet). The patch points that one dependency at the local copy.
-      # Verification builds the packaged crates without the MLX engine.
       - name: Package the workspace (mrun-engine, mrun-runpod, mrun)
-        run: >
-          cargo package --locked --workspace --no-default-features
-          --config 'patch.crates-io.mrun-mlx-sys.path="crates/mrun-mlx-sys"'
-
-  mlx-sys-linux:
-    name: Linux (mrun-mlx-sys, MLX CPU backend)
-    # Builds mlx-c + MLX from pinned source tars (CMake, OpenBLAS/LAPACKE) and runs the FFI smoke
-    # test. mrun-mlx-sys is not a workspace member, so the fast job above never builds it.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install CMake, BLAS and LAPACK
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libopenblas-dev liblapacke-dev
-      - name: Install toolchain from rust-toolchain.toml
-        run: rustup show active-toolchain || rustup toolchain install
-      - name: Point the MLX build cache at the user cache directory
-        run: echo "MLX_SYS_CACHE_DIR=${HOME}/.cache/mrun-mlx-sys" >> "${GITHUB_ENV}"
-      - name: Cache the MLX build
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/mrun-mlx-sys
-          key: mlx-${{ runner.os }}-${{ runner.arch }}-dt-none-${{ hashFiles('crates/mrun-mlx-sys/build.rs', 'crates/mrun-mlx-sys/patches/**') }}
-      - name: Clippy (mrun-mlx-sys)
-        run: cargo clippy --locked --manifest-path crates/mrun-mlx-sys/Cargo.toml --all-targets -- -D warnings
-      - name: Test (mrun-mlx-sys smoke test)
-        run: cargo test --locked --manifest-path crates/mrun-mlx-sys/Cargo.toml
+        run: cargo package --locked --workspace --no-default-features
 
   macos:
-    name: macOS (build)
-    # Hosted runners have no reliable Metal GPU for MLX: build only; Metal tests run on Apple hardware.
+    name: macOS (clippy, build)
+    # The engine on nuvec (022). Hosted runners have no reliable Metal GPU: build and lint only;
+    # the GPU suites run on Apple hardware (CONTRIBUTING.md).
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 60
+    env:
+      # A build without the Metal toolchain would compile the kernels at start instead.
+      NUVEC_REQUIRE_METALLIB: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
-      - name: Point the MLX build cache at the user cache directory
-        run: echo "MLX_SYS_CACHE_DIR=${HOME}/Library/Caches/mrun-mlx-sys" >> "${GITHUB_ENV}"
-      - name: Cache the MLX build
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/mrun-mlx-sys
-          key: mlx-${{ runner.os }}-${{ runner.arch }}-dt-none-${{ hashFiles('crates/mrun-mlx-sys/build.rs', 'crates/mrun-mlx-sys/patches/**') }}
-      - name: Build with MLX (Metal)
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build
         run: cargo build --locked --workspace --all-targets
-      - name: Disk usage
-        if: always()
-        run: df -h
 
   macos-release:
-    name: macOS (release build, ${{ matrix.variant }})
-    # The configurations the release workflow ships (008 FR-001, FR-015, D044): arm64, vendored
-    # MLX with its Metal library embedded in the binary (D034), deployment target 15.0 (no NAX)
-    # and 26.2 with SDK >= 26.2 (NAX kernels compiled; the job fails when the metallib has none),
-    # so a release never meets the NAX configuration first. Their cache entries are the ones
-    # release.yml restores. NAX_RUNNER (a repository variable) replaces `macos-26` when GitHub's
-    # image has no SDK >= 26.2.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: macos15
-            runner: macos-15
-            deployment_target: "15.0"
-            nax: false
-          - variant: macos26
-            runner: nax
-            deployment_target: "26.2"
-            nax: true
-    runs-on: ${{ matrix.runner == 'nax' && (vars.NAX_RUNNER || 'macos-26') || matrix.runner }}
-    timeout-minutes: 90
+    name: macOS (release build)
+    # The configuration the release workflow ships (022 R4): one arm64 archive for macOS 15 and
+    # later, built on an SDK >= 26.2 so nuvec's NAX kernels are compiled in (nuvec runs them only
+    # where the OS and GPU allow). NAX_RUNNER (a repository variable) replaces `macos-26` when
+    # GitHub's image has no SDK >= 26.2.
+    runs-on: ${{ vars.NAX_RUNNER || 'macos-26' }}
+    timeout-minutes: 60
     env:
-      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      NUVEC_REQUIRE_METALLIB: "1"
+      NUVEC_REQUIRE_NAX: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Select the newest Xcode and check the SDK
-        id: sdk
+      - name: Select the newest Xcode
         run: |
-          if [[ "${{ matrix.nax }}" == "true" ]]; then
-            xcode="$(ls -d /Applications/Xcode_26*.app /Applications/Xcode.app 2>/dev/null | sort -V | tail -n 1 || true)"
-            if [[ -n "${xcode}" ]]; then sudo xcode-select -s "${xcode}/Contents/Developer"; fi
-          fi
-          sdk="$(xcrun --sdk macosx --show-sdk-version)"
-          echo "macOS SDK ${sdk}, deployment target ${MACOSX_DEPLOYMENT_TARGET}"
-          echo "version=${sdk}" >> "${GITHUB_OUTPUT}"
-          if [[ "${{ matrix.nax }}" == "true" ]]; then
-            lowest="$(printf '%s\n%s\n' "26.2" "${sdk}" | sort -V | head -n 1)"
-            if [[ "${lowest}" != "26.2" ]]; then
-              echo "the NAX build needs SDK >= 26.2, this runner has ${sdk}; set NAX_RUNNER" >&2
-              exit 1
-            fi
-          fi
+          xcode="$(ls -d /Applications/Xcode_26*.app /Applications/Xcode.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [[ -n "${xcode}" ]]; then sudo xcode-select -s "${xcode}/Contents/Developer"; fi
+          echo "macOS SDK $(xcrun --sdk macosx --show-sdk-version)"
       - name: Install toolchain from rust-toolchain.toml
         run: |
           rustup show active-toolchain || rustup toolchain install
           rustup target add aarch64-apple-darwin
-      - name: Point the MLX build cache at the user cache directory
-        run: echo "MLX_SYS_CACHE_DIR=${HOME}/Library/Caches/mrun-mlx-sys" >> "${GITHUB_ENV}"
-      - name: Cache the MLX build
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/mrun-mlx-sys
-          key: mlx-${{ runner.os }}-${{ runner.arch }}-dt-${{ env.MACOSX_DEPLOYMENT_TARGET }}-sdk-${{ steps.sdk.outputs.version }}-${{ hashFiles('crates/mrun-mlx-sys/build.rs', 'crates/mrun-mlx-sys/patches/**') }}
-      - name: Release build with MLX
+      - name: Release build
         run: cargo build --locked --release --target aarch64-apple-darwin -p mrun
-      - name: Smoke-test the binary on its own (metallib embedded)
+      - name: Smoke-test the binary on its own
         run: |
           alone="$(mktemp -d)"
           cp target/aarch64-apple-darwin/release/mrun "${alone}/mrun"
-          "${alone}/mrun" --version
-          # The embedded kernels extract on first MLX use; doctor's gpu-kernels check must pass.
+          "${alone}/mrun" --version | tee version.txt
+          grep -q ' nuvec .*, kernels precompiled, nax ' version.txt
           home="$(mktemp -d)"
           HOME="${home}" "${alone}/mrun" doctor | tee doctor.txt || true
           grep -q '^ok    gpu-kernels' doctor.txt
-          metallib="$(ls "${home}"/Library/Caches/mrun/mlx-*.metallib | head -n 1)"
-          MLX_SYS_REQUIRE_NAX="${{ matrix.nax && '1' || '' }}" \
-            scripts/release/check_nax.sh "${metallib}" "${MACOSX_DEPLOYMENT_TARGET}"
       - name: Disk usage
         if: always()
         run: df -h

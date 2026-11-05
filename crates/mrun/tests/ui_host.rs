@@ -599,3 +599,74 @@ async fn exports_stay_in_downloads_and_are_numbered() {
     assert_eq!(entries, 9, "nothing outside the downloads directory");
     assert!(!dir.path().join("etc").exists());
 }
+
+/// A fake `mrun` for the cloud section: the three reads, and `cloud login` keeping its stdin.
+#[cfg(unix)]
+fn fake_cloud_cli(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join("fake-mrun");
+    let body = r#"#!/bin/sh
+echo "$@" >> DIR/argv.log
+case "$1 $2" in
+  'cloud models') echo '[{"repo":"Qwen/Qwen3-4B","weights_bytes":8000000000}]';;
+  'cloud gpus') echo '[{"id":"NVIDIA L40S","memory_gb":48,"secure_per_hr":0.86}]';;
+  'cloud status') echo '{"pods":[],"relay":null,"key":"keychain"}';;
+  'cloud login') read key; echo "$key" > DIR/stdin.txt; echo 'key stored in the Keychain' >&2;;
+esac
+exit 0
+"#;
+    std::fs::write(&script, body.replace("DIR", &dir.display().to_string())).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+/// 024: `/app/cloud` gathers the catalog, the GPUs, the status and the added models; the key
+/// reaches `cloud login` on its stdin only, never its argv or the job.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_cloud_section_and_the_key_on_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let (port, host) = host_with(dir.path(), 1, Some(fake_cloud_cli(dir.path()))).await;
+    host.store
+        .update(&serde_json::json!({"cloud_models": [{"repo": "org/mine", "weights_bytes": 3}]}))
+        .unwrap();
+    let cloud: serde_json::Value = get_with(port, "/app/cloud", Some(TOKEN))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cloud["offers"][0]["repo"], "Qwen/Qwen3-4B");
+    assert_eq!(cloud["gpus"][0]["memory_gb"], 48);
+    assert_eq!(cloud["status"]["key"], "keychain");
+    assert_eq!(cloud["added"][0]["repo"], "org/mine");
+
+    let post = |body: serde_json::Value| {
+        client()
+            .post(format!("http://127.0.0.1:{port}/app/actions"))
+            .bearer_auth(TOKEN)
+            .json(&body)
+            .send()
+    };
+    let refused = post(serde_json::json!({"kind": "cloud-login"}))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+    let started: serde_json::Value =
+        post(serde_json::json!({"kind": "cloud-login", "secret": "rpa_SECRET123"}))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let id = started["job"]["id"].as_str().unwrap().to_string();
+    let job = wait_job(port, &id).await;
+    assert_eq!(job["state"], "done");
+    assert!(!job.to_string().contains("rpa_SECRET123"));
+    let stdin = std::fs::read_to_string(dir.path().join("stdin.txt")).unwrap();
+    assert_eq!(stdin.trim(), "rpa_SECRET123");
+    let argv = std::fs::read_to_string(dir.path().join("argv.log")).unwrap();
+    assert!(argv.lines().any(|l| l == "cloud login"));
+    assert!(!argv.contains("rpa_SECRET123"));
+}

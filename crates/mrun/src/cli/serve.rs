@@ -324,7 +324,7 @@ fn model_name(args: &ServeArgs) -> Result<String, CliError> {
     }
 }
 
-/// The engine factory of this build: the MLX engine with feature `mlx`, otherwise none.
+/// The engine factory of this build: the nuvec engine with feature `engine`, otherwise none.
 #[cfg(feature = "engine")]
 pub fn default_factory() -> EngineFactory {
     Box::new(|args: &ServeArgs| {
@@ -354,13 +354,13 @@ pub fn default_factory() -> EngineFactory {
     })
 }
 
-/// The engine factory of this build: the MLX engine with feature `mlx`, otherwise none.
+/// The engine factory of this build: the nuvec engine with feature `engine`, otherwise none.
 #[cfg(not(feature = "engine"))]
 pub fn default_factory() -> EngineFactory {
     Box::new(|_args: &ServeArgs| {
         Err(
             CliError::new(Code::Internal, "this build of mrun has no inference engine")
-                .hint("build with the default `mlx` feature"),
+                .hint("build with the default features (the `engine` feature)"),
         )
     })
 }

@@ -57,6 +57,7 @@
   async function action(kind: string, target = "") {
     if (kind === "models") return void (place = "models");
     if (kind === "open-log") return void host.open("log");
+    if (kind === "notify") return void notify(target);
     try {
       const job = await jobs.run(kind, target);
       if (job.state === "failed") notify(job.error ?? "That did not work.");
@@ -182,7 +183,7 @@
       <div class="scroll" class:flush={place === "chat"}>
         {#if place === "now"}<Now onAction={action} />
         {:else if place === "chat"}<Chat active={place === "chat" && !settings && !palette} />
-        {:else if place === "models"}<Models onError={notify} />
+        {:else if place === "models"}<Models onError={notify} onstarted={() => (place = "now")} />
         {:else}<Agents onError={notify} />{/if}
       </div>
     </main>

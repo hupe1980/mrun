@@ -2,7 +2,7 @@
 //! `text_config.model_type`, an unsupported quantization mode and unsupported per-path bits are
 //! refused from `config.json` alone (their fixtures hold no `*.safetensors`, so no tensor data
 //! can have been read); an unknown tensor name is refused after only the safetensors headers were
-//! read (MLX's peak memory does not grow by the tensor's size during the failed load).
+//! read (the allocator's peak memory does not grow by the tensor's size during the failed load).
 
 #![cfg(feature = "engine")]
 
@@ -11,10 +11,10 @@ mod common;
 use mrun_engine::budget::{DeviceMemory, GIB};
 use mrun_engine::models::LoadError;
 use mrun_engine::tensor::{self, Array, memory};
-use mrun_engine::{LoadOptions, MlxEngine, MlxLoadError};
+use mrun_engine::{LoadOptions, NuvecEngine, NuvecLoadError};
 
-fn load(dir: &std::path::Path) -> Result<MlxEngine, MlxLoadError> {
-    MlxEngine::load(
+fn load(dir: &std::path::Path) -> Result<NuvecEngine, NuvecLoadError> {
+    NuvecEngine::load(
         dir,
         LoadOptions {
             identity: "refusal".into(),
@@ -52,7 +52,7 @@ fn unknown_architectures_are_refused_naming_every_family() {
             assert!(
                 matches!(
                     error,
-                    MlxLoadError::Model(LoadError::UnsupportedArchitecture { .. })
+                    NuvecLoadError::Model(LoadError::UnsupportedArchitecture { .. })
                 ),
                 "{name}: {error}"
             );
@@ -77,7 +77,7 @@ fn unsupported_quantization_is_refused_from_the_config() {
         ] {
             let error = load(&config_only(name)).unwrap_err();
             match &error {
-                MlxLoadError::Model(LoadError::InvalidConfig { key, reason }) => {
+                NuvecLoadError::Model(LoadError::InvalidConfig { key, reason }) => {
                     assert_eq!(key, "quantization", "{name}: {error}");
                     assert!(reason.contains(says), "{name}: {reason}");
                 }
@@ -115,7 +115,7 @@ fn an_unknown_tensor_is_refused_without_reading_tensor_data() {
         let error = load(dir.path()).unwrap_err();
         let grown = memory::peak_allocated().saturating_sub(start);
         match &error {
-            MlxLoadError::Model(LoadError::InvalidConfig { key, reason }) => {
+            NuvecLoadError::Model(LoadError::InvalidConfig { key, reason }) => {
                 assert_eq!(key, "weights", "{error}");
                 assert!(reason.contains("mlp.bogus.weight"), "{reason}");
             }

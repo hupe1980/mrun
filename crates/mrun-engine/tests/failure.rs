@@ -1,5 +1,5 @@
 //! Failure atomicity (FR-028, SC-012) with the engine's failure-injection hook
-//! (`MlxEngine::fail_next`): an MLX error inside `prefill_chunk` (after any layer), `forward`
+//! (`NuvecEngine::fail_next`): a tensor error inside `prefill_chunk` (after any layer), `forward`
 //! or `sample`'s readback leaves the state, `len()` and `allocated()` as before the call, and
 //! the next calls compute exactly what an undisturbed engine computes; an error half-way through
 //! a move (`detach_tail`, `attach`) poisons the engine until `reset_all`.

@@ -308,7 +308,6 @@ fn sanitize(weights: &mut Weights, layers: usize) -> Result<(), LoadError> {
     // offsets from 1 (`(1 + w) · x`); converted MLX checkpoints already hold [C, K, 1] and w.
     let is_conv = |name: &str, t: &Array| name.contains("conv1d.weight") && t.dim(-1) != 1;
     let unsanitized = weights.any(is_conv);
-    weights.retain(|name| !name.contains("mtp."));
     weights.map(is_conv, |t| tensor::transpose(t, &[0, 2, 1]))?;
     if unsanitized {
         const NORMS: [&str; 5] = [

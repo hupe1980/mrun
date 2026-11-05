@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use mrun_engine::budget::{DeviceMemory, GIB};
 use mrun_engine::tensor;
-use mrun_engine::{CancelToken, Engine, LoadOptions, MlxEngine, Sampling};
+use mrun_engine::{CancelToken, Engine, LoadOptions, NuvecEngine, Sampling};
 use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,7 +32,7 @@ pub fn devices() -> Vec<Device> {
     devices
 }
 
-/// Runs `test` once per device, each on its own thread (MLX streams are per thread).
+/// Runs `test` once per device, each on its own thread (nuvec streams are per thread).
 pub fn on_each_device(test: fn(Device)) {
     for device in devices() {
         std::thread::spawn(move || test(device))
@@ -47,8 +47,8 @@ pub fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-pub fn load(name: &str, device: Device) -> MlxEngine {
-    MlxEngine::load(
+pub fn load(name: &str, device: Device) -> NuvecEngine {
+    NuvecEngine::load(
         &fixture(name),
         LoadOptions {
             identity: name.into(),
@@ -65,8 +65,8 @@ pub fn load(name: &str, device: Device) -> MlxEngine {
     .unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
-/// Outputs of one implementation on one device: mlx-lm's (recorded) or, on the nuvec backend,
-/// this engine's own fresh run (see [`Reference::run`]).
+/// Outputs of one implementation on one device: mlx-lm's (recorded) or this engine's own fresh
+/// run (see [`Reference::run`]).
 #[derive(Clone, Debug, Deserialize)]
 pub struct Run {
     /// Log-probabilities after the last prompt token and after each greedy token.
@@ -85,14 +85,14 @@ pub struct Reference {
     /// The fixture's name (set by [`Reference::read`]).
     #[serde(skip)]
     name: String,
-    /// This engine's own runs, per device (nuvec backend; computed on first use).
+    /// This engine's own runs, per device (computed on first use).
     #[serde(skip)]
     own: [std::sync::OnceLock<Run>; 2],
 }
 
-/// Largest log-probability difference allowed between this engine on nuvec and mlx-lm's
-/// recorded rows (spec 016 R10: nuvec rounds bf16 element-wise ops once in f32, MLX per step;
-/// measured on the tiny fixtures: ≤ 0.34 on the GPU, ≤ 0.63 on the CPU, 2026-10-20).
+/// Largest log-probability difference allowed between this engine and mlx-lm's recorded rows
+/// (spec 016 R10: nuvec rounds bf16 element-wise ops once in f32, MLX per step; measured on the
+/// tiny fixtures: ≤ 0.34 on the GPU, ≤ 0.63 on the CPU).
 pub const NUVEC_MLX_TOLERANCE: f32 = 1.0;
 
 impl Reference {
@@ -111,15 +111,12 @@ impl Reference {
         }
     }
 
-    /// The outputs the exactness checks compare against bitwise. On MLX: mlx-lm's recorded rows
-    /// (the graph is a port of mlx-lm). On nuvec: this engine's own fresh runs on `device`
-    /// (single-chunk prefill and greedy steps, the chunked prefill, token by token), because
-    /// bitwise equality with MLX's rounding is not available (spec 016 R10); the comparison
-    /// with mlx-lm is [`assert_parity`]'s tolerance check, never a precondition of these.
+    /// The outputs the exactness checks compare against bitwise: this engine's own fresh runs on
+    /// `device` (single-chunk prefill and greedy steps, the chunked prefill, token by token),
+    /// because bitwise equality with MLX's rounding is not available (spec 016 R10); the
+    /// comparison with mlx-lm is [`assert_parity`]'s tolerance check, never a precondition of
+    /// these.
     pub fn run(&self, device: Device) -> &Run {
-        if cfg!(feature = "mlx") {
-            return self.recorded(device);
-        }
         let slot = &self.own[usize::from(device == Device::Gpu)];
         slot.get_or_init(|| self.own_run(device))
     }
@@ -163,7 +160,7 @@ impl Reference {
 }
 
 /// Prefills `tokens` at `len()` in chunks ending before the absolute positions `ends`.
-pub fn prefill(engine: &mut MlxEngine, tokens: &[u32], ends: &[u32]) {
+pub fn prefill(engine: &mut NuvecEngine, tokens: &[u32], ends: &[u32]) {
     let start = engine.len();
     let mut at = 0usize;
     for end in ends
@@ -183,7 +180,7 @@ pub fn prefill(engine: &mut MlxEngine, tokens: &[u32], ends: &[u32]) {
 }
 
 /// Log-probabilities of the whole vocabulary at the current step, by token id.
-pub fn logprobs(engine: &mut MlxEngine, step: &mrun_engine::Step) -> Vec<f32> {
+pub fn logprobs(engine: &mut NuvecEngine, step: &mrun_engine::Step) -> Vec<f32> {
     let vocab = engine.info().vocab as usize;
     let mut top = engine.top_logprobs(step, vocab).unwrap();
     top.sort_by_key(|&(id, _)| id);
@@ -191,14 +188,14 @@ pub fn logprobs(engine: &mut MlxEngine, step: &mrun_engine::Step) -> Vec<f32> {
 }
 
 /// Feeds `token` and returns the next position's log-probabilities.
-pub fn next(engine: &mut MlxEngine, token: u32) -> Vec<f32> {
+pub fn next(engine: &mut NuvecEngine, token: u32) -> Vec<f32> {
     let step = engine.forward(token).unwrap();
     logprobs(engine, &step)
 }
 
 /// Feeds `token`, then samples `n` greedy tokens (pipelined); returns each step's
 /// log-probabilities and the tokens.
-pub fn greedy(engine: &mut MlxEngine, token: u32, n: usize) -> (Vec<Vec<f32>>, Vec<u32>) {
+pub fn greedy(engine: &mut NuvecEngine, token: u32, n: usize) -> (Vec<Vec<f32>>, Vec<u32>) {
     let mut rows = Vec::new();
     let mut tokens = Vec::new();
     let mut step = engine.forward(token).unwrap();
@@ -232,45 +229,10 @@ pub fn assert_bitwise(got: &[f32], want: &[f32], what: &str) {
     assert!(same, "{what}: max diff {}", max_diff(got, want));
 }
 
-/// mlx-lm parity on `device`: one-chunk prefill + greedy steps, the chunked prefill and token by
-/// token stepping, each bitwise against the reference from the same device (MLX); on nuvec the
-/// same greedy tokens and each row within [`NUVEC_MLX_TOLERANCE`] of mlx-lm's.
+/// mlx-lm parity on `device`: the same greedy tokens and each row within
+/// [`NUVEC_MLX_TOLERANCE`] of mlx-lm's recorded rows.
 pub fn assert_parity(name: &str, device: Device) {
-    let reference = Reference::read(name);
-    if !cfg!(feature = "mlx") {
-        return assert_parity_within_tolerance(name, &reference, device);
-    }
-    let run = reference.run(device);
-    let (body, last) = (reference.body(), reference.last());
-
-    let mut engine = load(name, device);
-    engine.set_limit(64).unwrap();
-    prefill(&mut engine, body, &[]);
-    let (rows, tokens) = greedy(&mut engine, last, run.greedy.len());
-    assert_eq!(tokens, run.greedy, "{name} {device:?}: greedy tokens");
-    for (i, (got, want)) in rows.iter().zip(&run.single).enumerate() {
-        assert_bitwise(got, want, &format!("{name} {device:?}: step {i}"));
-    }
-
-    let mut engine = load(name, device);
-    engine.set_limit(64).unwrap();
-    prefill(&mut engine, body, &reference.chunk_ends);
-    assert_bitwise(
-        &next(&mut engine, last),
-        &run.chunked,
-        &format!("{name} {device:?}: chunked"),
-    );
-
-    let mut engine = load(name, device);
-    engine.set_limit(64).unwrap();
-    for &token in body {
-        engine.forward(token).unwrap();
-    }
-    assert_bitwise(
-        &next(&mut engine, last),
-        &run.stepped,
-        &format!("{name} {device:?}: stepped"),
-    );
+    assert_parity_within_tolerance(name, &Reference::read(name), device);
 }
 
 /// Real models named by `MRUN_TEST_MODELS` (comma-separated aliases `qwen3`, `qwen3.5`,
@@ -334,7 +296,7 @@ pub fn hf_snapshot(repo: &str) -> Option<PathBuf> {
 }
 
 /// Loads a real model on Metal with mrun's own calibration file (the chunk plan mrun uses).
-pub fn load_real(dir: &Path) -> MlxEngine {
+pub fn load_real(dir: &Path) -> NuvecEngine {
     let identity = mrun_engine::identity::identify(
         dir,
         &mrun_engine::calibration::default_path()
@@ -343,7 +305,7 @@ pub fn load_real(dir: &Path) -> MlxEngine {
     )
     .expect("identity")
     .value;
-    MlxEngine::load(
+    NuvecEngine::load(
         dir,
         LoadOptions {
             identity,
@@ -356,7 +318,7 @@ pub fn load_real(dir: &Path) -> MlxEngine {
 
 /// Prefills `tokens` at `len()` in the engine's own chunk plan (`ModelInfo::chunk_len`), or in
 /// fixed chunks of `split` tokens.
-pub fn prefill_plan(engine: &mut MlxEngine, tokens: &[u32], split: Option<u32>) {
+pub fn prefill_plan(engine: &mut NuvecEngine, tokens: &[u32], split: Option<u32>) {
     let mut at = 0usize;
     while at < tokens.len() {
         let len = split.unwrap_or_else(|| engine.info().chunk_len(engine.len())) as usize;

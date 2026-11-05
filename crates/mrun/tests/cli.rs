@@ -363,7 +363,7 @@ async fn ps_watch_streams_json_lines_without_a_terminal() {
 
 #[tokio::test]
 async fn detach_reports_a_failed_load_with_its_log() {
-    // The model does not exist (and builds without `mlx` have no engine): the detached server
+    // The model does not exist (and builds without `engine` have none): the detached server
     // fails to load and detach says so.
     let home = tempfile::tempdir().unwrap();
     let missing = home.path().join("no-such-model").display().to_string();
@@ -379,7 +379,7 @@ async fn detach_reports_a_failed_load_with_its_log() {
     )
     .await;
     let stderr = String::from_utf8_lossy(&out.stderr);
-    // Without `mlx` there is no engine (E001, exit 1); with it the model is missing (E031, 3).
+    // Without `engine` there is no engine (E001, exit 1); with it the model is missing (E031, 3).
     let expected = if stderr.contains("no inference engine") {
         1
     } else {

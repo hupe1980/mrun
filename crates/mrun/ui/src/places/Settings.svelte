@@ -17,8 +17,31 @@
   const prefs = $derived(live.app?.prefs);
 
   onMount(async () => {
+    void live.refreshCloud();
     config = await host.config().catch(() => null);
   });
+
+  // The RunPod key (024 US3): where it comes from; added and removed here, kept in the Keychain.
+  const keySource = $derived(live.cloud?.status.key ?? null);
+  let addingKey = $state(false);
+  let secret = $state("");
+  let keyError = $state<string | null>(null);
+  const keyBusy = $derived(jobs.running("cloud-login", "") || jobs.running("cloud-logout", ""));
+
+  async function saveKey(e: SubmitEvent) {
+    e.preventDefault();
+    const key = secret.trim();
+    secret = "";
+    keyError = null;
+    const job = await jobs.run("cloud-login", "", false, key).catch((err) => ({ state: "failed", error: String(err.message) }));
+    if (job.state === "done") addingKey = false;
+    else keyError = job.error ?? "RunPod did not accept this key.";
+  }
+
+  async function removeKey() {
+    if (!window.confirm("Remove the RunPod key from your Keychain?")) return;
+    await jobs.run("cloud-logout", "").catch(() => {});
+  }
 
   async function setPref(key: string, value: boolean) {
     await host.prefs({ [key]: value } as any).catch(() => {});
@@ -62,10 +85,25 @@
           <input type="checkbox" role="switch" checked={prefs?.menu_bar ?? true} onchange={(e) => setPref("menu_bar", (e.currentTarget as HTMLInputElement).checked)} /></label>
         <label class="row"><span>Keep chats on this Mac<small>Saved in ~/.mrun/chats, never anywhere else.</small></span>
           <input type="checkbox" role="switch" checked={prefs?.keep_chats === true} onchange={(e) => setPref("keep_chats", (e.currentTarget as HTMLInputElement).checked)} /></label>
+        <div class="row"><span>RunPod key<small>{keySource === "keychain" ? "In your Keychain. Used to rent GPUs from Models." : keySource === "env" ? "From RUNPOD_API_KEY." : keySource === "dotenv" ? "From ./.env." : "Not set. Needed to rent a GPU from Models."}</small></span>
+          {#if keySource === "keychain"}
+            <button class="btn" disabled={keyBusy} onclick={removeKey}>Remove</button>
+          {:else if keySource === null && !addingKey}
+            <button class="btn" onclick={() => (addingKey = true)}>Add…</button>
+          {/if}</div>
+        {#if addingKey && keySource === null}
+          <form class="row keyform" onsubmit={saveKey}>
+            <!-- svelte-ignore a11y_autofocus -->
+            <input type="password" bind:value={secret} placeholder="rpa_…" aria-label="RunPod API key" autocomplete="off" spellcheck="false" autofocus />
+            <button type="button" class="btn plain" onclick={() => ((addingKey = false), (secret = ""), (keyError = null))}>Cancel</button>
+            <button type="submit" class="btn primary" disabled={!secret.trim() || keyBusy}>{keyBusy ? "Checking…" : "Save"}</button>
+          </form>
+          {#if keyError}<p class="key-error" role="alert">{keyError}</p>{/if}
+        {/if}
         <div class="row"><span>Kept chats<small>{deleted !== null ? `${deleted} deleted.` : "Remove every chat saved on this Mac."}</small></span>
           <button class="btn danger" onclick={deleteAll}>Delete All Chats…</button></div>
       </section>
-      <p class="privacy"><Symbol name="lock" size={13} />
+      <p class="privacy"><Symbol name={live.remote ? "cloud" : "lock"} size={13} />
         {#if live.remote}Remote mode is on: prompts go to your RunPod pod.{:else}Runs on this Mac. Nothing leaves it: no account, no telemetry, no update checks.{/if}
       </p>
     {:else if pane === "server"}
@@ -171,6 +209,18 @@
     display: block;
     color: var(--muted);
     font-size: 11px;
+  }
+  .keyform {
+    justify-content: flex-end;
+  }
+  .keyform input {
+    flex: 1;
+    font-family: var(--mono);
+  }
+  .key-error {
+    margin: 0 0 var(--s2);
+    color: var(--failed);
+    font-size: 12px;
   }
   code {
     font: 12px var(--mono);

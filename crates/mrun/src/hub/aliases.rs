@@ -2,9 +2,9 @@
 //! the blob id of every file `pull` fetches, and the numbers the per-machine default is computed
 //! from.
 //!
-//! Pins were read from `GET https://huggingface.co/api/models/<repo>/revision/<commit>?blobs=true`
-//! (qwen3.6 on 2026-10-15, qwen3.5 on 2026-10-16); the state sizes come from each pinned
-//! `config.json` through the family formulas, the vision bytes from the safetensors headers.
+//! Pins were read from `GET https://huggingface.co/api/models/<repo>/revision/<commit>?blobs=true`;
+//! the state sizes come from each pinned `config.json` through the family formulas, the vision
+//! bytes from the safetensors headers.
 //! `qwen3` (Qwen3-8B) is no longer an alias (D040); `mlx-community/Qwen3-8B-4bit` stays pullable
 //! by repo id.
 
@@ -136,7 +136,7 @@ pub static ALIASES: [Alias; 2] = [
         max_position: 262_144,
         scratch: 2_074_483_202,
         scratch_per_position: 16_908,
-        // Client gate on the M4 Pro, 2026-10-16/17 (002 research, D061): every failure was a
+        // Client gate on the M4 Pro (002 research, D061): every failure was a
         // 600 s timeout of a stuck session (the 9B model loops or rambles), not an mrun fault.
         preview: Some(Preview {
             reason: "below the client gate",
@@ -396,9 +396,8 @@ mod tests {
         assert!(fit.max_context >= DEFAULT_MIN_CONTEXT, "{fit:?}");
     }
 
-    /// Measured devices (SC-007, T052, research R6): physical memory and MLX's
-    /// `max_recommended_working_set_size` as the engine reports them (`mrun run --info`,
-    /// cross-checked with Metal's `recommendedMaxWorkingSetSize`).
+    /// Measured devices (SC-007, T052, research R6): physical memory and Metal's
+    /// `recommendedMaxWorkingSetSize` as the engine reports them (`mrun run --info`).
     const M4_PRO_48GB: DeviceMemory = DeviceMemory {
         physical: 51_539_607_552,
         recommended_working_set: 40_200_896_512,
@@ -408,7 +407,7 @@ mod tests {
 
     #[test]
     fn measured_devices_pick_the_expected_alias() {
-        // 48 GB M4 Pro (2026-10-16): qwen3.6 leaves at least the minimum context.
+        // 48 GB M4 Pro: qwen3.6 leaves at least the minimum context.
         let pick = machine_alias(M4_PRO_48GB).unwrap();
         assert_eq!(pick.name, "qwen3.6");
         assert!(pick.fit(M4_PRO_48GB).max_context >= DEFAULT_MIN_CONTEXT);

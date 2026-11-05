@@ -1,4 +1,4 @@
-//! The engine contract: primitives the runtime drives. No MLX types appear here.
+//! The engine contract: primitives the runtime drives. No tensor-backend types appear here.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,48 +11,22 @@ pub enum LayerKind {
     Linear,
 }
 
-/// Numerics class of the tensor backend build and GPU (FR-027, D044; 016 FR-008): bits can
-/// differ between classes, so exactness comparisons, parity references, persisted state (007) and
-/// benchmark results carry it beside the model identity.
+/// The tensor backend's name (nuvec, the pure-Rust MLX port), as `/mrun/status`
+/// (`engine.backend`, `numerics.backend`) and bench records report it.
+pub const BACKEND: &str = "nuvec";
+
+/// Numerics class of the GPU and kernels (FR-027, D044): bits can differ between classes, so
+/// exactness comparisons, parity references, persisted state (007) and benchmark results carry it
+/// beside the model identity.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Numerics {
-    /// MLX's NAX (M5 Neural Accelerator) kernels are compiled in and available on this GPU.
+    /// nuvec runs its NAX (M5 Neural Accelerator) kernels, which change the bits.
     pub nax: bool,
-    /// GPU architecture from the backend's device info (e.g. `applegpu_g16s`), `cpu` without Metal.
+    /// GPU architecture from the device info (e.g. `applegpu_g16s`), `cpu` without Metal.
     pub gpu_arch: String,
-    /// The tensor backend whose kernels produce the bits (spec 016): nuvec rounds differently
-    /// from MLX, so the two never share a class.
-    pub backend: Backend,
 }
 
-/// The tensor backend of a [`Numerics`] class (spec 016, D065).
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub enum Backend {
-    /// MLX through `mrun-mlx-sys` (until the spec 016 cut-over).
-    #[default]
-    Mlx,
-    /// nuvec, the pure-Rust MLX port.
-    Nuvec,
-}
-
-impl Backend {
-    /// `mlx` or `nuvec` (status, bench records).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Mlx => "mlx",
-            Self::Nuvec => "nuvec",
-        }
-    }
-
-    /// The backend this build's `crate::tensor` runs on (MLX in builds without one).
-    pub const BUILD: Self = if cfg!(feature = "nuvec") {
-        Self::Nuvec
-    } else {
-        Self::Mlx
-    };
-}
-
-/// How a backend's GPU kernels are provided (016 FR-009).
+/// How the GPU kernels are provided (016 FR-009).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kernels {
     /// A Metal library compiled at build time and embedded in the binary.
@@ -74,24 +48,19 @@ impl Kernels {
     }
 }
 
-/// The tensor backend of a build (016 FR-008): what `--version`, `doctor`, `/mrun/status`
-/// (`engine.backend`) and bench records report.
+/// The tensor backend of a build (016 FR-008): what `--version`, `doctor`, `/mrun/status` and
+/// bench records report besides [`BACKEND`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BackendInfo {
-    pub backend: Backend,
-    /// MLX's version (`0.32.4`) or nuvec's crate version.
+    /// nuvec's crate version.
     pub version: &'static str,
     pub kernels: Kernels,
 }
 
 impl Numerics {
-    /// The class name (016 data model): `nuvec`, or MLX's `nax` / `plain`.
+    /// The class name: `nuvec`, or `nuvec-nax` with the NAX kernels.
     pub fn class(&self) -> &'static str {
-        match (self.backend, self.nax) {
-            (Backend::Nuvec, _) => "nuvec",
-            (Backend::Mlx, true) => "nax",
-            (Backend::Mlx, false) => "plain",
-        }
+        if self.nax { "nuvec-nax" } else { "nuvec" }
     }
 
     /// The fixed class `ScriptedEngine` reports.
@@ -99,35 +68,18 @@ impl Numerics {
         Self {
             nax: false,
             gpu_arch: "scripted".into(),
-            backend: Backend::Mlx,
         }
     }
 
-    /// Compact key, e.g. `applegpu_g16s/nax-off` (MLX) or `applegpu_g16s/nuvec` (calibration and
-    /// reference files).
+    /// Compact key, e.g. `applegpu_g16s/nuvec` (calibration and reference files).
     pub fn key(&self) -> String {
-        match self.backend {
-            Backend::Mlx => format!(
-                "{}/nax-{}",
-                self.gpu_arch,
-                if self.nax { "on" } else { "off" }
-            ),
-            Backend::Nuvec => format!("{}/nuvec", self.gpu_arch),
-        }
+        format!("{}/{}", self.gpu_arch, self.class())
     }
 }
 
 impl std::fmt::Display for Numerics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.backend {
-            Backend::Mlx => write!(
-                f,
-                "{}, NAX {}",
-                self.gpu_arch,
-                if self.nax { "on" } else { "off" }
-            ),
-            Backend::Nuvec => write!(f, "{}, nuvec", self.gpu_arch),
-        }
+        write!(f, "{}, {}", self.gpu_arch, self.class())
     }
 }
 
@@ -462,8 +414,8 @@ impl CancelToken {
 }
 
 /// Prefill chunk length at `depth`: `clamp(2048 × 16384 / max(depth, 1), 128, 2048)`. Bounds the
-/// attention work of one layer (MLX falls back to unfused attention for some head sizes, whose
-/// scores grow with chunk × depth) and so the cancellation latency.
+/// attention work of one layer (nuvec, as MLX, falls back to unfused attention for some head
+/// sizes, whose scores grow with chunk × depth) and so the cancellation latency.
 pub fn chunk_len(depth: u32) -> u32 {
     (2048 * 16384 / u64::from(depth.max(1))).clamp(128, 2048) as u32
 }
@@ -705,16 +657,14 @@ mod tests {
         let n = Numerics {
             nax: false,
             gpu_arch: "applegpu_g16s".into(),
-            backend: Backend::Mlx,
         };
-        assert_eq!(n.to_string(), "applegpu_g16s, NAX off");
-        assert_eq!(n.key(), "applegpu_g16s/nax-off");
-        let nuvec = Numerics {
-            backend: Backend::Nuvec,
-            ..n
+        assert_eq!(n.to_string(), "applegpu_g16s, nuvec");
+        assert_eq!(n.key(), "applegpu_g16s/nuvec");
+        let nax = Numerics {
+            nax: true,
+            gpu_arch: "applegpu_g17s".into(),
         };
-        assert_eq!(nuvec.to_string(), "applegpu_g16s, nuvec");
-        assert_eq!(nuvec.key(), "applegpu_g16s/nuvec");
+        assert_eq!(nax.key(), "applegpu_g17s/nuvec-nax");
         assert_eq!(Numerics::scripted().gpu_arch, "scripted");
     }
 

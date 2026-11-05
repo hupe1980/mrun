@@ -3,6 +3,6 @@ Copyright (c) hupe1980 and contributors. Licensed under MIT OR Apache-2.0.
 
 This distribution includes third-party software:
 
-- MLX (https://github.com/ml-explore/mlx), Copyright (c) Apple Inc., MIT License.
-- mlx-c (https://github.com/ml-explore/mlx-c), Copyright (c) Apple Inc., MIT License.
+- nuvec (https://crates.io/crates/nuvec), a Rust port of MLX, whose kernels derive from
+  MLX (https://github.com/ml-explore/mlx), Copyright (c) Apple Inc., MIT License.
 - Rust crates listed in Cargo.lock, under their own licenses (MIT, Apache-2.0 and compatible).

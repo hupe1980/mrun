@@ -14,7 +14,7 @@ pub struct VerifyArgs {
 /// Verifies the model; returns the number of files checked.
 pub fn verify_model(paths: &Paths, name: &str) -> Result<usize, CliError> {
     let mut manifest = hub::find_manifest(paths, name)?;
-    let dir = manifest.snapshot_dir(paths);
+    let dir = manifest.dir(paths);
     crate::cli::info(&format!(
         "hashing {} files ({})…",
         manifest.files.len(),
@@ -58,7 +58,7 @@ mod tests {
             &[("config.json", b"{}"), ("model.safetensors", b"weights")],
         );
         assert_eq!(verify_model(&ctx.paths, "m").unwrap(), 2);
-        let weights = manifest.snapshot_dir(&ctx.paths).join("model.safetensors");
+        let weights = manifest.dir(&ctx.paths).join("model.safetensors");
         fs::write(&weights, b"weightz").unwrap();
         let error = verify_model(&ctx.paths, "m").unwrap_err();
         assert_eq!(error.code, Code::ModelCorrupt);

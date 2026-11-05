@@ -24,6 +24,7 @@ pub const KNOWN: &[&str] = &[
     "min_p",
     "parallel_tool_calls",
     "reasoning_effort",
+    "chat_template_kwargs",
     "repetition_penalty",
     "stop",
     "stream",
@@ -127,6 +128,9 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
     request.sampling.repetition_penalty = opt_f32(body, "repetition_penalty")?;
     request.sampling.seed = body["seed"].as_u64();
     request.reasoning = openai_effort(opt_str(body, "reasoning_effort", "body")?);
+    if let Some(thinking) = enable_thinking(&body["chat_template_kwargs"])? {
+        request.reasoning = thinking;
+    }
     request.stream = opt_bool(body, "stream")?.unwrap_or(false);
     request.include_usage = body["stream_options"]["include_usage"]
         .as_bool()
@@ -143,6 +147,27 @@ pub fn openai_effort(effort: Option<&str>) -> ReasoningCtl {
     match effort {
         Some("none" | "minimal") => ReasoningCtl::Off,
         None | Some(_) => ReasoningCtl::On { budget: None },
+    }
+}
+
+/// `chat_template_kwargs.enable_thinking` (023), the switch vLLM and SGLang take for Qwen chat
+/// templates: `false` turns thinking off and `true` on, over `reasoning_effort` (OpenCode adds
+/// `reasoning_effort: "low"` to the small-model requests it sends this with). Other keys are
+/// ignored: mrun renders its own templates.
+fn enable_thinking(kwargs: &Value) -> Result<Option<ReasoningCtl>, ApiError> {
+    if kwargs.is_null() {
+        return Ok(None);
+    }
+    obj(kwargs, "chat_template_kwargs")?;
+    crate::api::decode::ignore_unknown(kwargs, &["enable_thinking"], "chat_template_kwargs.");
+    match &kwargs["enable_thinking"] {
+        Value::Null => Ok(None),
+        Value::Bool(true) => Ok(Some(ReasoningCtl::On { budget: None })),
+        Value::Bool(false) => Ok(Some(ReasoningCtl::Off)),
+        _ => Err(ApiError::invalid(
+            "chat_template_kwargs.enable_thinking must be a boolean",
+            "chat_template_kwargs.enable_thinking",
+        )),
     }
 }
 
@@ -692,5 +717,36 @@ mod tests {
         assert!(!on(
             json!({"messages": [{"role": "user", "content": "x"}], "reasoning_effort": "minimal"})
         ));
+    }
+
+    #[test]
+    fn enable_thinking_switches_thinking_over_reasoning_effort() {
+        let body = |kwargs: Value| {
+            json!({"messages": [{"role": "user", "content": "x"}],
+                   "reasoning_effort": "low", "chat_template_kwargs": kwargs})
+        };
+        let on = |kwargs| {
+            decode(&body(kwargs), DecodeOptions::default())
+                .unwrap()
+                .reasoning
+                .is_on()
+        };
+        // OpenCode's small model: `reasoning_effort: "low"` and the switch off.
+        assert!(!on(json!({"enable_thinking": false})));
+        assert!(on(json!({"enable_thinking": true})));
+        // Without the switch (or with other keys only) reasoning_effort decides, as before.
+        assert!(on(json!({})));
+        assert!(on(json!({"add_generation_prompt": true})));
+        let error = decode(
+            &body(json!({"enable_thinking": "no"})),
+            DecodeOptions::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.param.as_deref(),
+            Some("chat_template_kwargs.enable_thinking")
+        );
+        let error = decode(&body(json!(true)), DecodeOptions::default()).unwrap_err();
+        assert_eq!(error.param.as_deref(), Some("chat_template_kwargs"));
     }
 }

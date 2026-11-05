@@ -13,7 +13,7 @@ mod common;
 
 use common::{Device, assert_bitwise, load, logprobs, on_each_device, prefill};
 use mrun_engine::tensor::{self, memory};
-use mrun_engine::{Engine, LayerKind, MlxEngine};
+use mrun_engine::{Engine, LayerKind, NuvecEngine};
 
 const TINY: [&str; 3] = ["tiny_qwen3_5", "tiny_qwen3_5_moe", "tiny_qwen3_moe"];
 
@@ -33,14 +33,14 @@ fn prompt(n: u32, vocab: u32) -> Vec<u32> {
 }
 
 /// Next-token log-probabilities after feeding `last`.
-fn next(engine: &mut MlxEngine, last: u32) -> Vec<f32> {
+fn next(engine: &mut NuvecEngine, last: u32) -> Vec<f32> {
     let step = engine.forward(last).unwrap();
     logprobs(engine, &step)
 }
 
 /// The SC-008 checks on `engine` over `tokens` (prefilled with chunk ends `ends`), cut at `at`
 /// (one of the ends).
-fn assert_exact(engine: &mut MlxEngine, tokens: &[u32], ends: &[u32], at: u32, what: &str) {
+fn assert_exact(engine: &mut NuvecEngine, tokens: &[u32], ends: &[u32], at: u32, what: &str) {
     let (last, body) = tokens.split_last().unwrap();
     let limit = tokens.len() as u32 + 4;
     let hybrid = engine.info().is_hybrid();
@@ -109,7 +109,7 @@ fn tiny_moves_and_recomputation_are_bit_identical() {
 }
 
 /// Bytes of one attention layer's K and V at `capacity` positions.
-fn layer_bytes(engine: &MlxEngine, capacity: u32) -> u64 {
+fn layer_bytes(engine: &NuvecEngine, capacity: u32) -> u64 {
     let info = engine.info();
     let attention = info
         .layer_kinds
@@ -131,7 +131,7 @@ fn peak_during<T>(op: impl FnOnce() -> T) -> (T, u64) {
 /// Peak memory of moves (R13, FR-030) on `engine` with `n` prompt tokens: a detach that shrinks
 /// the live state holds at most the segment plus one layer, one that keeps the capacity holds
 /// only the segment (the live prefix is not copied), and an attach at most one layer.
-fn assert_moves_hold_one_layer(engine: &mut MlxEngine, n: u32, slack: u64, what: &str) {
+fn assert_moves_hold_one_layer(engine: &mut NuvecEngine, n: u32, slack: u64, what: &str) {
     let tokens = prompt(n, engine.info().vocab);
     // Capacity above align(at): the detach shrinks the live layers.
     let limit = (n + 4096).min(engine.info().max_position);

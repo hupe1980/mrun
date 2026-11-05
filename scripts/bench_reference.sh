@@ -5,7 +5,7 @@
 #
 # Needs Python with mlx-lm 0.32.0 on MLX 0.32.4 (`PYTHON`, default `python3`). Prints JSON; the
 # matching engine run is
-#   cargo run --release -p mrun-engine --features mlx --example bench_engine -- <model-dir> ...
+#   cargo run --release -p mrun-engine --features engine --example bench_engine -- <model-dir> ...
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 [[ $# -ge 1 ]] || { sed -n '2,8p' "$0" >&2; exit 2; }

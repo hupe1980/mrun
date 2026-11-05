@@ -1,5 +1,5 @@
 //! The mutation suite (003 SC-004, R-mutations; T024), shared by the `ScriptedEngine` suite
-//! (`prefix_cache.rs`) and the `MlxEngine` one (`prefix_mlx.rs`); included with
+//! (`prefix_cache.rs`) and the `NuvecEngine` one (`prefix_engine.rs`); included with
 //! `#[path = "fixtures/mutations.rs"] mod mutations;`.
 //!
 //! Random agent traffic — appended turns, identical retries, edits of the system prompt, of the

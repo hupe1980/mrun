@@ -412,13 +412,12 @@ pub async fn clear_cache(State(state): State<ServerState>) -> Response {
     .into_response()
 }
 
-/// The tensor backend the engine runs on (016 FR-008): its name and numerics class from the
-/// engine, the version and kernel mode from this build (`null` without an engine, or when the
-/// engine is not the build's backend, as the scripted test engine).
+/// The engine's backend (016 FR-008): nuvec, the numerics class from the engine, the version and
+/// kernel mode from this build (`null` without an engine).
 fn backend_json(numerics: &mrun_engine::engine::Numerics) -> Value {
-    let build = crate::cli::version::backend().filter(|b| b.backend == numerics.backend);
+    let build = crate::cli::version::backend();
     json!({
-        "name": numerics.backend.as_str(),
+        "name": mrun_engine::BACKEND,
         "version": build.map(|b| b.version),
         "numerics": numerics.class(),
         "kernels": build.map(|b| b.kernels.as_str()),
@@ -456,7 +455,7 @@ pub async fn status(State(state): State<ServerState>) -> Response {
         });
         // The numerics class the engine runs with (FR-027, D044; 002 T067).
         body["numerics"] = json!({
-            "backend": info.numerics.backend.as_str(),
+            "backend": mrun_engine::BACKEND,
             "nax": if info.numerics.nax { "on" } else { "off" },
             "gpu_family": info.numerics.gpu_arch,
         });
@@ -525,22 +524,16 @@ mod tests {
 
     #[test]
     fn the_engine_backend_names_backend_version_numerics_and_kernels() {
-        use mrun_engine::engine::{Backend, Numerics};
-        let numerics = |backend, nax| Numerics {
-            nax,
-            gpu_arch: "applegpu_g16s".into(),
-            backend,
-        };
+        use mrun_engine::engine::Numerics;
         let build = crate::cli::version::backend();
-        for (backend, nax, class) in [
-            (Backend::Nuvec, false, "nuvec"),
-            (Backend::Mlx, true, "nax"),
-            (Backend::Mlx, false, "plain"),
-        ] {
-            let json = backend_json(&numerics(backend, nax));
-            assert_eq!(json["name"], backend.as_str());
+        for (nax, class) in [(false, "nuvec"), (true, "nuvec-nax")] {
+            let json = backend_json(&Numerics {
+                nax,
+                gpu_arch: "applegpu_g16s".into(),
+            });
+            assert_eq!(json["name"], "nuvec");
             assert_eq!(json["numerics"], class);
-            match build.filter(|b| b.backend == backend) {
+            match build {
                 Some(b) => {
                     assert_eq!(json["version"], b.version);
                     assert_eq!(json["kernels"], b.kernels.as_str());

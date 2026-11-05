@@ -1,10 +1,10 @@
-//! Sequence state of the MLX engine, one [`LayerState`] per layer (D028):
+//! Sequence state of the engine, one [`LayerState`] per layer (D028):
 //!
 //! - `Kv`: an attention layer's K/V buffers `[1, kv_heads, capacity, head_dim]`, allocated
 //!   lazily and resized one layer at a time, so a resize or move never holds more than one extra
 //!   layer. Positions `[0, len)` hold the live sequence; data at or beyond `len` is garbage until
 //!   written. Writes use `slice_update`, so a buffer with no other reference is updated in
-//!   place (on the CPU and the GPU, on both backends).
+//!   place (on the CPU and the GPU).
 //! - `Recurrent`: a linear layer's convolution tail `[1, K − 1, conv_dim]` and delta state
 //!   `[1, Hv, Dv, Dk]` (f32), describing exactly one position. The model replaces both arrays on
 //!   every call (it never writes into them), so keeping the old handles keeps the old state:
@@ -12,7 +12,7 @@
 //!   share the handles instead of copying the buffers.
 //!
 //! After each moved or resized layer the freed buffer is returned to the system (`clear_cache`),
-//! so MLX's buffer cache does not keep memory the accounting already released (D029).
+//! so nuvec's buffer cache does not keep memory the accounting already released (D029).
 
 use crate::tensor::{self, Array, Dtype};
 
@@ -77,8 +77,8 @@ pub type RecurrentState = Vec<Recurrent>;
 
 /// Evaluates `state`, so a stored copy of its handles holds data rather than a graph.
 /// Checkpoints share the live handles instead of copying them: the model replaces the arrays on
-/// every call and never writes into them, and MLX donates an input buffer to an output only when
-/// nothing else references it.
+/// every call and never writes into them, and nuvec (as MLX) donates an input buffer to an output
+/// only when nothing else references it.
 pub fn eval(state: &[Recurrent]) -> tensor::Result<()> {
     tensor::eval(&state.iter().flat_map(Recurrent::arrays).collect::<Vec<_>>())
 }

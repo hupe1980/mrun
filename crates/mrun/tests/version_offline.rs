@@ -19,17 +19,16 @@ fn version_prints_without_a_network() {
         text.starts_with(&format!("mrun {}", env!("CARGO_PKG_VERSION"))),
         "{text}"
     );
-    // The tensor backend and its numerics class (016 FR-008).
-    if cfg!(feature = "nuvec") {
+    // The engine, its kernels and the NAX state (022 contract `cli-output`); no MLX wording.
+    if cfg!(feature = "engine") {
+        assert!(text.contains(" nuvec "), "{text}");
         assert!(
-            text.contains(" nuvec ") && text.contains(" numerics nuvec"),
+            text.contains(", kernels precompiled, nax ")
+                || text.contains(", kernels runtime, nax "),
             "{text}"
         );
-        assert!(
-            text.trim_end().ends_with("kernels precompiled") || text.contains("kernels runtime"),
-            "{text}"
-        );
-    } else {
-        assert!(text.contains(" mlx ") && text.contains(" mlx-c "), "{text}");
+    }
+    for word in ["mlx", "numerics", "available"] {
+        assert!(!text.contains(word), "{text}");
     }
 }

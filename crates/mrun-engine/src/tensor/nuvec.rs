@@ -1,12 +1,11 @@
-//! The tensor surface of [`super`] on nuvec, the pure-Rust MLX port (spec 016, D065): the same
-//! items and signatures as the MLX backend, implemented on `nuvec::Array`.
+//! The tensor surface of [`super`] on nuvec, the pure-Rust MLX port (D065), implemented on
+//! `nuvec::Array`.
 //!
 //! nuvec operations return arrays, not results: a failed operation gives a failed array that
 //! carries the error and the caller's location. Every function here returns `Result` and calls
 //! [`nv::Array::check`] on what it builds (it never evaluates), so a failure surfaces at the op
-//! that caused it, as with MLX. Shapes and axes are `i32` on both sides. Arrays are `Send`
-//! (nuvec's are); the engine still keeps them on its worker thread, whose default stream follows
-//! [`use_device`]. nuvec embeds its kernels, so [`metallib::ensure`] has nothing to do.
+//! that caused it. Shapes and axes are `i32`. Arrays are `Send` (nuvec's are); the engine still
+//! keeps them on its worker thread, whose default stream follows [`use_device`].
 
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
@@ -15,15 +14,6 @@ use std::sync::OnceLock;
 
 use ::nuvec as nv;
 use nv::{DType, ops};
-
-/// nuvec embeds its kernels (a precompiled `nuvec.metallib`, or the sources compiled at run
-/// time); nothing is extracted, so there is nothing to fail.
-pub mod metallib {
-    /// Always `Ok`: nuvec's kernels are part of the binary.
-    pub fn ensure() -> Result<(), String> {
-        Ok(())
-    }
-}
 
 /// A nuvec failure: nuvec's message.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -713,14 +703,9 @@ pub mod fast {
         Causal,
     }
 
-    /// Whether the attention below keeps its score buffer within `max_score_bytes` by itself:
-    /// nuvec's does (it takes the tiled kernel instead of materialising larger scores), so mrun
-    /// runs no query blocks on nuvec (D059 exists for MLX's unfused fallback).
-    pub const CAPS_SCORES: bool = true;
-
     /// The options for `q` and `k` shaped `[B, H, L, D]`. A cap below one query row's scores
     /// (`B · H · L_k`, 4 bytes at most per score) is raised to it: where nuvec has no tiled
-    /// kernel it runs blocks of at least one row, as mrun's own query blocks keep at least 9.
+    /// kernel it runs blocks of at least one row.
     fn options(
         q: &[i32],
         k: &[i32],
@@ -855,7 +840,6 @@ pub fn numerics() -> crate::engine::Numerics {
         .get_or_init(|| crate::engine::Numerics {
             nax: nv::metal::nax().is_active(),
             gpu_arch: gpu_info_string(c"architecture").unwrap_or_else(|| "cpu".into()),
-            backend: crate::engine::Backend::Nuvec,
         })
         .clone()
 }
@@ -873,7 +857,6 @@ pub fn nax_available() -> bool {
 pub fn backend_info() -> crate::engine::BackendInfo {
     use crate::engine::Kernels;
     crate::engine::BackendInfo {
-        backend: crate::engine::Backend::Nuvec,
         version: nv::VERSION,
         kernels: match nuvec_kernels::MODE {
             nuvec_kernels::MetallibMode::Precompiled => Kernels::Precompiled,
@@ -1262,9 +1245,8 @@ mod tests {
 
     #[test]
     fn the_backend_reports_nuvec_its_version_and_kernel_mode() {
-        use crate::engine::{Backend, Kernels};
+        use crate::engine::Kernels;
         let info = backend_info();
-        assert_eq!(info.backend, Backend::Nuvec);
         assert_eq!(info.version, nv::VERSION);
         // FR-009: release builds set NUVEC_REQUIRE_METALLIB=1, which makes nuvec's build fail
         // rather than fall back to runtime-compiled sources.
@@ -1279,10 +1261,8 @@ mod tests {
     #[test]
     fn numerics_name_the_backend() {
         let n = numerics();
-        assert_eq!(n.backend, crate::engine::Backend::Nuvec);
         assert!(!n.nax);
         assert!(n.key().ends_with("/nuvec"), "{n}");
-        assert!(metallib::ensure().is_ok());
     }
 
     #[test]

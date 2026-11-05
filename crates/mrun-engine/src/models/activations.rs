@@ -5,8 +5,8 @@
 //! f16 on CPU), so parity requires compiling exactly what mlx-lm compiles. mlx-lm nests compiled
 //! functions (`swiglu` calls the compiled `nn.silu`); one flat compile of the whole body is
 //! bitwise identical to the nesting (checked for every dtype on both devices), so each function
-//! here is a single trace. Each thread compiles its own copy on first use (MLX arrays and the
-//! stream they trace on are per thread).
+//! here is a single trace. Each thread compiles its own copy on first use (the stream a function
+//! traces on is per thread).
 
 use std::cell::OnceCell;
 use std::thread::LocalKey;

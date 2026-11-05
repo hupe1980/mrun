@@ -41,11 +41,18 @@ function json(res, body) {
   res.end(JSON.stringify(body));
 }
 
+// The second half of the run shows a rented GPU serving (024).
+let remote = false;
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   const path = url.pathname;
   if (path === "/app/state") return json(res, data.appState);
-  if (path === "/mrun/status") return json(res, data.status);
+  if (path === "/mrun/status") return json(res, remote ? data.podStatus : data.status);
+  if (path === "/app/cloud") return json(res, data.cloud);
+  if (path === "/app/actions" && req.method === "POST") return json(res, { job: data.cloudJob });
+  if (path.startsWith("/app/jobs/")) return json(res, data.cloudJob);
+  if (path === "/app/command") return json(res, { argv: [], text: "" });
   if (path === "/health") return json(res, { status: "ok" });
   if (path === "/app/models") return json(res, data.models);
   if (path === "/app/agents") return json(res, data.agents);
@@ -134,6 +141,15 @@ try {
     await page.waitForSelector(".plan", { timeout: 5000 });
     await page.evaluate(() => document.querySelector(".add")?.scrollIntoView({ block: "end" }));
     await shot("6-models-add");
+    await page.evaluate(() => document.querySelector(".cloud")?.scrollIntoView({ block: "start" }));
+    await shot("6b-models-cloud");
+    await page.evaluate(() => [...document.querySelectorAll(".cloud button")].find((b) => b.textContent.trim() === "Run…")?.click());
+    await page.waitForSelector(".gpus", { timeout: 5000 });
+    await shot("6c-cloud-sheet");
+    await page.evaluate(() => document.querySelector(".sheet .footer .primary")?.click());
+    await page.waitForSelector(".stepper", { timeout: 5000 });
+    await shot("6d-cloud-starting");
+    await page.evaluate(() => [...document.querySelectorAll(".sheet button")].find((b) => b.textContent.trim() === "Hide")?.click());
     await go("Agents");
     await shot("7-agents");
     await page.evaluate(() => document.querySelector(".code")?.scrollIntoView({ block: "start" }));
@@ -147,6 +163,18 @@ try {
     await page.keyboard.press("k");
     await page.keyboard.up("Meta");
     await shot("10-palette");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => document.querySelector("button[aria-label='Close settings']")?.click());
+    remote = true;
+    await go("Now");
+    await pause(1500);
+    await shot("11-now-pod");
+    await page.keyboard.down("Meta");
+    await page.keyboard.press(",");
+    await page.keyboard.up("Meta");
+    await shot("12-settings-key");
+    await page.keyboard.press("Escape");
+    remote = false;
     if (errors.length) throw new Error(`page errors (${scheme}): ${errors.join("; ")}`);
     await page.close();
   }

@@ -1,20 +1,15 @@
-//! Embeds the build identity shown by `mrun --version` (008 FR-004):
-//! `X.Y.Z (<commit7>, <date>) mlx <v> mlx-c <v> <os>-<arch>`.
+//! Embeds the build identity shown by `mrun --version` (008 FR-004, 022):
+//! `X.Y.Z (<commit7>, <date>) nuvec <v> <os>-<arch>`, without the engine name in builds without
+//! the engine (the Linux agent).
 
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Vendored MLX and mlx-c versions (pinned in `crates/mrun-mlx-sys/build.rs`; a test keeps them equal).
-const MLX_VERSION: &str = "0.32.4";
-const MLX_C_VERSION: &str = "0.7.0";
-
 fn main() {
     println!("cargo:rerun-if-env-changed=MRUN_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
-    println!("cargo::rustc-check-cfg=cfg(mrun_repo)");
-    // Inside the repository (not a packaged crate, which has neither `.git` nor the sibling
-    // crates): watch HEAD for the commit, and let tests read the sibling `mrun-mlx-sys` sources.
+    // Inside the repository (not a packaged crate, which has no `.git`): watch HEAD for the commit.
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
     let repo = manifest_dir.join("../..");
     let in_repo = repo.join(".git").exists();
@@ -28,14 +23,6 @@ fn main() {
                 println!("cargo:rerun-if-changed={}", path.display());
             }
         }
-    }
-    let sys_build = repo.join("crates/mrun-mlx-sys/build.rs");
-    if sys_build.is_file() {
-        println!("cargo::rustc-cfg=mrun_repo");
-        println!(
-            "cargo::rustc-env=BUILD_MLX_SYS_BUILD_RS={}",
-            sys_build.display()
-        );
     }
     let commit = std::env::var("MRUN_BUILD_COMMIT")
         .ok()
@@ -68,19 +55,16 @@ fn main() {
         Err(_) => "unknown".into(),
     };
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
-    // The tensor backend in the version line (spec 016): `nuvec <pinned version>` on the nuvec
-    // build, the vendored MLX and mlx-c versions otherwise.
-    let backend = if std::env::var_os("CARGO_FEATURE_NUVEC").is_some() {
-        format!("nuvec {}", nuvec_version())
+    // The engine in the version line: `nuvec <pinned version>`, absent without the engine.
+    let engine = if std::env::var_os("CARGO_FEATURE_ENGINE").is_some() {
+        format!("nuvec {} ", nuvec_version())
     } else {
-        format!("mlx {MLX_VERSION} mlx-c {MLX_C_VERSION}")
+        String::new()
     };
     println!(
-        "cargo:rustc-env=BUILD_MRUN_VERSION_LONG={version} ({commit}, {}) {backend} {os}-{arch}",
+        "cargo:rustc-env=BUILD_MRUN_VERSION_LONG={version} ({commit}, {}) {engine}{os}-{arch}",
         date(secs)
     );
-    println!("cargo:rustc-env=BUILD_MLX_VERSION={MLX_VERSION}");
-    println!("cargo:rustc-env=BUILD_MLX_C_VERSION={MLX_C_VERSION}");
     embed_ui();
 }
 

@@ -105,18 +105,14 @@ pub struct Context {
     pub installed: Vec<Client>,
     /// Names of pulled models.
     pub pulled: Vec<String>,
-    pub hf_cache: PathBuf,
-    /// Free bytes on the HF cache's disk.
+    /// Free bytes on the disk of mrun's model store (in `MRUN_HOME`).
     pub free_disk: Option<u64>,
     pub mrun_home: PathBuf,
     /// Why `MRUN_HOME` is not writable.
     pub home_error: Option<String>,
-    /// Why the HF cache (or its nearest existing parent) is not writable.
-    pub cache_error: Option<String>,
-    /// Why MLX's GPU kernels could not be extracted (D034).
-    pub kernels_error: Option<String>,
-    /// The build's tensor backend and its kernel mode (016 FR-008, FR-009); `None` without an
-    /// engine.
+    /// Whether the NAX kernels run and why not (`on`, `off (<reason>)`); `None` without an engine.
+    pub nax: Option<String>,
+    /// The build's engine and its kernel mode (016 FR-008, FR-009); `None` without an engine.
     pub backend: Option<mrun_engine::engine::BackendInfo>,
     /// Other processes, largest resident memory first (D062).
     pub processes: Vec<Process>,
@@ -143,6 +139,7 @@ pub fn checks(ctx: &Context) -> Vec<Finding> {
         Some(memory(ctx)),
         Some(other_processes(ctx)),
         Some(kernels(ctx)),
+        nax(ctx),
         Some(config(ctx)),
         Some(low_power(ctx)),
         Some(port(ctx)),
@@ -151,7 +148,6 @@ pub fn checks(ctx: &Context) -> Vec<Finding> {
         Some(default_model(ctx)),
         Some(disk(ctx)),
         Some(home(ctx)),
-        Some(hf_cache(ctx)),
         claude(ctx),
         Some(claude_settings(ctx)),
         Some(api_key(ctx)),
@@ -274,35 +270,44 @@ fn other_processes(ctx: &Context) -> Finding {
 
 fn kernels(ctx: &Context) -> Finding {
     use mrun_engine::engine::Kernels;
-    if let Some(error) = &ctx.kernels_error {
-        return Finding::fail(
-            "gpu-kernels",
-            error.clone(),
-            "make ~/Library/Caches/mrun writable and free disk space",
-        );
-    }
     let Some(info) = ctx.backend else {
-        return Finding::pass("gpu-kernels", "no tensor backend in this build");
+        return Finding::pass("gpu-kernels", "no engine in this build");
     };
-    let backend = format!("{} {}", info.backend.as_str(), info.version);
+    let engine = format!("{} {}", mrun_engine::BACKEND, info.version);
     match info.kernels {
         Kernels::Precompiled => Finding::pass(
             "gpu-kernels",
-            format!("{backend} GPU kernels ready (kernels: precompiled)"),
+            format!("{engine} GPU kernels ready (precompiled)"),
         ),
         Kernels::Runtime => Finding::warn(
             "gpu-kernels",
             format!(
-                "{backend} compiles its GPU kernels at start (kernels: runtime): this build has no precompiled metallib"
+                "{engine} compiles its GPU kernels at first start (built without the Metal toolchain)"
             ),
-            "install a release build (it embeds them), or build with the Metal toolchain (`xcrun metal`)",
+            "install Xcode's Metal toolchain (xcodebuild -downloadComponent MetalToolchain) and reinstall mrun for precompiled kernels, or install the release build",
         ),
         Kernels::Unavailable => Finding::fail(
             "gpu-kernels",
-            format!("{backend} was built without Metal kernels (kernels: unavailable)"),
+            format!("{engine} was built without Metal kernels"),
             "build on macOS with the Metal toolchain",
         ),
     }
+}
+
+/// The M5 Neural Accelerator kernels: information, never a warning (022 contract).
+fn nax(ctx: &Context) -> Option<Finding> {
+    let status = ctx.nax.as_deref()?;
+    let message = match status
+        .strip_prefix("off (")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        Some("not yet measured on this GPU") => {
+            "off: not yet measured on this GPU (M5); mrun turns it on once measured".to_string()
+        }
+        Some(reason) => format!("off: {reason}"),
+        None => status.to_string(),
+    };
+    Some(Finding::info("nax", message))
 }
 
 fn low_power(ctx: &Context) -> Finding {
@@ -427,7 +432,7 @@ fn disk(ctx: &Context) -> Finding {
     let Some(free) = ctx.free_disk else {
         return Finding::warn(
             "disk",
-            format!("free space in {} unknown", ctx.hf_cache.display()),
+            format!("free space in {} unknown", ctx.mrun_home.display()),
             "check the disk with 'df -h'",
         );
     };
@@ -443,16 +448,16 @@ fn disk(ctx: &Context) -> Finding {
             format!(
                 "{} free in {}; {} needs {}",
                 human_bytes(free),
-                ctx.hf_cache.display(),
+                ctx.mrun_home.display(),
                 alias.name,
                 human_bytes(needed)
             ),
-            "free disk space, or set HF_HUB_CACHE to a larger disk",
+            "free disk space, or set MRUN_HOME to a larger disk",
         )
     } else {
         Finding::pass(
             "disk",
-            format!("{} free in {}", human_bytes(free), ctx.hf_cache.display()),
+            format!("{} free in {}", human_bytes(free), ctx.mrun_home.display()),
         )
     }
 }
@@ -467,20 +472,6 @@ fn home(ctx: &Context) -> Finding {
             "mrun-home",
             format!("{} is not writable: {error}", ctx.mrun_home.display()),
             "fix its permissions, or set MRUN_HOME to a writable directory",
-        ),
-    }
-}
-
-fn hf_cache(ctx: &Context) -> Finding {
-    match &ctx.cache_error {
-        None => Finding::pass(
-            "hf-cache",
-            format!("{} is writable", ctx.hf_cache.display()),
-        ),
-        Some(error) => Finding::fail(
-            "hf-cache",
-            format!("{} is not writable: {error}", ctx.hf_cache.display()),
-            "fix its permissions, or set HF_HUB_CACHE to a writable directory",
         ),
     }
 }
@@ -566,15 +557,16 @@ fn clients(ctx: &Context) -> Finding {
     )
 }
 
-/// The real context of this machine.
-#[cfg(feature = "engine")]
-fn kernels_error() -> Option<String> {
-    mrun_engine::tensor::metallib::ensure().err()
-}
-
-#[cfg(not(feature = "engine"))]
-fn kernels_error() -> Option<String> {
-    None
+/// Whether the NAX kernels run, and why not; `None` without an engine.
+fn nax_status() -> Option<String> {
+    #[cfg(feature = "engine")]
+    {
+        Some(mrun_engine::tensor::nax_status())
+    }
+    #[cfg(not(feature = "engine"))]
+    {
+        None
+    }
 }
 
 pub fn gather(port: u16) -> Context {
@@ -628,20 +620,12 @@ pub fn gather(port: u16) -> Context {
             .iter()
             .map(|m| m.name().to_string())
             .collect(),
-        free_disk: existing_ancestor(&paths.hf_cache).and_then(hub::download::free_space),
+        free_disk: existing_ancestor(&paths.mrun_home).and_then(hub::download::free_space),
         home_error: writable(&paths.mrun_home).err(),
-        cache_error: existing_ancestor(&paths.hf_cache)
-            .map_or(Err("no existing parent".to_string()), |dir| {
-                tempfile::tempfile_in(dir)
-                    .map(drop)
-                    .map_err(|error| error.to_string())
-            })
-            .err(),
-        kernels_error: kernels_error(),
+        nax: nax_status(),
         backend: crate::cli::version::backend(),
         processes: sysmem::processes(),
         config: config_state(),
-        hf_cache: paths.hf_cache,
         mrun_home: paths.mrun_home,
     }
 }
@@ -699,7 +683,7 @@ fn config(ctx: &Context) -> Finding {
     }
 }
 
-/// `path` or its nearest existing parent (the cache may not exist yet).
+/// `path` or its nearest existing parent (`MRUN_HOME` may not exist yet).
 fn existing_ancestor(path: &Path) -> Option<&Path> {
     path.ancestors().find(|dir| dir.exists())
 }
@@ -753,7 +737,7 @@ pub struct Report {
     pub nax_compiled: bool,
     /// The GPU has NAX (M5), whether or not it is compiled in.
     pub nax_available: bool,
-    /// Whether the backend runs its NAX kernels, and why not (`on`, `off (<reason>)`).
+    /// Whether nuvec runs its NAX kernels, and why not (`on`, `off (<reason>)`).
     pub nax_running: String,
     pub models: Vec<ReportModel>,
     /// Shown path of the calibration file (home as `~`).
@@ -827,7 +811,7 @@ pub fn render_report(report: &Report, findings: &[Finding]) -> String {
                 format!("{} B ({:.0} GiB)", grouped(m.physical), gib(m.physical)),
             );
             row(
-                "MLX recommended working set",
+                "Metal recommended working set",
                 format!(
                     "{} B ({:.2} GiB, {})",
                     grouped(m.recommended_working_set),
@@ -1014,15 +998,12 @@ mod tests {
             settings_overrides: Vec::new(),
             installed: Client::ALL.to_vec(),
             pulled: vec!["qwen3.6".into()],
-            hf_cache: "/h/.cache/huggingface/hub".into(),
             free_disk: Some(100_000_000_000),
             mrun_home: "/h/.mrun".into(),
             home_error: None,
-            cache_error: None,
-            kernels_error: None,
+            nax: Some("off (not an M5-class GPU)".into()),
             backend: Some(mrun_engine::engine::BackendInfo {
-                backend: mrun_engine::engine::Backend::Nuvec,
-                version: "0.4.1",
+                version: "0.6.1",
                 kernels: mrun_engine::engine::Kernels::Precompiled,
             }),
             processes: Vec::new(),
@@ -1035,45 +1016,67 @@ mod tests {
     }
 
     #[test]
-    fn the_kernels_finding_names_the_backend_and_its_kernel_mode() {
-        use mrun_engine::engine::{Backend, BackendInfo, Kernels};
-        let with = |backend, version, kernels| {
+    fn the_kernels_finding_names_the_engine_and_its_kernel_mode() {
+        use mrun_engine::engine::{BackendInfo, Kernels};
+        let with = |kernels| {
             let mut ctx = good();
             ctx.backend = Some(BackendInfo {
-                backend,
-                version,
+                version: "0.6.1",
                 kernels,
             });
             find(&ctx, "gpu-kernels").unwrap()
         };
-        let nuvec = with(Backend::Nuvec, "0.4.1", Kernels::Precompiled);
-        assert_eq!(nuvec.status, Status::Pass);
-        assert!(
-            nuvec.message.contains("nuvec 0.4.1") && nuvec.message.contains("kernels: precompiled"),
-            "{}",
-            nuvec.message
-        );
-        let mlx = with(Backend::Mlx, "0.32.4", Kernels::Precompiled);
-        assert!(mlx.message.contains("mlx 0.32.4"), "{}", mlx.message);
-        let runtime = with(Backend::Nuvec, "0.4.1", Kernels::Runtime);
+        let ready = with(Kernels::Precompiled);
+        assert_eq!(ready.status, Status::Pass);
+        assert_eq!(ready.message, "nuvec 0.6.1 GPU kernels ready (precompiled)");
+        let runtime = with(Kernels::Runtime);
         assert_eq!(runtime.status, Status::Warn);
         assert!(
-            runtime.message.contains("kernels: runtime"),
+            runtime.message.contains("at first start"),
             "{}",
             runtime.message
         );
-        assert_eq!(
-            with(Backend::Nuvec, "0.4.1", Kernels::Unavailable).status,
-            Status::Fail
+        assert!(
+            runtime
+                .fix
+                .as_deref()
+                .unwrap()
+                .contains("xcodebuild -downloadComponent MetalToolchain"),
+            "{runtime:?}"
         );
+        assert_eq!(with(Kernels::Unavailable).status, Status::Fail);
         let mut none = good();
         none.backend = None;
+        none.nax = None;
         assert_eq!(find(&none, "gpu-kernels").unwrap().status, Status::Pass);
+        assert!(find(&none, "nax").is_none());
+    }
+
+    #[test]
+    fn nax_is_information_with_its_reason() {
+        let with = |status: &str| {
+            let mut ctx = good();
+            ctx.nax = Some(status.into());
+            find(&ctx, "nax").unwrap()
+        };
+        let off = with("off (not an M5-class GPU)");
+        assert_eq!(off.status, Status::Info);
+        assert_eq!(off.message, "off: not an M5-class GPU");
+        assert_eq!(
+            with("off (not yet measured on this GPU)").message,
+            "off: not yet measured on this GPU (M5); mrun turns it on once measured"
+        );
+        assert_eq!(with("on").message, "on");
+        assert_eq!(with("on (forced)").status, Status::Info);
     }
 
     #[test]
     fn a_healthy_mac_passes_everything() {
-        assert!(checks(&good()).iter().all(|f| f.status == Status::Pass));
+        assert!(
+            checks(&good())
+                .iter()
+                .all(|f| matches!(f.status, Status::Pass | Status::Info))
+        );
     }
 
     #[test]
@@ -1176,11 +1179,6 @@ mod tests {
                     )]
                 }),
                 Status::Warn,
-            ),
-            (
-                "hf-cache",
-                Box::new(|c| c.cache_error = Some("read-only file system".into())),
-                Status::Fail,
             ),
             (
                 "anthropic-api-key",
@@ -1305,7 +1303,7 @@ mod tests {
 
     fn report() -> Report {
         Report {
-            version: "0.1.0 (abc1234, 2026-10-16) mlx 0.30.0 mlx-c 0.4.0 macos-aarch64 numerics no nax, not available, gpu applegpu_g16s".into(),
+            version: "0.1.0 (abc1234, 2026-10-16) nuvec 0.6.1 macos-arm64, gpu applegpu_g16s, kernels precompiled, nax off (not an M5-class GPU)".into(),
             chip: Some("Apple M4 Pro".into()),
             gpu_family: "applegpu_g16s".into(),
             memory: Some(DeviceMemory {
@@ -1337,7 +1335,6 @@ mod tests {
     #[test]
     fn the_report_names_the_machine_and_no_user() {
         let mut ctx = good();
-        ctx.hf_cache = "/Users/alice/.cache/huggingface/hub".into();
         ctx.mrun_home = "/Users/alice/.mrun".into();
         let text = redact(
             &render_report(&report(), &checks(&ctx)),
@@ -1349,7 +1346,7 @@ mod tests {
             "| Chip | Apple M4 Pro |",
             "| GPU family | applegpu_g16s |",
             "| Physical memory | 51,539,607,552 B (48 GiB) |",
-            "| MLX recommended working set | 40,200,896,512 B (37.44 GiB, Metal recommended working set) |",
+            "| Metal recommended working set | 40,200,896,512 B (37.44 GiB, Metal recommended working set) |",
             "| macOS | 26.6 (25G5000) |",
             "available on this GPU: no; compiled in: no; running: off",
             "| qwen3.5 | mlx-community/Qwen3.5-9B-4bit@0123456789ab | affine-4-64 | `sha256:feed` |",
@@ -1357,7 +1354,7 @@ mod tests {
             "Apple M4 Pro, 48 GiB \\| qwen3_5",
             "0→2048, 65536→1536",
             "ok   platform",
-            "~/.cache/huggingface/hub is writable",
+            "~/.mrun is writable",
         ] {
             assert!(text.contains(needle), "missing {needle:?} in\n{text}");
         }

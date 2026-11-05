@@ -1,45 +1,42 @@
 +++
 title = "Benchmarks"
-description = "How mrun bench measures local inference for coding agents: whole-session replay, paired per-turn comparisons with bootstrap intervals, a truncation canary and dated, complete reports."
+description = "Measured results and how mrun bench measures local inference for coding agents: whole-session replay, paired per-turn comparisons and a truncation canary."
 weight = 100
 +++
 
-`mrun bench` measures what coding agents need: fast responses on turn 30 of a session with
-50,000 tokens of context, for mrun and other servers on the same Mac. Comparisons report every
-cell, including the ones mrun loses.
+`mrun bench` measures fast responses deep into agent sessions, for mrun and other servers on the
+same Mac. Comparisons report every cell, including the ones mrun loses.
 
-## Measured on the M4 Pro (2026-10-16)
+## Measured results
 
-All numbers below are from one Mac (M4 Pro, 48 GB, macOS 26).
+M4 Pro, 48 GB, macOS 26.
 
 **Parity with mlx-lm 0.32.0.** Greedy output on 22 prompts up to 8K tokens (256 tokens each):
 Qwen3-8B 22 of 22 and Qwen3.5-9B 22 of 22 token-identical.
 
-**Speed against mlx-lm 0.32.0** (mrun / mlx-lm, best of 2, under background load from other
-processes):
+**Speed against mlx-lm 0.32.0** (mrun / mlx-lm, best of 2, under background load):
 
 | Model | Prefill 1K | Prefill 16K | Decode 1K | Decode 16K |
 | --- | --- | --- | --- | --- |
 | Qwen3-8B 4-bit | 96.8 % | 98.2 % | 99.4 % | 101 % |
 | Qwen3.5-9B 4-bit | 91.6 % | 95.7 % | 93.7 % ¹ | 108 % |
 
-¹ Measured under a load average of up to 14; a quiet run gave 104 %.
+¹ Under a load average of up to 14; 104 % on a quiet machine.
 
 **Cancellation.** Interrupting prompt processing at random points: p95 ≤ 215 ms until the next
-request can start, at every measured depth (gate: 300 ms).
+request can start, at every measured depth.
 
-**Exact reuse.** The exactness oracle (a request served from the cache equals recomputing its
-prompt with the same chunk plan, bit for bit) passes on Metal for Qwen3-8B (21 cases) and
-Qwen3.5-9B (10 cases). Qwen3.6-35B-A3B is not covered.
+**Exact reuse.** A request served from the cache equals recomputing its prompt with the same chunk
+plan, bit for bit, for Qwen3-8B (21 cases) and Qwen3.5-9B (10 cases). Qwen3.6-35B-A3B is not
+covered.
 
-**Small Macs (simulated).** With `--budget-gib` set to a smaller Mac's working set
-([Memory](@/docs/memory.md#smaller-macs)), `qwen3.5` fits 84,333 tokens of context on a 16 GB
-Mac and 235,385 on a 24 GB Mac. Simulation reproduces fit and admission, not a slower GPU.
+**Small Macs (simulated).** `qwen3.5` fits 84,333 tokens of context at a 16 GB Mac's working set
+and 235,385 at a 24 GB Mac's ([Memory](@/docs/memory.md#smaller-macs)).
 
-## Quick check against Ollama (2026-10-16)
+## Quick check against Ollama
 
-A quick check, **not** the `mrun bench` comparison: no traces, no bootstrap intervals, one
-model, a machine under heavy background load from other processes.
+A quick check, **not** the `mrun bench` comparison: no traces, no bootstrap intervals, one model,
+heavy background load.
 
 Setup: M4 Pro 48 GB, Qwen3-8B. mrun runs MLX 4-bit weights; Ollama 0.40.4 runs this model on its
 llama.cpp engine with Q4_K_M weights (not MLX), so weights and kernels differ. Chat Completions,
@@ -55,16 +52,15 @@ greedy, thinking off, 5 repetitions, medians.
 | Follow-up after a new user message, 13.7K | 1.58 s | **1.56 s** |
 | 4-round tool loop, time to first token per round | **1.94 / 2.53 / 3.26 / 2.86 s** | 2.42 / 3.16 / 4.05 / 3.92 s |
 
-Losing cells: both follow-ups. At 3.6K mrun is 26 % slower on a short recompute (prefill of a
-chunk of a few hundred tokens); at 13.7K the two are within 2 %. In the tool loop mrun reuses
-about 45–60 more tokens per round than Ollama: the model's own tool call, spliced back into the
-next prompt.
+mrun loses both follow-ups: 26 % slower on a short recompute at 3.6K, within 2 % at 13.7K. In the
+tool loop mrun reuses about 45–60 more tokens per round than Ollama (the model's own tool call,
+spliced back into the next prompt).
 
 ## Contributed results
 
-Results from other Macs (M1, M2, M3, M5, 16–24 GB) are listed here by contributor, chip, memory
-and date; see [Hardware reports](https://github.com/hupe1980/mrun/blob/main/CONTRIBUTING.md#hardware-reports).
-No contributed results are listed.
+Results from other Macs are listed here by contributor, chip and memory; see
+[Hardware reports](https://github.com/hupe1980/mrun/blob/main/CONTRIBUTING.md#hardware-reports).
+None are listed.
 
 ## Suites
 
@@ -77,39 +73,34 @@ No contributed results are listed.
 Free memory, swap, power source, Low Power Mode and thermal state are recorded before each server
 runs.
 
-**Agent traces are not bundled.** The agent suite needs `--trace <FILE|DIR>` (a `.jsonl`
-trace or a directory of them, repeatable); `--suite all` without one skips the agent suite and
-says so in the report. Traces are built from your own sessions recorded with
-`mrun serve --record <dir>` (see below).
+Agent traces are not bundled. The agent suite needs `--trace <FILE|DIR>` (a `.jsonl` trace or a
+directory of them, repeatable); `--suite all` without one skips it and says so in the report. See
+[Your own traces](#your-own-traces).
 
 ## Method
 
 - **Same prompts for everyone.** Recorded requests are sent in order, unchanged except for the
-  output limit and streaming. The history is the recorded conversation, so every server sees
-  byte-identical prompts and can reuse context up to the start of the previous reply.
+  output limit and streaming, so every server sees byte-identical prompts.
 - **Same work per turn.** In the timing pass each turn generates as many tokens as the recorded
   reply (ignoring end-of-sequence where the server supports it); time to first token is taken at
   the first content event, not at pings or keepalives.
-- **Quality from a separate pass.** Forced-length decoding makes a model run past where it would
-  stop, so quality signals come from one extra natural-stop replay with the client's own output
-  limit (4,096 tokens when the recording named none).
-- **Whole sessions or nothing.** A session with any failed or truncated turn is excluded as a
-  whole and listed with the reason; skipping a turn would make a session look faster.
-- **Truncation canary.** A server that silently truncates a long prompt answers faster. Each
-  server first measures, in its own tokens, the size of a short canary line placed at the start of
-  the prompt; a turn whose prompt count does not grow by that size when the canary is present was
-  truncated. A server that reports no prompt counts is marked unverified.
+- **Quality from a separate pass.** Quality signals come from one natural-stop replay with the
+  client's own output limit (4,096 tokens when the recording named none).
+- **Whole sessions or nothing.** A session with any failed or truncated turn is excluded and
+  listed with the reason.
+- **Truncation canary.** Each server measures, in its own tokens, a short canary line at the start
+  of the prompt; a turn whose prompt count does not grow by that size was truncated. A server that
+  reports no prompt counts is marked unverified.
 - **Paired comparisons.** Comparisons use per-turn ratios over turns both servers completed (the
   same turn of the same trace), summarized by their geometric mean with a bootstrap 95 % interval
   (2,000 resamples, fixed seed). The verdict is `mrun-faster` or `mrun-slower` when the interval
   excludes 1, else `within-noise`. Synthetic cells compare medians.
-- **Each server in its best exact configuration.** Every server runs with its prompt cache
-  enabled as its documentation recommends, in its fastest configuration that keeps state
-  lossless; a lossy default such as 8-bit KV runs as an extra, labeled configuration. Caches are
-  cleared before each repetition. Minimum repetitions: agent 3, synthetic 5, cancel 50 (`--reps`
-  raises them).
+- **Each server in its best exact configuration.** Prompt cache enabled as documented, fastest
+  lossless state; a lossy default such as 8-bit KV runs as an extra, labeled configuration. Caches
+  are cleared before each repetition. Minimum repetitions: agent 3, synthetic 5, cancel 50
+  (`--reps` raises them); the synthetic maximum-context cell is timed once.
 - **One server at a time.** On a terminal, `mrun bench` pauses and asks you to stop one server and
-  start the next, so none competes for memory.
+  start the next.
 - **Weights recorded.** Model format, bits per weight and state format are recorded for every
   server; lossy state formats are labeled.
 - **Losing cells are always reported.**
@@ -117,8 +108,7 @@ says so in the report. Traces are built from your own sessions recorded with
 ## Profiles
 
 Profiles ship inside the binary and hold each server's start command, flags, context length and
-how to reset its cache. The profiles for llama.cpp, Ollama, oMLX and mlx-lm are verified against
-a pinned release; unverified profiles are reported but kept out of the headline summary.
+cache reset. Unverified profiles are reported but kept out of the headline summary.
 
 | Profile | Default URL | APIs | Note |
 | --- | --- | --- | --- |
@@ -154,6 +144,5 @@ Results are written as `result.json` (versioned schema) and `report.md`.
 ## Your own traces
 
 `mrun serve --record <dir>` records requests and responses as JSON lines; `mrun bench trace
-<record.jsonl> --out <trace.jsonl>` turns a recording into a replayable trace (pass
-`--tokenizer` for exact token counts). Recordings contain your prompts and code, stay on your
-machine and are never uploaded.
+<record.jsonl> --out <trace.jsonl>` turns a recording into a replayable trace (`--tokenizer` for
+exact token counts). Recordings contain your prompts and code and stay on your machine.

@@ -6,7 +6,7 @@
 //!   tests skip with a message when it is absent);
 //! - [`ScriptHook`]: a `DecodeHook` that masks everything but the next scripted token, so a real
 //!   engine produces given replies through the real decode path;
-//! - tiny `MlxEngine` checkpoints (feature `mlx`) from `mrun-engine`'s `test-support`.
+//! - tiny `NuvecEngine` checkpoints (feature `engine`) from `mrun-engine`'s `test-support`.
 
 #![allow(dead_code)]
 
@@ -128,12 +128,12 @@ impl DecodeHook for ScriptHook {
 
 #[cfg(feature = "engine")]
 pub mod tiny {
-    use mrun_engine::MlxEngine;
+    use mrun_engine::NuvecEngine;
     use mrun_engine::testing::{self, TinyQwen3};
 
     /// A tiny `qwen3` on the CPU with its model directory (kept alive with the engine).
     pub struct Tiny {
-        pub engine: MlxEngine,
+        pub engine: NuvecEngine,
         pub dir: Option<tempfile::TempDir>,
     }
 
@@ -164,7 +164,7 @@ pub mod tiny {
     /// Loads `dir` on the CPU; with
     /// `state_bytes`, the budget is lowered so the state capacity is about that many bytes
     /// (weights and scratch measured by a first load).
-    fn load(dir: &std::path::Path, state_bytes: Option<u64>) -> MlxEngine {
+    fn load(dir: &std::path::Path, state_bytes: Option<u64>) -> NuvecEngine {
         use mrun_engine::Engine;
         let engine = testing::load_cpu(dir, None).unwrap();
         let Some(state) = state_bytes else {
@@ -177,7 +177,7 @@ pub mod tiny {
         for _ in 0..4 {
             match testing::load_cpu(dir, Some(b.weights + scratch + state)) {
                 Ok(engine) => return engine,
-                Err(mrun_engine::MlxLoadError::Budget(
+                Err(mrun_engine::NuvecLoadError::Budget(
                     mrun_engine::budget::BudgetError::DoesNotFit { scratch: s, .. },
                 )) => scratch = s,
                 Err(e) => panic!("{e}"),

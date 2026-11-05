@@ -47,7 +47,7 @@
   <article class="prose">
     <p class="breadcrumbs"><a href="{{ get_url(path='@/docs/_index.md') }}">Docs</a> / {{ page.title }}</p>
     <h1>{{ page.title }}</h1>
-    {%- if page.extra.planned | default(value=true) %}
+    {%- if config.extra.status and page.extra.planned | default(value=true) %}
     <p class="notice" role="note">{{ config.extra.status }}</p>
     {%- endif %}
     {%- if page.toc and page.toc | length > 1 %}

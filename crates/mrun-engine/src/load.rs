@@ -1,6 +1,6 @@
-//! Loading a checkpoint for the MLX engine: `*.safetensors` into a weight map, the quantization
-//! settings from `config.json` (with per-path overrides), and the quantized or dense linear and
-//! embedding layers the family modules compose.
+//! Loading a checkpoint: `*.safetensors` into a weight map, the quantization settings from
+//! `config.json` (with per-path overrides), and the quantized or dense linear and embedding
+//! layers the family modules compose.
 
 use std::collections::HashMap;
 use std::fs;
@@ -173,9 +173,9 @@ pub fn unused_tensor(name: &str) -> bool {
 }
 
 impl Weights {
-    /// Loads the tensors of every `*.safetensors` file in `dir` that `keep` accepts. MLX reads
-    /// their data on first evaluation; nuvec maps aligned files and reads unaligned ones (every
-    /// mlx-community checkpoint) here, in parallel.
+    /// Loads the tensors of every `*.safetensors` file in `dir` that `keep` accepts: nuvec maps
+    /// aligned files (mrun's store realigns every pulled checkpoint, 022) and reads unaligned ones
+    /// here, in parallel.
     pub fn load(dir: &Path, keep: impl Fn(&str) -> bool) -> Result<Self, LoadError> {
         let mut files: Vec<_> = fs::read_dir(dir)
             .map_err(|e| invalid("weights", format!("cannot read {}: {e}", dir.display())))?

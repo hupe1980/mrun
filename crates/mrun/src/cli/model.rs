@@ -1,5 +1,5 @@
 //! Opening a model for `mrun run` and `mrun serve`: resolve the name, read the family, tokenizer,
-//! chat template, identity and sampling defaults, and (with `mlx`) build the engine factory.
+//! chat template, identity and sampling defaults, and (with `engine`) build the engine factory.
 
 use crate::chat::syntax::registry::{self, ChatSyntax};
 use crate::chat::template::ChatTemplate;
@@ -91,8 +91,16 @@ pub fn open(name: &str) -> Result<OpenModel, CliError> {
         )
         .hint("use the model's own chat template (chat_template.jinja or tokenizer_config.json)")
     })?;
-    let identity =
-        identity::identify(&dir, &ctx.paths.identity_cache()).map_err(|e| model_error(name, e))?;
+    // A pulled model's files passed the fast check: its manifest's Hub hashes stand for them.
+    let known = manifest.as_ref().map_or_else(Default::default, |manifest| {
+        manifest
+            .files
+            .iter()
+            .map(|file| (file.path.clone(), file.sha256.clone()))
+            .collect()
+    });
+    let identity = identity::identify_with(&dir, &ctx.paths.identity_cache(), &known)
+        .map_err(|e| model_error(name, e))?;
     if let Some(previous) = &identity.changed_from {
         eprintln!(
             "note: the files of {name} changed since it was last loaded (identity {} → {}); cached state for it is not reused",
@@ -177,7 +185,7 @@ fn generation_defaults(dir: &std::path::Path) -> Sampling {
 pub fn engine_factory(
     model: &OpenModel,
     overrides: Overrides,
-) -> impl FnOnce() -> Result<mrun_engine::MlxEngine, String> + Send + 'static {
+) -> impl FnOnce() -> Result<mrun_engine::NuvecEngine, String> + Send + 'static {
     let dir = model.dir.clone();
     let name = model.name.clone();
     let options = mrun_engine::LoadOptions {
@@ -188,17 +196,17 @@ pub fn engine_factory(
         calibration: mrun_engine::calibration::default_path(),
     };
     move || {
-        use mrun_engine::MlxLoadError;
-        mrun_engine::MlxEngine::load(&dir, options).map_err(|error| {
+        use mrun_engine::NuvecLoadError;
+        mrun_engine::NuvecEngine::load(&dir, options).map_err(|error| {
             let code = match &error {
-                MlxLoadError::Model(LoadError::UnsupportedArchitecture { .. }) => {
+                NuvecLoadError::Model(LoadError::UnsupportedArchitecture { .. }) => {
                     Code::UnsupportedArchitecture
                 }
-                MlxLoadError::Budget(_) => Code::DoesNotFit,
+                NuvecLoadError::Budget(_) => Code::DoesNotFit,
                 _ => Code::Internal,
             };
             let message = match error {
-                MlxLoadError::Model(error) => error.report(&name),
+                NuvecLoadError::Model(error) => error.report(&name),
                 other => format!("cannot load {name}: {other}"),
             };
             CliError::new(code, message).to_string()

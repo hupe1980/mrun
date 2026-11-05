@@ -17,13 +17,18 @@ class Jobs {
     return this.byKey[this.key(kind, target)];
   }
 
+  /** The latest running job of `kind`, whatever its target (a cloud start). */
+  active(kind: string): Job | undefined {
+    return Object.values(this.byKey).find((j) => j.kind === kind && j.state === "running");
+  }
+
   running(kind: string, target: string): boolean {
     return this.of(kind, target)?.state === "running";
   }
 
   /** Starts an action and follows it until it ends; resolves with the final job. */
-  async run(kind: string, target: string, confirm = false): Promise<Job> {
-    let { job } = await host.act(kind, target, confirm);
+  async run(kind: string, target: string, confirm = false, secret?: string): Promise<Job> {
+    let { job } = await host.act(kind, target, confirm, secret);
     const key = this.key(kind, target);
     this.byKey[key] = job;
     while (job.state === "running") {
@@ -34,6 +39,7 @@ class Jobs {
     await live.tick();
     if (kind === "pull" || kind === "remove" || kind === "use" || kind === "start" || kind === "stop") await live.refreshModels();
     if (kind === "connect" || kind === "disconnect") await live.refreshAgents().catch(() => {});
+    if (kind.startsWith("cloud-")) await live.refreshCloud();
     return job;
   }
 
