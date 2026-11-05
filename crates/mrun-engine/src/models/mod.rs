@@ -1,4 +1,4 @@
-//! Model families: the registry from `config.json` to a family, and (with `mlx`) the graphs.
+//! Model families: the registry from `config.json` to a family, and (with `engine`) the graphs.
 
 #[cfg(feature = "engine")]
 pub(crate) mod activations;
@@ -97,7 +97,7 @@ mod graph {
             )?)),
             other => Err(LoadError::InvalidConfig {
                 key: "model_type".into(),
-                reason: format!("'{other}' has no MLX graph in this build"),
+                reason: format!("'{other}' is not a family this build runs"),
             }),
         }
     }

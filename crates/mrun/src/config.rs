@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use clap::{Arg, ArgAction, Command};
 
 /// Every `MRUN_*` variable mrun reads (`--record` has none by design).
-pub const KNOWN: [&str; 31] = [
+pub const KNOWN: [&str; 32] = [
     "MRUN_HOME",
     "MRUN_CONFIG",
     "MRUN_PORT",
@@ -46,12 +46,13 @@ pub const KNOWN: [&str; 31] = [
     "MRUN_AGENT_SHA256",
     "MRUN_AGENT_URL",
     "MRUN_BOOTSTRAP",
+    // The Keychain stand-in for tests (024).
+    "MRUN_KEYCHAIN_STUB",
 ];
 
-/// `MRUN_*` variables of the build and packaging scripts (`crates/mrun/build.rs`,
-/// `scripts/release/package.sh`): not read at runtime, but often still exported in the shell that
-/// built mrun, so they draw no warning (008 local release dry run).
-pub const BUILD_TIME: [&str; 2] = ["MRUN_BUILD_COMMIT", "MRUN_PACKAGE_METALLIB"];
+/// `MRUN_*` variables of the build (`crates/mrun/build.rs`): not read at runtime, but often still
+/// exported in the shell that built mrun, so they draw no warning (008 local release dry run).
+pub const BUILD_TIME: [&str; 1] = ["MRUN_BUILD_COMMIT"];
 
 /// Warnings for unknown `MRUN_*` names, with the closest known one.
 pub fn unknown_variables(names: impl Iterator<Item = String>) -> Vec<String> {
@@ -856,7 +857,6 @@ mod tests {
             "MRUN_ENTIRELY_ELSE",
             "PATH",
             "MRUN_BUILD_COMMIT",
-            "MRUN_PACKAGE_METALLIB",
         ]
         .map(String::from)
         .into_iter();

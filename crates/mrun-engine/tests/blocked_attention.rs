@@ -1,7 +1,7 @@
 //! Query-blocked attention (D059, FR-017): when a chunk's unfused score buffer would exceed
 //! `SCORE_BLOCK_BYTES`, attention runs in query blocks over the same keys. On the tiny hybrids
-//! (head dim 32, so MLX's unfused path) blocks of a few rows are forced and compared with the
-//! unblocked run: bit-identical for bf16 checkpoints (blocks keep at least 9 rows, so MLX stays
+//! (head dim 32, so nuvec's unfused path) blocks of a few rows are forced and compared with the
+//! unblocked run: bit-identical for bf16 checkpoints (blocks keep at least 9 rows, so nuvec stays
 //! on the unfused path the whole chunk takes); the f32 fixture differs below 1e-5.
 
 #![cfg(feature = "engine")]

@@ -4,6 +4,7 @@
 
 use super::Manifest;
 use super::progress::Progress;
+use super::realign;
 use crate::errors::{CliError, Code};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
@@ -28,8 +29,8 @@ impl Status {
     }
 }
 
-/// Size and modification time of every file in `dir` (following snapshot symlinks) against the
-/// manifest. A file of the right size whose modification time changed is re-hashed: the same
+/// Size and modification time of every file in `dir` against the manifest (on disk `size + pad`,
+/// [`realign`]). A file of the right size whose modification time changed is re-hashed: the same
 /// content updates the recorded time in `manifest`, other content is corrupt.
 pub fn fast_check(manifest: &mut Manifest, dir: &Path) -> Status {
     let mut problems = Vec::new();
@@ -37,16 +38,18 @@ pub fn fast_check(manifest: &mut Manifest, dir: &Path) -> Status {
         let path = dir.join(&file.path);
         match fs::metadata(&path) {
             Err(_) => problems.push(format!("{} is missing", file.path)),
-            Ok(meta) if meta.len() != file.size => problems.push(format!(
+            Ok(meta) if meta.len() != file.size + u64::from(file.pad) => problems.push(format!(
                 "{} has {} bytes, expected {}",
                 file.path,
                 meta.len(),
-                file.size
+                file.size + u64::from(file.pad)
             )),
-            Ok(meta) if mtime_ns(&meta) != file.mtime_ns => match sha256_file(&path) {
-                Ok(sha) if sha == file.sha256 => file.mtime_ns = mtime_ns(&meta),
-                _ => problems.push(format!("{} was modified", file.path)),
-            },
+            Ok(meta) if mtime_ns(&meta) != file.mtime_ns => {
+                match realign::original_sha256(&path, file.pad) {
+                    Ok(sha) if sha == file.sha256 => file.mtime_ns = mtime_ns(&meta),
+                    _ => problems.push(format!("{} was modified", file.path)),
+                }
+            }
             Ok(_) => {}
         }
     }
@@ -57,7 +60,7 @@ pub fn fast_check(manifest: &mut Manifest, dir: &Path) -> Status {
     }
 }
 
-/// Re-hashes every file; returns the mismatches.
+/// Re-hashes every file (the original bytes of a realigned one); returns the mismatches.
 pub fn full_check(manifest: &Manifest, dir: &Path) -> Vec<String> {
     full_check_with(manifest, dir, false)
 }
@@ -72,14 +75,14 @@ pub fn full_check_with(manifest: &Manifest, dir: &Path, progress: bool) -> Vec<S
             let hashed = if progress {
                 let bar = Progress::start("hashing", &file.path, file.size, 0);
                 let mut hasher = Sha256::new();
-                let done = stream(&path, |chunk| {
+                let done = realign::original_bytes(&path, file.pad, |chunk| {
                     hasher.update(chunk);
                     bar.add(chunk.len() as u64);
                 });
                 bar.finish();
                 done.map(|()| hex(&hasher.finalize()))
             } else {
-                sha256_file(&path)
+                realign::original_sha256(&path, file.pad)
             };
             (file, hashed)
         })
@@ -171,7 +174,7 @@ mod tests {
             &"a".repeat(40),
             &[("config.json", b"{}"), ("model.safetensors", b"weights")],
         );
-        let dir = manifest.snapshot_dir(&ctx.paths);
+        let dir = manifest.dir(&ctx.paths);
         let mut manifest = manifest;
         assert_eq!(fast_check(&mut manifest, &dir), Status::Ready);
         assert!(full_check(&manifest, &dir).is_empty());
@@ -204,7 +207,7 @@ mod tests {
             &"a".repeat(40),
             &[("config.json", b"{}"), ("model.safetensors", b"weights")],
         );
-        let dir = manifest.snapshot_dir(&ctx.paths);
+        let dir = manifest.dir(&ctx.paths);
         let weights = dir.join("model.safetensors");
         let set_mtime = |secs: u64| {
             let file = fs::File::options().write(true).open(&weights).unwrap();
@@ -232,6 +235,50 @@ mod tests {
         );
         fs::remove_file(&weights).unwrap();
         assert_eq!(fast_check(&mut manifest, &dir).label(), "corrupt");
+    }
+
+    #[test]
+    fn realigned_files_verify_against_the_hub_hash() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = test_support::ctx(root.path(), "http://unused");
+        let header = br#"{"w":{"dtype":"BF16","shape":[2],"data_offsets":[0,4]}}"#;
+        let mut original = (header.len() as u64).to_le_bytes().to_vec();
+        original.extend_from_slice(header);
+        original.extend_from_slice(&[1, 2, 3, 4]);
+        let mut manifest = test_support::cached_model(
+            &ctx.paths,
+            Some("m"),
+            "org/m",
+            &"a".repeat(40),
+            &[("config.json", b"{}"), ("model.safetensors", &original)],
+        );
+        let dir = manifest.dir(&ctx.paths);
+        let weights = dir.join("model.safetensors");
+        let source = root.path().join("original.safetensors");
+        fs::rename(&weights, &source).unwrap();
+        let pad = realign::realign(&source, &weights, "model.safetensors").unwrap();
+        assert!(pad > 0);
+        manifest.files[1].pad = pad;
+        manifest.files[1].mtime_ns = mtime_ns(&fs::metadata(&weights).unwrap());
+        assert_eq!(fast_check(&mut manifest, &dir), Status::Ready);
+        assert!(full_check(&manifest, &dir).is_empty());
+        assert!(full_check_with(&manifest, &dir, true).is_empty());
+
+        let mut bytes = fs::read(&weights).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        fs::write(&weights, &bytes).unwrap();
+        assert_eq!(
+            full_check(&manifest, &dir),
+            ["model.safetensors does not match its hash"]
+        );
+        bytes[last] ^= 1;
+        bytes[last - 4] = b'x'; // the last pad byte
+        fs::write(&weights, &bytes).unwrap();
+        assert_eq!(
+            full_check(&manifest, &dir),
+            ["model.safetensors: padding is not spaces"]
+        );
     }
 
     #[test]

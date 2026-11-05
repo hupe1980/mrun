@@ -1,29 +1,12 @@
 #!/usr/bin/env bash
-# Tests of the release tooling (008 SC-007, T036): the NAX check on a metallib without and with
-# `*_nax` kernels, and the Homebrew formula's tarball choice per macOS version.
+# Tests of the release tooling (008 SC-007, T036): the archive layout and checksum, and the
+# Homebrew formula rendered for the one archive.
 # Usage: scripts/release/test.sh
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
-printf 'MTLB\0gemm_bf16\0attention_f16\0' > "${work}/macos15.metallib"
-printf 'MTLB\0gemm_bf16\0steel_gemm_fused_nax\0' > "${work}/macos26.metallib"
-check=scripts/release/check_nax.sh
-
-# A 15.0 build is never checked; a 26.2 one passes with NAX kernels.
-"${check}" "${work}/macos15.metallib" 15.0
-MLX_SYS_REQUIRE_NAX=1 "${check}" "${work}/macos26.metallib" 26.2
-# A 26.2 target with a metallib that has no NAX kernels: a warning, and a failure when required.
-"${check}" "${work}/macos15.metallib" 26.2 2> "${work}/warning.txt"
-grep -q '^warning: .*holds no \*_nax kernels' "${work}/warning.txt"
-if MLX_SYS_REQUIRE_NAX=1 "${check}" "${work}/macos15.metallib" 26.2 2> /dev/null; then
-  echo "FAIL: a 15.0 metallib passed the NAX check for 26.2" >&2
-  exit 1
-fi
-MLX_SYS_REQUIRE_NAX=1 "${check}" "${work}/macos15.metallib" 26.1
-echo "check_nax.sh: ok"
-
 # package.sh with a stand-in binary: the tarball layout of 008's ReleaseArtifact, its checksum,
 # and no extended attributes or AppleDouble entries.
 mkdir -p "${work}/target"

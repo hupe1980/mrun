@@ -2,7 +2,7 @@
 //! for the shapes mrun runs (one sequence, no padding mask, scalar per-head gates). The gates
 //! and the q/k normalization are model numerics and live here; the recurrence itself is one
 //! backend operation, `tensor::fast::gated_delta` (mlx-lm's kernels on the GPU, the per-step
-//! reference elsewhere, on both backends).
+//! reference elsewhere).
 
 use crate::models::activations;
 use crate::tensor::fast;

@@ -81,7 +81,7 @@ pub struct SystemUnderTest {
 /// The numerics class (D044, FR-021): NAX kernels on or off and the GPU family.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Numerics {
-    /// The tensor backend (`mlx`, `nuvec`; spec 016 FR-008), when the server reports it.
+    /// The tensor backend (`nuvec`; `mlx` in records from before 022), when the server reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     /// The backend's version (`0.32.4`, `0.4.1`; 016 FR-008), when the server reports it.

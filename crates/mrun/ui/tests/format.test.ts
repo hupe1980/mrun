@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseFrame } from "../src/lib/api";
-import { bytes, cause, percent, phaseLine, reuseSentence, stopWord, tokens, tone } from "../src/lib/format";
+import { bytes, cause, fittingGpus, needGb, percent, perHour, phaseLine, reuseSentence, spend, stopWord, stopsIn, tokens, tone, uptime } from "../src/lib/format";
 
 describe("tones (019 FR-005, SC-003)", () => {
   it("amber only for what nobody intended", () => {
@@ -70,5 +70,41 @@ describe("the chat stream", () => {
     const stop = [...parseFrame('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}')];
     expect(stop).toEqual([{ type: "output", tokens: 12 }, { type: "stop", reason: "end_turn" }]);
     expect([...parseFrame(": keepalive")]).toEqual([]);
+  });
+});
+
+describe("cloud (024)", () => {
+  const gpu = (id: string, memory_gb: number, secure: number | null, stock: string | null, community: number | null = null) => ({
+    id,
+    name: id,
+    memory_gb,
+    secure_per_hr: secure,
+    community_per_hr: community,
+    secure_stock: stock,
+    community_stock: community ? "High" : null,
+  });
+
+  it("prices, spend and uptime read as sentences", () => {
+    expect(perHour(0.857)).toBe("$0.86/h");
+    expect(spend(0.6)).toBe("$0.60");
+    expect(spend(0.004)).toBe("under $0.01");
+    expect(uptime(30)).toBe("under a minute");
+    expect(uptime(42 * 60)).toBe("42 min");
+    expect(uptime(125 * 60)).toBe("2 h 5 min");
+    expect(uptime(120 * 60)).toBe("2 h");
+    expect(stopsIn(12 * 60)).toBe(18);
+    expect(stopsIn(4000)).toBe(0);
+    expect(stopsIn(null)).toBeNull();
+  });
+
+  it("an added model needs its weights, a fifth more and 4 GB", () => {
+    expect(needGb(30e9)).toBe(40);
+  });
+
+  it("fitting GPUs: in stock first, then cheapest; the catalog's ids win over memory", () => {
+    const gpus = [gpu("A100", 80, 1.19, "Low"), gpu("L40S", 48, 0.86, "High"), gpu("H100", 80, 0.5, null), gpu("A5000", 24, 0.16, "High", 0.11)];
+    expect(fittingGpus(gpus, "secure", { need: 40 }).map((c) => c.gpu.id)).toEqual(["L40S", "A100", "H100"]);
+    expect(fittingGpus(gpus, "secure", { fits: ["A100", "A5000"] }).map((c) => c.gpu.id)).toEqual(["A5000", "A100"]);
+    expect(fittingGpus(gpus, "community", { need: 10 }).map((c) => [c.gpu.id, c.price])).toEqual([["A5000", 0.11]]);
   });
 });

@@ -1,10 +1,10 @@
-//! The prefix cache on `MlxEngine` with tiny random-weight models on the CPU backend (003 T022,
+//! The prefix cache on `NuvecEngine` with tiny random-weight models on the CPU device (003 T022,
 //! T024–T026, T028):
 //!
 //! - SC-002: with the state capacity set so main fills ≥ 75 % of it, main → subagent → title →
 //!   main and main → subagent → subagent → main return to everything main committed, three times
 //!   in a row, main protected throughout;
-//! - SC-006: MLX active memory during every move stays within the state before it plus one layer
+//! - SC-006: nuvec's active memory during every move stays within the state before it plus one layer
 //!   of the moved range, and the accounted state within the capacity;
 //! - SC-004: ≥ 100 requests of the mutation suite;
 //! - SC-007 on the tiny hybrid: an edit of the last user message after ten tool turns resumes at
@@ -29,12 +29,12 @@ use mrun::runtime::generate::{Event, EventSink, FinishReason, GenerateRequest, g
 use mrun::runtime::pressure::{Pressure, PressureGauge};
 use mrun_engine::tensor::memory;
 use mrun_engine::{
-    CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind, MemoryBudget, MlxEngine,
-    ModelInfo, Sampling, Segment, SegmentId, Step, TokenMask, align,
+    CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind, MemoryBudget, ModelInfo,
+    NuvecEngine, Sampling, Segment, SegmentId, Step, TokenMask, align,
 };
 use support::{Recorder, ScriptHook, tiny};
 
-/// MLX's memory counters are process-wide: the tests of this file run one at a time.
+/// nuvec's memory counters are process-wide: the tests of this file run one at a time.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {
@@ -47,7 +47,7 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 /// move evaluates beside the layer copies.
 const SCALARS: u64 = 64 * 1024;
 
-/// Watches every move (SC-006): MLX's peak active memory during `detach_tail` and `attach`
+/// Watches every move (SC-006): nuvec's peak active memory during `detach_tail` and `attach`
 /// against the active memory before it plus one layer of the moved range, and the accounted
 /// state against the capacity after every call.
 struct Moves<E> {
@@ -380,8 +380,8 @@ fn main_survives_subagents_and_titles_at_capacity() {
 #[test]
 fn mutation_suite_on_tiny_qwen3() {
     let _serial = serial();
-    struct MlxRig {
-        engine: MlxEngine,
+    struct EngineRig {
+        engine: NuvecEngine,
         store: PrefixStore,
         tokenizer: Tokenizer,
     }
@@ -391,7 +391,7 @@ fn mutation_suite_on_tiny_qwen3() {
             !matches!(event, Event::Progress { .. })
         }
     }
-    impl mutations::Rig for MlxRig {
+    impl mutations::Rig for EngineRig {
         fn serve(&mut self, prompt: &RenderedPrompt, reply: &[u32], cancel: bool) -> MissReport {
             let mut events = Vec::new();
             let sink: &mut dyn EventSink = if cancel {
@@ -439,7 +439,7 @@ fn mutation_suite_on_tiny_qwen3() {
     };
     // About 6,000 positions of state.
     let tiny::Tiny { engine, dir: _dir } = tiny::qwen3_with(shape, Some(6_000 * 256));
-    let mut rig = MlxRig {
+    let mut rig = EngineRig {
         engine,
         store: PrefixStore::new(CacheMode::Cached),
         tokenizer: byte_tokenizer(),

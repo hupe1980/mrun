@@ -13,7 +13,7 @@ use tokio::sync::Notify;
 
 /// What the user can do from the window (data model: Action).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Kind {
     Pull,
     Use,
@@ -22,6 +22,10 @@ pub enum Kind {
     Stop,
     Connect,
     Disconnect,
+    CloudUp,
+    CloudDown,
+    CloudLogin,
+    CloudLogout,
 }
 
 impl Kind {
@@ -34,13 +38,20 @@ impl Kind {
             "stop" => Self::Stop,
             "connect" => Self::Connect,
             "disconnect" => Self::Disconnect,
+            "cloud-up" => Self::CloudUp,
+            "cloud-down" => Self::CloudDown,
+            "cloud-login" => Self::CloudLogin,
+            "cloud-logout" => Self::CloudLogout,
             _ => return None,
         })
     }
 
     /// Whether the action stops or replaces the running server.
     pub fn touches_server(self) -> bool {
-        matches!(self, Self::Use | Self::Stop | Self::Start)
+        matches!(
+            self,
+            Self::Use | Self::Stop | Self::Start | Self::CloudUp | Self::CloudDown
+        )
     }
 
     /// The host listing a finished job of this kind makes stale (019 research R9).
@@ -48,6 +59,7 @@ impl Kind {
         match self {
             Self::Pull | Self::Remove | Self::Use | Self::Start | Self::Stop => "models",
             Self::Connect | Self::Disconnect => "agents",
+            Self::CloudUp | Self::CloudDown | Self::CloudLogin | Self::CloudLogout => "cloud",
         }
     }
 }
@@ -67,6 +79,33 @@ fn valid_model(target: &str) -> bool {
         && target
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._/@:-".contains(&b))
+}
+
+/// A `cloud-up` target, `<repo>|<gpu id>|<secure|community>` (024 data model): the model, the
+/// GPU as `cloud gpus --json` names it, and whether to rent in Community Cloud.
+fn cloud_target(target: &str) -> Result<(String, String, bool), String> {
+    let refuse = || format!("not a cloud start: {target:?}");
+    let mut parts = target.split('|');
+    let (Some(repo), Some(gpu), Some(cloud), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(refuse());
+    };
+    let gpu_ok = (1..=80).contains(&gpu.len())
+        && !gpu.starts_with(['-', ' '])
+        && gpu
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b" ._-".contains(&b));
+    let community = match cloud {
+        "secure" => false,
+        "community" => true,
+        _ => return Err(refuse()),
+    };
+    if valid_model(repo) && gpu_ok {
+        Ok((repo.to_string(), gpu.to_string(), community))
+    } else {
+        Err(refuse())
+    }
 }
 
 /// The commands an action runs, in order (`use` stops the server, then starts it with the
@@ -137,6 +176,29 @@ pub fn steps(
             "--yes",
             "--json",
         ])],
+        // `cloud up` refuses while a local server holds the port: the start replaces it.
+        Kind::CloudUp => {
+            let (repo, gpu, community) = cloud_target(target)?;
+            let mut up = s(&["cloud", "up", "--model", &repo, "--gpu", &gpu]);
+            if community {
+                up.push("--community".into());
+            }
+            up.extend(s(&["--port", &port, "--yes", "--json"]));
+            vec![s(&["stop", "--port", &port]), up]
+        }
+        Kind::CloudDown => vec![s(&["cloud", "down", "--port", &port, "--yes"])],
+        // The key goes to the child's stdin, never into argv (024 FR-005).
+        Kind::CloudLogin => vec![s(&["cloud", "login"])],
+        Kind::CloudLogout => vec![s(&["cloud", "logout"])],
+    })
+}
+
+/// What a cancelled job leaves to undo: a cancelled `cloud-up` may have rented a pod.
+pub fn undo(kind: Kind, server_port: u16) -> Option<Vec<String>> {
+    (kind == Kind::CloudUp).then(|| {
+        steps(Kind::CloudDown, "", server_port, None)
+            .unwrap_or_default()
+            .concat()
     })
 }
 
@@ -151,6 +213,17 @@ pub fn models_argv(server_port: u16) -> Vec<String> {
 pub fn plan_argv(target: &str) -> Result<Vec<String>, String> {
     if valid_model(target) {
         Ok(["pull", target, "--dry-run"].map(str::to_string).to_vec())
+    } else {
+        Err(format!("not a model name: {target:?}"))
+    }
+}
+
+/// What Add shows in the cloud section (024): `cloud models <repo> --json`.
+pub fn cloud_model_argv(target: &str) -> Result<Vec<String>, String> {
+    if valid_model(target) {
+        Ok(["cloud", "models", target, "--json"]
+            .map(str::to_string)
+            .to_vec())
     } else {
         Err(format!("not a model name: {target:?}"))
     }
@@ -224,7 +297,7 @@ fn last_line(stderr: &str) -> String {
         .to_string()
 }
 
-/// Download progress of a pull (data model: Job.progress).
+/// Download progress of a pull, or the step of a cloud start (data model: Job.progress).
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct Progress {
     pub file: String,
@@ -232,6 +305,11 @@ pub struct Progress {
     pub total: u64,
     pub rate: u64,
     pub eta_s: Option<u64>,
+    /// `cloud up`'s step (`pod`, `agent`, `loading`, `ready`) and its line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -289,13 +367,15 @@ impl Jobs {
         }
     }
 
-    /// Starts `steps` as a job; `None` when a job of this kind and target is running.
+    /// Starts `steps` as a job; `None` when a job of this kind and target is running. `stdin`
+    /// goes to the first step's stdin (a secret: never stored in the job).
     pub fn start(
         self: &Arc<Self>,
         program: std::path::PathBuf,
         kind: Kind,
         target: &str,
         steps: Vec<Vec<String>>,
+        stdin: Option<String>,
         on_done: impl FnOnce(State) + Send + 'static,
     ) -> Option<Job> {
         let job = {
@@ -334,7 +414,7 @@ impl Jobs {
         let this = self.clone();
         let id = job.id.clone();
         tokio::spawn(async move {
-            let state = this.run(&program, &id, steps, kind, &cancel).await;
+            let state = this.run(&program, &id, steps, stdin, kind, &cancel).await;
             this.cancels
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -365,14 +445,20 @@ impl Jobs {
         program: &std::path::Path,
         id: &str,
         steps: Vec<Vec<String>>,
+        mut stdin: Option<String>,
         kind: Kind,
         cancel: &Notify,
     ) -> State {
         let last = steps.len().saturating_sub(1);
         for (i, argv) in steps.into_iter().enumerate() {
+            let input = stdin.take();
             let child = Command::new(program)
                 .args(&argv)
-                .stdin(Stdio::null())
+                .stdin(if input.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true)
@@ -384,6 +470,11 @@ impl Jobs {
                     return State::Failed;
                 }
             };
+            if let (Some(input), Some(mut pipe)) = (input, child.stdin.take()) {
+                use tokio::io::AsyncWriteExt;
+                // Dropping the pipe closes it: the child reads to the end.
+                let _ = pipe.write_all(format!("{input}\n").as_bytes()).await;
+            }
             let stdout = child.stdout.take();
             let mut stderr = child.stderr.take();
             let lines = async {
@@ -414,8 +505,8 @@ impl Jobs {
                 return State::Cancelled;
             };
             let ok = status.is_ok_and(|s| s.success());
-            // `use` stops first; nothing to stop is fine.
-            let tolerated = kind == Kind::Use && i < last;
+            // `use` and `cloud-up` stop first; nothing to stop is fine.
+            let tolerated = matches!(kind, Kind::Use | Kind::CloudUp) && i < last;
             if !ok && !tolerated {
                 self.update(id, |j| {
                     j.error = Some(
@@ -431,7 +522,7 @@ impl Jobs {
         State::Done
     }
 
-    /// A JSON line from the child: pull progress, or the command's result.
+    /// A JSON line from the child: pull progress, a cloud start's step, or the command's result.
     fn observe(&self, id: &str, line: &str) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             return;
@@ -447,6 +538,15 @@ impl Jobs {
                     total,
                     rate,
                     eta_s: (rate > 0).then(|| total.saturating_sub(bytes) / rate),
+                    ..Progress::default()
+                });
+            } else if value["event"] == "step" {
+                job.progress = Some(Progress {
+                    bytes: value["bytes"].as_u64().unwrap_or(0),
+                    total: value["total"].as_u64().unwrap_or(0),
+                    step: value["step"].as_str().map(str::to_string),
+                    text: value["text"].as_str().map(str::to_string),
+                    ..Progress::default()
                 });
             } else {
                 if value["event"] == "error" {
@@ -496,6 +596,30 @@ mod tests {
             "mrun pull org/name@main --dry-run"
         );
         assert!(plan_argv("--help").is_err());
+        assert!(cloud_model_argv("--help").is_err());
+        assert_eq!(
+            cloud_model_argv("org/m").unwrap().join(" "),
+            "cloud models org/m --json"
+        );
+        assert_eq!(
+            line(Kind::CloudUp, "Qwen/Qwen3-4B|NVIDIA RTX A5000|community"),
+            "mrun stop --port 8484 && mrun cloud up --model Qwen/Qwen3-4B --gpu 'NVIDIA RTX A5000' --community --port 8484 --yes --json"
+        );
+        assert_eq!(
+            line(Kind::CloudUp, "Qwen/Qwen3-4B|NVIDIA L40S|secure"),
+            "mrun stop --port 8484 && mrun cloud up --model Qwen/Qwen3-4B --gpu 'NVIDIA L40S' --port 8484 --yes --json"
+        );
+        assert_eq!(
+            line(Kind::CloudDown, ""),
+            "mrun cloud down --port 8484 --yes"
+        );
+        assert_eq!(line(Kind::CloudLogin, "ignored"), "mrun cloud login");
+        assert_eq!(line(Kind::CloudLogout, ""), "mrun cloud logout");
+        assert_eq!(
+            undo(Kind::CloudUp, 9000).unwrap().join(" "),
+            "cloud down --port 9000 --yes"
+        );
+        assert_eq!(undo(Kind::Pull, 9000), None);
     }
 
     #[test]
@@ -505,6 +629,26 @@ mod tests {
         assert!(steps(Kind::Use, "x;rm -rf /", 8484, None).is_err());
         assert!(steps(Kind::Connect, "bash", 8484, None).is_err());
         assert!(steps(Kind::Start, "", 8484, Some("--evil")).unwrap()[0].len() == 4);
+        for target in [
+            "",
+            "Qwen/Qwen3-4B",
+            "Qwen/Qwen3-4B|L40S",
+            "Qwen/Qwen3-4B|L40S|moon",
+            "Qwen/Qwen3-4B|L40S|secure|x",
+            "--help|L40S|secure",
+            "Qwen/Qwen3-4B|--cpu|secure",
+            "Qwen/Qwen3-4B|L40S;rm|secure",
+        ] {
+            assert!(
+                steps(Kind::CloudUp, target, 8484, None).is_err(),
+                "{target}"
+            );
+        }
+        assert_eq!(Kind::parse("cloud-up"), Some(Kind::CloudUp));
+        assert_eq!(
+            serde_json::to_value(Kind::CloudLogout).unwrap(),
+            "cloud-logout"
+        );
     }
 
     #[test]
@@ -531,5 +675,54 @@ mod tests {
             r#"{"event":"error","code":"E030","message":"no network"}"#,
         );
         assert_eq!(jobs.get("j1").unwrap().error.as_deref(), Some("no network"));
+    }
+
+    #[test]
+    fn step_lines_become_job_progress() {
+        let jobs = Jobs::default();
+        jobs.lock().push(Job {
+            id: "j1".into(),
+            kind: Kind::CloudUp,
+            target: "m|g|secure".into(),
+            state: State::Running,
+            progress: None,
+            error: None,
+            output: None,
+            started: Instant::now(),
+        });
+        jobs.observe(
+            "j1",
+            r#"{"event":"step","step":"loading","text":"loading: 12 GB","bytes":12,"total":35}"#,
+        );
+        let p = jobs.get("j1").unwrap().progress.unwrap();
+        assert_eq!(
+            (p.step.as_deref(), p.text.as_deref(), p.bytes, p.total),
+            (Some("loading"), Some("loading: 12 GB"), 12, 35)
+        );
+        jobs.observe("j1", r#"{"event":"done","model":"m","cost_per_hr":0.86}"#);
+        assert_eq!(jobs.get("j1").unwrap().output.unwrap()["cost_per_hr"], 0.86);
+    }
+
+    #[tokio::test]
+    async fn stdin_reaches_the_child() {
+        let jobs = Arc::new(Jobs::default());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let job = jobs
+            .start(
+                "/bin/cat".into(),
+                Kind::CloudLogin,
+                "",
+                vec![vec![]],
+                Some(r#"{"secret":"rpa_X"}"#.into()),
+                move |state| {
+                    let _ = tx.send(state);
+                },
+            )
+            .unwrap();
+        assert_eq!(rx.await.unwrap(), State::Done);
+        // `cat` echoed the line: the payload reached the child's stdin.
+        let done = jobs.get(&job.id).unwrap();
+        assert_eq!(done.output.unwrap()["secret"], "rpa_X");
+        assert_eq!(done.target, "");
     }
 }

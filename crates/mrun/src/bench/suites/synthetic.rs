@@ -1,8 +1,9 @@
 //! Synthetic prefill and decode cells (005 FR-001, FR-004, FR-007, FR-014): prompts of 1K, 8K
 //! and 32K tokens and the common maximum context, each starting with a per-repetition nonce so
 //! no cache can serve it, one warm-up then the repetitions; temperature 0 and a fixed output
-//! length with ignore-EOS where supported. One request per repetition gives both the prefill
-//! rate (processed prompt tokens / TTFT) and the decode rate.
+//! length with ignore-EOS where supported. The maximum context is timed once ([`MAX_REPS`]). One
+//! request per repetition gives both the prefill rate (processed prompt tokens / TTFT) and the
+//! decode rate.
 //!
 //! Prompts are common English words, one token each in the usual BPE vocabularies; a one-word
 //! calibration request measures the system's template overhead so prompts land on their size.
@@ -27,6 +28,10 @@ const WORDS: [&str; 32] = [
     "on", "not", "he", "this", "are", "or", "his", "from", "at", "which", "but", "have", "an",
     "had", "they", "you", "were", "their",
 ];
+
+/// Repetitions of the maximum-context cell, whatever `--reps` asks (022 R7): at about 262K tokens
+/// one repetition takes about half an hour and is an average in itself.
+pub const MAX_REPS: u32 = 1;
 
 /// Cell sizes: 1K, 8K and 32K that fit, plus the common maximum (`None` when unknown).
 pub fn sizes(common_context: Option<u32>) -> Vec<(String, Option<u32>)> {
@@ -162,6 +167,11 @@ pub async fn run(
             .await
             .ok()
             .map(|o| canary::of(&o));
+        let reps = if label == "max" {
+            reps.min(MAX_REPS)
+        } else {
+            reps
+        };
         for rep in 1..=reps {
             ctx.reset(system, rep).await;
             match send(ctx, system, api, words, DECODE_TOKENS, false).await {

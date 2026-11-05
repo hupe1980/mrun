@@ -73,9 +73,9 @@ pub struct Attention {
     scale: f32,
 }
 
-/// The score buffer of a chunk's unfused attention may hold at most this many bytes; larger
-/// chunks run their attention in query blocks (D059). At 16 heads, 2,048 queries and 8,192 keys
-/// in bf16 it is exactly reached, so prompts up to 8K never block.
+/// The score buffer of a chunk's attention may hold at most this many bytes (D059, FR-017):
+/// nuvec takes its tiled kernel instead of materialising larger scores. At 16 heads, 2,048
+/// queries and 8,192 keys in bf16 it is exactly reached.
 pub const SCORE_BLOCK_BYTES: u64 = 512 << 20;
 #[doc(hidden)]
 pub const SCORE_BLOCK_BYTES_DEFAULT: u64 = SCORE_BLOCK_BYTES;
@@ -88,33 +88,6 @@ thread_local! {
 #[doc(hidden)]
 pub fn set_score_block_bytes(bytes: u64) {
     SCORE_LIMIT.with(|limit| limit.set(bytes));
-}
-
-/// Whether MLX 0.32.4 runs a prefill chunk of this head dimension through its fused kernel (else
-/// it falls back to unfused attention with a materialized score buffer for more than 8 queries).
-fn fused(head_dim: i32) -> bool {
-    matches!(head_dim, 64 | 80 | 128)
-}
-
-/// Query rows per attention block for `len` queries over `keys` keys: all of them unless the
-/// unfused score buffer `heads × len × keys × bytes` exceeds the limit (then at least 9).
-fn block_rows(heads: i32, head_dim: i32, len: i32, keys: i32, bytes: u64) -> i32 {
-    if len <= 8 || fused(head_dim) {
-        return len;
-    }
-    let row = heads as u64 * keys as u64 * bytes;
-    let limit = SCORE_LIMIT.with(std::cell::Cell::get);
-    if row * len as u64 <= limit {
-        return len;
-    }
-    // Blocks of at least 9 rows (a block of up to 8 queries would take MLX's fused vector
-    // kernel), spread evenly over the chunk.
-    let rows = ((limit / row.max(1)) as i32).max(9);
-    if rows >= len || len < 18 {
-        return len;
-    }
-    let blocks = (len + rows - 1) / rows;
-    (len + blocks - 1) / blocks
 }
 
 impl Attention {
@@ -178,42 +151,8 @@ impl Attention {
         } else {
             fast::Mask::None
         };
-        let total = offset + len;
         let limit = SCORE_LIMIT.with(std::cell::Cell::get);
-        // A backend that caps its own score buffer gets the limit and the whole chunk.
-        let rows = if fast::CAPS_SCORES {
-            len
-        } else {
-            block_rows(c.heads, c.head_dim, len, total, q.dtype().size())
-        };
-        let o = if rows >= len {
-            fast::scaled_dot_product_attention(&q, &keys, &values, self.scale, mask, limit)?
-        } else {
-            // Query blocks (D059): rows [b0, b1) attend keys [0, offset + b1) with the causal
-            // mask aligned to the last key, so each block computes what the whole chunk would,
-            // with a score buffer of `rows` queries.
-            let (qs, ks) = (q.shape(), keys.shape());
-            let mut outs = Vec::new();
-            let mut b0 = 0;
-            while b0 < len {
-                let b1 = (b0 + rows).min(len);
-                let qb = tensor::slice(&q, &[0, 0, b0, 0], &[qs[0], qs[1], b1, qs[3]])?;
-                let stop = [ks[0], ks[1], offset + b1, ks[3]];
-                let kb = tensor::slice(&keys, &[0, 0, 0, 0], &stop)?;
-                let vb = tensor::slice(&values, &[0, 0, 0, 0], &stop)?;
-                let mask = if b1 - b0 > 1 {
-                    fast::Mask::Causal
-                } else {
-                    fast::Mask::None
-                };
-                outs.push(fast::scaled_dot_product_attention(
-                    &qb, &kb, &vb, self.scale, mask, limit,
-                )?);
-                b0 = b1;
-            }
-            let refs: Vec<&Array> = outs.iter().collect();
-            tensor::concatenate(&refs, 2)?
-        };
+        let o = fast::scaled_dot_product_attention(&q, &keys, &values, self.scale, mask, limit)?;
         let o = tensor::reshape(&to_bhld(&o)?, &[1, len, -1])?;
         let o = match gate {
             Some(gate) => tensor::multiply(&o, &tensor::sigmoid(&gate)?)?,
@@ -222,11 +161,8 @@ impl Attention {
         self.o_proj.forward(&o)
     }
 
-    /// Activation bytes of one chunk of `len` tokens at `depth` (f32 at worst): projections,
-    /// and the attention's scratch: the backend's own plan when it has one, else, for chunks of
-    /// more than 8 queries, the unfused attention MLX falls back to for head dimensions it has no
-    /// prefill kernel for (scores, masked scores and the boolean mask), for one query block
-    /// (D059, FR-017).
+    /// Activation bytes of one chunk of `len` tokens at `depth` (f32 at worst): projections, and
+    /// the attention's scratch as nuvec plans it for the kernel it will run (D059, FR-017).
     pub fn chunk_scratch(&self, len: u32, depth: u32) -> u64 {
         let c = &self.cfg;
         let q_width = c.heads * c.head_dim * if c.gated { 2 } else { 1 };
@@ -243,14 +179,7 @@ impl Attention {
             },
             SCORE_LIMIT.with(std::cell::Cell::get),
         );
-        let scores = planned.unwrap_or_else(|| {
-            let rows = block_rows(c.heads, c.head_dim, len as i32, keys as i32, 2) as u64;
-            if len > 8 && !fused(c.head_dim) {
-                c.heads as u64 * rows * u64::from(keys) * (2 + 2 + 1)
-            } else {
-                0
-            }
-        });
+        let scores = planned.unwrap_or(0);
         u64::from(len) * 2 * qkv * 4 + scores
     }
 }
@@ -345,25 +274,5 @@ pub fn ensure_consumed(weights: &Weights) -> Result<(), LoadError> {
     match weights.remaining().first() {
         Some(name) => Err(invalid("weights", format!("unexpected tensor {name}"))),
         None => Ok(()),
-    }
-}
-
-#[cfg(test)]
-mod block_tests {
-    use super::*;
-
-    #[test]
-    fn prompts_up_to_8k_never_block() {
-        // Qwen3.5/3.6: 16 heads of dim 256, bf16.
-        assert_eq!(block_rows(16, 256, 2048, 8192, 2), 2048);
-        assert_eq!(block_rows(16, 256, 2048, 8193, 2), 1024, "two even blocks");
-        assert_eq!(
-            block_rows(16, 256, 1024, 33_792, 2),
-            342,
-            "three blocks of ≤ 496"
-        );
-        // Fused head dims and short chunks never block.
-        assert_eq!(block_rows(32, 128, 2048, 262_144, 2), 2048);
-        assert_eq!(block_rows(16, 256, 8, 262_144, 2), 8);
     }
 }

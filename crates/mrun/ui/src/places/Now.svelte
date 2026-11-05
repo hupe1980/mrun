@@ -6,7 +6,8 @@
   import Lane from "../components/Lane.svelte";
   import ReuseRibbon from "../components/ReuseRibbon.svelte";
   import Symbol from "../components/Symbol.svelte";
-  import { bytes, context, percent, seconds, stopWord, tokens } from "../lib/format";
+  import { bytes, context, percent, perHour, seconds, spend, stopsIn, stopWord, tokens, uptime } from "../lib/format";
+  import { jobs } from "../lib/jobs.svelte";
   import { live } from "../lib/live.svelte";
 
   let { onAction }: { onAction: (kind: string, target?: string) => void } = $props();
@@ -22,6 +23,17 @@
       ? { cached: s.cache.cached_tokens_total, total: s.cache.prompt_tokens_total }
       : null,
   );
+  // The rented GPU (024 US2): what it costs, and when it stops by itself.
+  const pod = $derived(s?.pod ?? null);
+  const stopping = $derived(jobs.running("cloud-down", ""));
+  const starting = $derived(pod ? undefined : jobs.active("cloud-up"));
+  const autoStop = $derived(pod ? stopsIn(pod.idle_s, pod.idle_stop_s) : null);
+  async function stopPod() {
+    if (!window.confirm("Stop the pod? Billing ends; the model loads again next time.")) return;
+    const job = await jobs.run("cloud-down", "", true);
+    if (job.state === "failed") onAction("notify", job.error ?? "The pod did not stop.");
+  }
+
   const headline = $derived.by(() => {
     switch (srv) {
       case "stopped":
@@ -33,7 +45,7 @@
       default:
         return {
           title: `${s?.model?.id ?? "The model"} is ${srv === "ready" ? "ready" : "working"}`,
-          sub: [s?.model?.family, s?.numerics?.backend, s?.budget ? `${context(s.budget.kv_capacity_tokens)} context` : null]
+          sub: [live.remote ? "On a rented GPU" : s?.model?.family, s?.numerics?.backend, s?.budget ? `${context(s.budget.kv_capacity_tokens)} context` : null]
             .filter(Boolean)
             .join(" · "),
         };
@@ -64,6 +76,35 @@
       {/if}
     </div>
   </header>
+
+  {#if pod}
+    <section class="card pod" class:unreachable={!pod.reachable} aria-label="Rented GPU">
+      <div class="pod-icon" aria-hidden="true"><Symbol name="cloud" size={20} /></div>
+      <div class="pod-main">
+        <div class="pod-title">{s?.model?.id ?? "A model"} on RunPod{pod.gpu ? ` · ${pod.gpu}` : ""}</div>
+        <div class="pod-facts num">
+          {#if pod.cost_per_hr}<span>{perHour(pod.cost_per_hr)}</span>{/if}
+          {#if pod.uptime_s !== undefined}<span>up {uptime(pod.uptime_s)}</span>{/if}
+          {#if pod.spend_usd !== undefined}<span class="spend">about {spend(pod.spend_usd)} so far</span>{/if}
+          {#if !pod.reachable}
+            <span class="warn">not answering; it may have stopped itself</span>
+          {:else if autoStop !== null}
+            <span>{autoStop === 0 ? "stops now unless used" : `stops in ${autoStop} min unless used`}</span>
+          {/if}
+        </div>
+      </div>
+      <button class="btn" disabled={stopping} onclick={stopPod}><Symbol name="stop" size={10} /> {stopping ? "Stopping…" : "Stop Pod"}</button>
+    </section>
+  {:else if starting}
+    <section class="card pod" aria-label="Starting a rented GPU">
+      <div class="pod-icon" aria-hidden="true"><Symbol name="cloud" size={20} /></div>
+      <div class="pod-main">
+        <div class="pod-title">Starting {starting.target.split("|")[0]} on RunPod</div>
+        <div class="pod-facts" aria-live="polite"><span>{starting.progress?.text ?? "Asking RunPod for a GPU…"}</span></div>
+      </div>
+      <button class="btn" onclick={() => jobs.cancel("cloud-up", starting.target)}>Cancel Start</button>
+    </section>
+  {/if}
 
   {#if s?.budget && s.cache}
     <section class="card">
@@ -215,6 +256,51 @@
   .empty {
     margin: 0;
     color: var(--muted);
+  }
+  .pod {
+    display: flex;
+    gap: var(--s3);
+    align-items: center;
+    border: 0.5px solid color-mix(in srgb, var(--remote-fill) 35%, transparent);
+    background: linear-gradient(110deg, color-mix(in srgb, var(--remote-fill) 9%, var(--surface)), var(--surface) 60%);
+  }
+  .pod-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    background: var(--remote-fill);
+  }
+  .pod.unreachable .pod-icon {
+    background: var(--stopped-fill);
+  }
+  .pod-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .pod-title {
+    font-weight: 600;
+  }
+  .pod-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--s2);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .pod-facts span + span::before {
+    content: "·";
+    margin-right: var(--s2);
+  }
+  .pod-facts .spend {
+    color: var(--remote);
+    font-weight: 600;
+  }
+  .pod-facts .warn {
+    color: var(--attention);
   }
   .foot {
     margin: 0;

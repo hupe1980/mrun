@@ -87,7 +87,7 @@ pub enum Command {
         after_help = "Examples:\n  mrun completions zsh > ~/.zfunc/_mrun\n  mrun completions bash > /etc/bash_completion.d/mrun"
     )]
     Completions { shell: clap_complete::Shell },
-    /// Download a model into the Hugging Face cache, verify it and record it.
+    /// Download a model into mrun's model store (or import it from the Hugging Face cache), verify it and record it.
     #[command(
         after_help = "Examples:\n  mrun pull qwen3.5\n  mrun pull mlx-community/Qwen3-8B-4bit@main --yes"
     )]
@@ -99,7 +99,7 @@ pub enum Command {
     /// Show a pulled model: family, architecture, quantization, license, identity and fit.
     #[command(after_help = "Examples:\n  mrun show qwen3.6")]
     Show(ShowArgs),
-    /// Remove a pulled model's revision from the Hugging Face cache.
+    /// Remove a pulled model from mrun's model store.
     #[command(after_help = "Examples:\n  mrun rm qwen3.5\n  mrun rm org/name@abc1234 --yes")]
     Rm(RmArgs),
     /// Re-hash every file of a pulled model against its manifest.

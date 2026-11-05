@@ -2,17 +2,19 @@
   // Models, like Xcode's components: mrun's aliases and pulled models, each with the CLI's own
   // fit verdict for this Mac (FR-011), one marked Best for this Mac, and Pull, Use, Remove. A
   // model that won't fit cannot be loaded from here (US3 AS5).
+  import { onMount } from "svelte";
   import ActionMenu from "../components/ActionMenu.svelte";
+  import CloudSheet, { type CloudPick } from "../components/CloudSheet.svelte";
   import PullProgress from "../components/PullProgress.svelte";
   import Symbol from "../components/Symbol.svelte";
   import { host } from "../lib/api";
-  import { bytes, repoFromInput } from "../lib/format";
+  import { bytes, needGb, perHour, repoFromInput } from "../lib/format";
   import { jobs } from "../lib/jobs.svelte";
   import { live } from "../lib/live.svelte";
   import { contextMenu } from "../lib/native.svelte";
-  import type { ModelEntry, Plan } from "../lib/types";
+  import type { CloudModel, ModelEntry, Offer, Plan } from "../lib/types";
 
-  let { onError }: { onError: (message: string) => void } = $props();
+  let { onError, onstarted = () => {} }: { onError: (message: string) => void; onstarted?: () => void } = $props();
 
   // The server's own word on what it serves wins over a listing a moment old (019 FR-008).
   const served = $derived(live.state === "stopped" ? null : (live.status?.model?.id ?? null));
@@ -88,6 +90,60 @@
     } catch (err) {
       onError(String((err as Error).message));
     }
+  }
+
+  // On a rented GPU (024 US1): the catalog and the user's own models, priced live.
+  onMount(() => {
+    void live.refreshCloud();
+    const timer = setInterval(() => void live.refreshCloud(), 60_000);
+    return () => clearInterval(timer);
+  });
+  const cloud = $derived(live.cloud);
+  const hasKey = $derived(Boolean(cloud?.status.key));
+  const keyWord = $derived(
+    ({ keychain: "Key in Keychain", env: "Key from RUNPOD_API_KEY", dotenv: "Key from ./.env" } as Record<string, string>)[cloud?.status.key ?? ""] ?? "No RunPod key",
+  );
+  const starting = $derived(jobs.active("cloud-up"));
+  const startingRepo = $derived(starting?.target.split("|")[0]);
+  const serving = $derived(live.remote ? live.status?.model?.id : null);
+  let sheet = $state<CloudPick | null>(null);
+  let cloudInput = $state("");
+  let cloudAdd = $state<{ error: string | null; busy: boolean }>({ error: null, busy: false });
+
+  function cheapest(o: Offer): string {
+    if (!hasKey) return "price after you add your key";
+    if (!o.secure) return "no GPU free right now";
+    return `${o.secure[0]} · ${perHour(o.secure[1])}`;
+  }
+
+  const offerPick = (o: Offer): CloudPick => ({ repo: o.repo, weights_bytes: o.weights_bytes, context: o.context, note: o.note, fits: o.fits, need: o.min_vram_gb });
+  const addedPick = (m: CloudModel): CloudPick => ({ repo: m.repo, weights_bytes: m.weights_bytes, need: needGb(m.weights_bytes) });
+
+  async function addCloud(e: SubmitEvent) {
+    e.preventDefault();
+    const repo = repoFromInput(cloudInput);
+    if (!repo) return void (cloudAdd = { error: "Enter a model as org/name, or paste its Hugging Face link.", busy: false });
+    const list = cloud?.added ?? [];
+    if (list.some((m) => m.repo === repo) || cloud?.offers.some((o) => o.repo === repo)) {
+      cloudInput = "";
+      return void (cloudAdd = { error: null, busy: false });
+    }
+    cloudAdd = { error: null, busy: true };
+    try {
+      // Its size from the Hub; whether this Mac could run it does not matter here.
+      const row = await host.cloudModel(repo);
+      await host.prefs({ cloud_models: [...list, { repo: row.repo, weights_bytes: row.weights_bytes }] });
+      cloudInput = "";
+      cloudAdd = { error: null, busy: false };
+      await live.refreshCloud();
+    } catch (err) {
+      cloudAdd = { error: String((err as Error).message), busy: false };
+    }
+  }
+
+  async function removeCloud(repo: string) {
+    await host.prefs({ cloud_models: (cloud?.added ?? []).filter((m) => m.repo !== repo) }).catch(() => {});
+    await live.refreshCloud();
   }
 
   const verdictClass = (m: ModelEntry) =>
@@ -189,7 +245,60 @@
       </div>
     {/if}
   </section>
+
+  <section class="cloud" aria-labelledby="cloud-title">
+    <div class="cloud-head">
+      <h2 id="cloud-title" class="section-title"><Symbol name="cloud" size={14} /> On a rented GPU · RunPod</h2>
+      <span class="chip-key" class:ok={hasKey}>{#if hasKey}<Symbol name="check" size={11} weight={2.4} />{/if}{keyWord}</span>
+    </div>
+    <p class="page-lede">Models too big for this Mac, on a GPU billed by the second. Your agents keep using the same address.</p>
+    <ul class="list card">
+      {#each cloud?.offers ?? [] as o (o.repo)}
+        {@render cloudRow(o.repo, `needs ${o.min_vram_gb} GB · ${cheapest(o)}`, o.note, offerPick(o), null)}
+      {/each}
+      {#each cloud?.added ?? [] as m (m.repo)}
+        {@render cloudRow(m.repo, `${bytes(m.weights_bytes)} weights · needs about ${needGb(m.weights_bytes)} GB`, "Added by you", addedPick(m), m.repo)}
+      {/each}
+      {#if !cloud}
+        <li aria-busy="true"><div class="main"><span class="skeleton" style:width="44%"></span><span class="skeleton" style:width="62%" style:margin-top="8px"></span></div></li>
+      {/if}
+    </ul>
+    <form class="add-form cloud-add" onsubmit={addCloud}>
+      <input type="text" bind:value={cloudInput} placeholder="Add a model: org/name or a Hugging Face link" aria-label="Model to run on a rented GPU" spellcheck="false" autocomplete="off" />
+      <button class="btn" type="submit" disabled={!cloudInput.trim() || cloudAdd.busy}>{cloudAdd.busy ? "Checking…" : "Add"}</button>
+    </form>
+    {#if cloudAdd.error}<p class="add-error" role="alert"><Symbol name="warning" size={13} /> {cloudAdd.error}</p>{/if}
+  </section>
 </div>
+
+{#snippet cloudRow(repo: string, line: string, note: string, pick: CloudPick, removable: string | null)}
+  {@const isServing = serving === repo}
+  {@const isStarting = startingRepo === repo}
+  <li class:serving={isServing}>
+    <div class="icon remote" aria-hidden="true"><Symbol name="cloud" size={19} /></div>
+    <div class="main">
+      <div class="name"><span>{repo.split("/").pop()}</span>{#if removable}<span class="tag">Added</span>{/if}</div>
+      <div class="sub">{note}</div>
+      <div class="verdict unknown num">{isStarting ? (starting?.progress?.text ?? "Starting…") : line}</div>
+    </div>
+    <div class="actions">
+      {#if isServing}
+        <span class="current"><Symbol name="check" size={13} weight={2} /> Serving</span>
+      {:else if isStarting}
+        <button class="btn" onclick={() => (sheet = pick)}>Show Progress</button>
+      {:else}
+        <button class="btn" disabled={Boolean(starting)} onclick={() => (sheet = pick)}>Run…</button>
+      {/if}
+      {#if removable && !isServing && !isStarting}
+        <button class="btn plain" aria-label="Remove {repo} from this list" title="Remove from this list" onclick={() => removeCloud(removable)}><Symbol name="xmark" size={12} /></button>
+      {/if}
+    </div>
+  </li>
+{/snippet}
+
+{#if sheet}
+  <CloudSheet pick={sheet} onclose={() => (sheet = null)} onstarted={() => ((sheet = null), onstarted())} />
+{/if}
 
 {#if confirmRemove}
   {@const m = confirmRemove}
@@ -274,6 +383,46 @@
   .add {
     margin-top: var(--s4);
   }
+  .cloud {
+    margin-top: var(--s6);
+  }
+  .cloud-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s3);
+  }
+  .cloud-head .section-title {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    color: var(--remote);
+  }
+  .chip-key {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--fill);
+    color: var(--muted);
+  }
+  .chip-key.ok {
+    background: color-mix(in srgb, var(--ready-fill) 15%, transparent);
+    color: var(--ready);
+  }
+  .icon.remote {
+    background: color-mix(in srgb, var(--remote-fill) 14%, transparent);
+    color: var(--remote);
+  }
+  .serving .icon.remote {
+    background: var(--remote-fill);
+    color: #fff;
+  }
+  .cloud-add {
+    margin-top: var(--s3);
+  }
   .add-form {
     display: flex;
     gap: var(--s2);
@@ -332,9 +481,12 @@
   .empty {
     color: var(--muted);
   }
+  /* Not capped like the place's other direct children (App's .scroll rule). */
   .scrim {
     position: fixed;
     inset: 0;
+    max-width: none !important;
+    margin: 0 !important;
     background: rgba(0, 0, 0, 0.18);
     z-index: 40;
   }

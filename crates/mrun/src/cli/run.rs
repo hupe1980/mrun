@@ -172,7 +172,7 @@ fn spawn(_model: &OpenModel, _args: &RunArgs) -> Result<EngineHandle, String> {
         crate::errors::Code::Internal,
         "this build of mrun has no inference engine",
     )
-    .hint("build with the default features (the `mlx` feature)")
+    .hint("build with the default features (the `engine` feature)")
     .into())
 }
 
@@ -641,7 +641,6 @@ mod tests {
             numerics: Numerics {
                 nax: false,
                 gpu_arch: "applegpu_g16s".into(),
-                ..Numerics::default()
             },
             time_len: TimeLen::from_points(vec![(0, 2048), (16_384, 1536), (65_536, 512)]),
             ..ModelInfo::default()
@@ -663,7 +662,7 @@ mod tests {
             "model      qwen3.5 (qwen3_5, qwen-xml)\n\
              directory  /m\n\
              identity   abc123\n\
-             numerics   applegpu_g16s, NAX off\n\
+             numerics   applegpu_g16s, nuvec\n\
              memory     {} physical, {} working set, {} available\n\
              wired      limit raised to {} (the budget stays at most physical − 2 GiB)\n\
              budget     {} (bound by working set)\n  weights  {} (measured)\n  scratch  {} (at depth 262144)\n  \

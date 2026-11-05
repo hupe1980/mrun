@@ -8,10 +8,10 @@
 mod common;
 
 use mrun_engine::budget::{DeviceMemory, GIB};
-use mrun_engine::{CancelToken, Engine, LoadOptions, MlxEngine, tensor};
+use mrun_engine::{CancelToken, Engine, LoadOptions, NuvecEngine, tensor};
 
-fn load(path: &std::path::Path, cpu: bool) -> MlxEngine {
-    MlxEngine::load(
+fn load(path: &std::path::Path, cpu: bool) -> NuvecEngine {
+    NuvecEngine::load(
         &common::fixture("tiny_qwen3_5"),
         LoadOptions {
             identity: "tiny_qwen3_5".into(),

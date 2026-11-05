@@ -2,7 +2,7 @@
 //! depths, as JSON with the machine, the model identity and the numerics class.
 //!
 //! ```text
-//! cargo run --release -p mrun-engine --features mlx --example bench_engine -- \
+//! cargo run --release -p mrun-engine --features engine --example bench_engine -- \
 //!     <model-dir> [--depths 1024,16384] [--decode 128] [--cancel 50] [--runs 2] \
 //!     [--no-store] [--budget-gib 10.67] > result.json
 //! ```
@@ -28,7 +28,7 @@ use std::process::{Command, ExitCode};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use mrun_engine::{CancelToken, Engine, LoadOptions, MlxEngine, Sampling, calibration, identity};
+use mrun_engine::{CancelToken, Engine, LoadOptions, NuvecEngine, Sampling, calibration, identity};
 use serde_json::{Value, json};
 
 /// Prompt token `i` of the benchmark (also in `scripts/bench_reference.py`): spread over ordinary
@@ -115,20 +115,12 @@ fn machine() -> Value {
         "macos": sh("sw_vers", &["-productVersion"]),
         "power": power,
     });
-    // The backend version, under the backend's name (spec 016).
-    #[cfg(feature = "mlx")]
-    {
-        machine["mlx"] = json!(mlx_sys::MLX_VERSION);
-    }
-    #[cfg(feature = "nuvec")]
-    {
-        machine["nuvec"] = json!(nuvec::VERSION);
-    }
+    machine["nuvec"] = json!(mrun_engine::tensor::backend_info().version);
     machine
 }
 
 /// Prefills `tokens` at `len()` in the engine's chunk plan.
-fn prefill(engine: &mut MlxEngine, tokens: &[u32]) -> Result<(), String> {
+fn prefill(engine: &mut NuvecEngine, tokens: &[u32]) -> Result<(), String> {
     let cancel = CancelToken::new();
     let mut at = 0usize;
     while at < tokens.len() {
@@ -144,7 +136,7 @@ fn prefill(engine: &mut MlxEngine, tokens: &[u32]) -> Result<(), String> {
 }
 
 /// Prompt and decode speed at `depth`.
-fn speed(engine: &mut MlxEngine, depth: u32, decode: u32) -> Result<(f64, f64), String> {
+fn speed(engine: &mut NuvecEngine, depth: u32, decode: u32) -> Result<(f64, f64), String> {
     let err = |e: mrun_engine::EngineError| e.to_string();
     engine.reset();
     engine.set_limit(depth + decode + 1).map_err(err)?;
@@ -166,7 +158,7 @@ fn speed(engine: &mut MlxEngine, depth: u32, decode: u32) -> Result<(f64, f64), 
 }
 
 /// Cancel latencies at `depth`, in milliseconds.
-fn cancel_latency(engine: &mut MlxEngine, depth: u32, trials: u32) -> Result<Vec<f64>, String> {
+fn cancel_latency(engine: &mut NuvecEngine, depth: u32, trials: u32) -> Result<Vec<f64>, String> {
     let err = |e: mrun_engine::EngineError| e.to_string();
     engine.reset();
     let len = engine.info().chunk_len(depth);
@@ -235,7 +227,7 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .value;
     let loaded = Instant::now();
-    let mut engine = MlxEngine::load(
+    let mut engine = NuvecEngine::load(
         &args.dir,
         LoadOptions {
             identity: identity.clone(),

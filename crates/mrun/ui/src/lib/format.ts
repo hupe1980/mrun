@@ -1,6 +1,6 @@
 // Numbers and causes in words: the page says what the CLI says, without jargon.
 
-import type { Cause, Chat, Miss, Request, ServerState, Status } from "./types";
+import type { Cause, Chat, Gpu, Miss, Request, ServerState, Status } from "./types";
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -195,4 +195,54 @@ export function searchHit(chat: Chat, query: string): { excerpt: string | null }
     }
   }
   return null;
+}
+
+/** `$0.86/h`. */
+export function perHour(usd: number): string {
+  return `$${usd.toFixed(2)}/h`;
+}
+
+/** What a pod cost so far: `$0.60`, `under $0.01`. */
+export function spend(usd: number): string {
+  return usd < 0.01 ? "under $0.01" : `$${usd.toFixed(2)}`;
+}
+
+/** `42 min`, `2 h 5 min`, `under a minute`. */
+export function uptime(s: number): string {
+  const m = Math.floor(s / 60);
+  if (m < 1) return "under a minute";
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`;
+}
+
+/** GPU memory a model outside the catalog needs: weights + 20 % + 4 GB for context (024). */
+export function needGb(weightsBytes: number): number {
+  return Math.ceil((weightsBytes / 1e9) * 1.2 + 4);
+}
+
+export type Cloud = "secure" | "community";
+
+export interface GpuChoice {
+  gpu: Gpu;
+  price: number;
+  stock: string | null;
+}
+
+/**
+ * The GPUs to offer (024 FR-002): with a price in `cloud`, fitting (`fits`, the catalog's ids,
+ * else at least `need` GB), in stock first, then cheapest.
+ */
+export function fittingGpus(gpus: Gpu[], cloud: Cloud, fit: { fits?: string[]; need?: number }): GpuChoice[] {
+  const ok = (g: Gpu) => (fit.fits?.length ? fit.fits.includes(g.id) : g.memory_gb >= (fit.need ?? 0));
+  return gpus
+    .filter(ok)
+    .map((gpu) => ({ gpu, price: (cloud === "secure" ? gpu.secure_per_hr : gpu.community_per_hr) ?? 0, stock: cloud === "secure" ? gpu.secure_stock : gpu.community_stock }))
+    .filter((c) => c.price > 0)
+    .sort((a, b) => Number(a.stock === null) - Number(b.stock === null) || a.price - b.price);
+}
+
+/** Minutes until a pod stops itself unless used, from the relay's `idle_s`. */
+export function stopsIn(idleS: number | null | undefined, idleStopS = 1800): number | null {
+  if (idleS === null || idleS === undefined) return null;
+  return Math.max(0, Math.ceil((idleStopS - idleS) / 60));
 }

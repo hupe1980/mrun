@@ -5,7 +5,7 @@
 //! quantization, numerics class, model identity), so later starts reuse it and chunk plans stay
 //! identical across restarts (007 keys on them).
 //!
-//! The search and the file are MLX-free; the engine supplies the timer.
+//! The search and the file need no tensor backend; the engine supplies the timer.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -183,7 +183,6 @@ mod tests {
             numerics: Numerics {
                 nax: false,
                 gpu_arch: "applegpu_g16s".into(),
-                ..Numerics::default()
             },
             identity: identity.into(),
         }

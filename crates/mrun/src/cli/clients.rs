@@ -84,7 +84,7 @@ impl Client {
 
 /// Every variable `launch` may set for Claude Code; `~/.claude/settings.json` overriding one of
 /// them defeats `launch`. Each one was checked against Claude Code's environment variable
-/// reference (code.claude.com/docs/en/env-vars, 2026-10-16). Not set, on purpose:
+/// reference (code.claude.com/docs/en/env-vars). Not set, on purpose:
 /// `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` (discovery keeps only ids containing `claude` or
 /// `anthropic`, so mrun's models would never appear), `CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL` (not
 /// documented; `CLAUDE_CODE_SUBAGENT_MODEL` covers workflow agents) and
@@ -209,24 +209,35 @@ fn claude_settings_path(home: &Path) -> PathBuf {
     home.join("claude").join("settings.json")
 }
 
+/// OpenCode's provider for mrun: the served model, and the same model without thinking as
+/// `small_model` (023): OpenCode sends titles and other side tasks there, and a thinking model
+/// can deliberate over a title's rules until the output limit while the real request waits.
 fn opencode_config(server: &ServerInfo) -> serde_json::Value {
     let id = &server.model_id;
+    let quick = format!("{id}-no-thinking");
+    let limit = json!({
+        "context": server.context,
+        "input": server.context.saturating_sub(server.max_output),
+        "output": server.max_output,
+    });
     json!({
         "$schema": "https://opencode.ai/config.json",
         "provider": {"mrun": {
             "npm": "@ai-sdk/openai-compatible",
             "name": "mrun",
             "options": {"baseURL": format!("{}/v1", server.base_url()), "apiKey": TOKEN},
-            "models": {id.as_str(): {
-                "name": id,
-                "limit": {
-                    "context": server.context,
-                    "input": server.context.saturating_sub(server.max_output),
-                    "output": server.max_output,
+            "models": {
+                id.as_str(): {"name": id, "limit": limit},
+                quick.as_str(): {
+                    "id": id,
+                    "name": format!("{id} (no thinking)"),
+                    "limit": limit,
+                    "options": {"chat_template_kwargs": {"enable_thinking": false}},
                 },
-            }},
+            },
         }},
         "model": format!("mrun/{id}"),
+        "small_model": format!("mrun/{quick}"),
     })
 }
 
@@ -432,7 +443,7 @@ pub fn persistent(target: Target, server: &ServerInfo, homes: &Homes) -> Vec<Blo
             let config = opencode_config(server);
             vec![Block {
                 path: homes.config.join("opencode").join("opencode.json"),
-                note: "merge the \"provider\" entry; pick mrun with /models (a top-level \"model\" would make it opencode's default for every project)".into(),
+                note: "merge the \"provider\" entry; pick mrun with /models (a top-level \"model\" would make it opencode's default for every project); in a project that uses mrun, \"small_model\": \"mrun/<model>-no-thinking\" keeps titles from thinking".into(),
                 text: serde_json::to_string_pretty(&json!({
                     "$schema": config["$schema"],
                     "provider": config["provider"],
@@ -456,8 +467,6 @@ pub fn persistent(target: Target, server: &ServerInfo, homes: &Homes) -> Vec<Blo
     }
 }
 
-/// Keys of the `env` block in Claude Code's user settings (`$CLAUDE_CONFIG_DIR/settings.json`,
-/// else `~/.claude/settings.json`) that override what `launch` sets.
 /// Claude Code settings files whose `env` overrides what `launch` sets, with the keys: the user
 /// file (`CLAUDE_CONFIG_DIR` or `~/.claude/settings.json`) and the project files of the current
 /// directory (`./.claude/settings.json`, `./.claude/settings.local.json`).
@@ -635,6 +644,20 @@ mod tests {
         assert_eq!(
             config["tools"]["execute"], false,
             "Code Mode off: the models call the direct tools"
+        );
+        // Titles and other side tasks go to the same model without thinking (023).
+        let quick = "mlx-community/Qwen3.6-35B-A3B-4bit-no-thinking";
+        assert_eq!(config["small_model"], format!("mrun/{quick}"));
+        let small = &config["provider"]["mrun"]["models"][quick];
+        assert_eq!(small["id"], "mlx-community/Qwen3.6-35B-A3B-4bit");
+        assert_eq!(small["limit"], model["limit"]);
+        assert_eq!(
+            small["options"]["chat_template_kwargs"]["enable_thinking"],
+            false
+        );
+        assert!(
+            model.get("options").is_none(),
+            "the main model keeps thinking"
         );
     }
 

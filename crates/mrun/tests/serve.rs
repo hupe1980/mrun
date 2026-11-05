@@ -75,7 +75,7 @@ async fn health_is_503_while_loading_then_ok() {
 
 #[tokio::test]
 async fn failed_load_is_reported() {
-    // A model that does not exist (builds without `mlx` have no engine at all).
+    // A model that does not exist (builds without `engine` have no engine at all).
     let mut args = args();
     args.model = Some("/nonexistent/mrun-test-model".into());
     let mut server = serve::start(args, serve::default_factory()).await.unwrap();

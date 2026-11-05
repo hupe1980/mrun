@@ -249,7 +249,16 @@ async fn commands_without_a_server() {
         .to_string();
     for args in [
         strings(&["ps", "--port", &port]),
-        strings(&["launch", "claude-code", "--dry-run", "--port", &port]),
+        // A named model: the default depends on the machine's memory (none fits a small runner).
+        strings(&[
+            "launch",
+            "claude-code",
+            "--dry-run",
+            "--model",
+            "qwen3.5",
+            "--port",
+            &port,
+        ]),
     ] {
         let out = mrun(home.path(), &args).await;
         assert_eq!(
@@ -363,7 +372,7 @@ async fn ps_watch_streams_json_lines_without_a_terminal() {
 
 #[tokio::test]
 async fn detach_reports_a_failed_load_with_its_log() {
-    // The model does not exist (and builds without `mlx` have no engine): the detached server
+    // The model does not exist (and builds without `engine` have none): the detached server
     // fails to load and detach says so.
     let home = tempfile::tempdir().unwrap();
     let missing = home.path().join("no-such-model").display().to_string();
@@ -379,7 +388,7 @@ async fn detach_reports_a_failed_load_with_its_log() {
     )
     .await;
     let stderr = String::from_utf8_lossy(&out.stderr);
-    // Without `mlx` there is no engine (E001, exit 1); with it the model is missing (E031, 3).
+    // Without `engine` there is no engine (E001, exit 1); with it the model is missing (E031, 3).
     let expected = if stderr.contains("no inference engine") {
         1
     } else {
@@ -614,7 +623,14 @@ async fn help_shows_the_short_forms() {
 #[tokio::test]
 async fn doctor_and_completions() {
     let home = tempfile::tempdir().unwrap();
-    let out = mrun(home.path(), &strings(&["doctor", "--port", "1"])).await;
+    // A free port: Linux refuses an unprivileged probe of port 1, which doctor reports as taken.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+        .to_string();
+    let out = mrun(home.path(), &strings(&["doctor", "--port", &port])).await;
     let text = stdout(&out);
     assert!(
         text.contains("platform") && text.contains("info  clients"),
@@ -622,16 +638,17 @@ async fn doctor_and_completions() {
     );
     assert!(text.contains("no model is pulled yet"), "{text}");
     if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        // A failed check (the platform): exit 7.
         assert_eq!(
             out.status.code(),
-            Some(8),
+            Some(7),
             "not an Apple Silicon Mac: {text}"
         );
     }
     // The hardware report (D060): Markdown, exit 0, the home directory shown as `~`.
     let out = mrun(
         home.path(),
-        &strings(&["doctor", "--report", "--port", "1"]),
+        &strings(&["doctor", "--report", "--port", &port]),
     )
     .await;
     let text = stdout(&out);

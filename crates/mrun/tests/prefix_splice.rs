@@ -3,9 +3,9 @@
 //! thinking on, off, and with a client that drops reasoning, then a new user message; a 30-reply
 //! subagent loop between two main turns. Every loop turn's cached tokens are the previous prompt
 //! plus its generated ids; the turn after the new user message is `diverged` at the first
-//! re-rendered assistant message. On `ScriptedEngine` and on `MlxEngine` with a tiny `qwen3`
+//! re-rendered assistant message. On `ScriptedEngine` and on `NuvecEngine` with a tiny `qwen3`
 //! using the real vocabulary, its replies produced through the real decode path by a one-token
-//! mask (T009); on `MlxEngine` every turn is also checked by the SC-005 oracle. `cache.splice`
+//! mask (T009); on `NuvecEngine` every turn is also checked by the SC-005 oracle. `cache.splice`
 //! (FR-020) counts seen and spliced messages per client.
 //!
 //! Skips with a message when Qwen3-8B-4bit's `tokenizer.json` is not in the Hugging Face cache.
@@ -434,16 +434,16 @@ fn scripted_subagent_loop_leaves_main_spliced_with_the_real_tokenizer() {
 }
 
 #[cfg(feature = "engine")]
-mod mlx {
+mod engine {
     use super::*;
-    use mrun_engine::MlxEngine;
+    use mrun_engine::NuvecEngine;
     use mrun_engine::testing::QWEN3_VOCAB;
     use support::{IM_END, Recorder, ScriptHook, Served, oracle, tiny};
 
     /// A tiny `qwen3` with the real vocabulary; every turn checked by the oracle.
     struct Tiny {
-        engine: Recorder<MlxEngine>,
-        fresh: MlxEngine,
+        engine: Recorder<NuvecEngine>,
+        fresh: NuvecEngine,
         _dir: Option<tempfile::TempDir>,
         script: Vec<u32>,
     }
@@ -462,8 +462,8 @@ mod mlx {
     }
 
     impl Backend for Tiny {
-        type E = Recorder<MlxEngine>;
-        fn engine(&mut self) -> &mut Recorder<MlxEngine> {
+        type E = Recorder<NuvecEngine>;
+        fn engine(&mut self) -> &mut Recorder<NuvecEngine> {
             &mut self.engine
         }
         fn reply(&mut self, script: &[u32]) -> (u32, Option<Box<dyn DecodeHook>>) {

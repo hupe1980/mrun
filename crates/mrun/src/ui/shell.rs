@@ -44,6 +44,9 @@ struct Snapshot {
     used: u64,
     budget: u64,
     menu_bar: bool,
+    /// A rented GPU's spend so far, in cents (024 FR-004), and its price.
+    spend_cents: Option<u64>,
+    cost_per_hr: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +75,12 @@ impl Snapshot {
             },
             (true, true, false) => Glyph::Ready,
         }
+    }
+
+    /// The text beside the glyph: what a rented GPU cost so far, nothing while local.
+    fn title(&self) -> Option<String> {
+        self.spend_cents
+            .map(|c| format!("${}.{:02}", c / 100, c % 100))
     }
 
     fn state_line(&self) -> String {
@@ -195,6 +204,12 @@ async fn poll(host: Host, proxy: tao::event_loop::EventLoopProxy<UserEvent>) {
                 + b["scratch"].as_u64().unwrap_or(0)
                 + c["buffer_bytes"].as_u64().unwrap_or(0)
                 + c["checkpoint_bytes"].as_u64().unwrap_or(0);
+            let pod = &status["pod"];
+            if pod.is_object() {
+                snap.spend_cents =
+                    Some((pod["spend_usd"].as_f64().unwrap_or(0.0) * 100.0).round() as u64);
+                snap.cost_per_hr = pod["cost_per_hr"].as_f64().map(|p| format!("${p:.2}/h"));
+            }
         }
         if last.as_ref() != Some(&snap) {
             last = Some(snap.clone());
@@ -589,7 +604,9 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
                     .then(|| next_frame.unwrap_or_else(|| Instant::now() + READING_STEP));
                 let glyph = snap.glyph((!reduce_motion).then_some(frame));
                 state_item.set_text(snap.state_line());
-                memory_item.set_text(if snap.budget > 0 {
+                memory_item.set_text(if let Some(price) = &snap.cost_per_hr {
+                    format!("On RunPod · {price}")
+                } else if snap.budget > 0 {
                     format!("{} of {} GB in use", gib(snap.used), gib(snap.budget))
                 } else {
                     String::new()
@@ -603,12 +620,14 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
                     (Some(t), visible) => {
                         let _ = t.set_visible(visible);
                         let _ = t.set_icon_templated(glyph_icon(glyph));
+                        t.set_title(snap.title());
                     }
                     (None, true) => {
                         tray = TrayIconBuilder::new()
                             .with_menu(Box::new(tray_menu.clone()))
                             .with_tooltip("mrun")
                             .with_icon_templated(glyph_icon(glyph).expect("glyph"))
+                            .with_title(snap.title().unwrap_or_default())
                             .build()
                             .ok();
                     }
@@ -687,6 +706,21 @@ mod tests {
             reading,
             ..Snapshot::default()
         }
+    }
+
+    #[test]
+    fn the_menu_bar_shows_a_pods_spend_only() {
+        assert_eq!(busy(false).title(), None);
+        let remote = Snapshot {
+            spend_cents: Some(60),
+            ..busy(false)
+        };
+        assert_eq!(remote.title().as_deref(), Some("$0.60"));
+        let long = Snapshot {
+            spend_cents: Some(1352),
+            ..busy(false)
+        };
+        assert_eq!(long.title().as_deref(), Some("$13.52"));
     }
 
     #[test]

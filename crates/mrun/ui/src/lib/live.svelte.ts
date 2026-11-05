@@ -3,7 +3,7 @@
 
 import { HostError, host } from "./api";
 import { serverState } from "./format";
-import type { AgentEntry, AppState, ModelEntry, ServerState, Status } from "./types";
+import type { AgentEntry, AppState, CloudListing, ModelEntry, ServerState, Status } from "./types";
 
 class Live {
   status = $state<Status | null>(null);
@@ -14,6 +14,7 @@ class Live {
   models = $state<ModelEntry[] | null>(null);
   /** Kept across visits, so a place shows its last rows at once (019 US4). */
   agents = $state<AgentEntry[] | null>(null);
+  cloud = $state<CloudListing | null>(null);
   #timer: ReturnType<typeof setInterval> | null = null;
 
   get state(): ServerState {
@@ -61,6 +62,18 @@ class Live {
     const first = await host.agents();
     this.agents = first.value;
     if (first.stale) this.agents = (await host.agents(true)).value;
+  }
+
+  async refreshCloud(): Promise<void> {
+    try {
+      // A listing, or nothing: an older host answers this route with something else.
+      const shaped = (v: CloudListing) => (v && typeof v === "object" && "status" in v ? v : null);
+      const first = await host.cloud();
+      this.cloud = shaped(first.value);
+      if (first.stale) this.cloud = shaped((await host.cloud(true)).value);
+    } catch {
+      /* keep the last listing */
+    }
   }
 
   start(): void {

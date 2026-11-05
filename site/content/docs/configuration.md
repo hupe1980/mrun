@@ -1,26 +1,23 @@
 +++
 title = "Configuration"
-description = "Configure mrun with an optional config file, MRUN_* environment variables and command-line flags, and where it keeps its files."
+description = "The optional config file, MRUN_* environment variables, flags, and where mrun keeps its files."
 weight = 90
 +++
 
-mrun needs no configuration. When you want to change a default, settings are read in this order,
-later sources winning:
+mrun needs no configuration. Settings are read in this order, later sources winning:
 
 1. built-in defaults,
 2. the config file: its top-level keys, then the table of the command that runs,
 3. `MRUN_*` environment variables,
 4. command-line flags.
 
-`mrun config show` prints every setting with the value a command would use and where it comes
-from. mrun warns about unknown `MRUN_*` variables and unknown config keys and suggests the closest
-known name, so a typo is not ignored silently.
+`mrun config show` prints every setting with its value and source. Unknown `MRUN_*` variables and
+config keys get a warning with the closest known name.
 
 ## Config file
 
-The file is optional: without it nothing changes. mrun reads `~/.mrun/config.toml`
-(`$MRUN_HOME/config.toml`), or the file named by `MRUN_CONFIG`; `MRUN_CONFIG=` (empty) ignores the
-file for one run. mrun never writes it.
+mrun reads `~/.mrun/config.toml` (`$MRUN_HOME/config.toml`), or the file named by `MRUN_CONFIG`;
+`MRUN_CONFIG=` (empty) ignores the file for one run. mrun never writes it.
 
 ```toml
 # Shared keys apply to every command with the flag.
@@ -64,7 +61,7 @@ reps = 5
 - **`serve --detach`** passes the values it resolved to the background server, which does not read
   the file again.
 
-Not settable, by design: confirmations and one-shot actions (`yes`, `dry-run`, `write`, `restore`,
+Not settable: confirmations and one-shot actions (`yes`, `dry-run`, `write`, `restore`,
 `record`, `trace`, `out`, `follow`, `info`), output formats (`json`, `quiet`, `verbose`), remote mode
 (`serve --relay`: only `mrun cloud up` starts it), secrets (the RunPod key comes from
 `RUNPOD_API_KEY` or `.env`) and addresses (mrun binds to 127.0.0.1 only). Such keys get a warning
@@ -115,8 +112,7 @@ max-price = 2.6             # file:19 (needs retry)
 any-cloud = true            # file:18 (needs retry)
 ```
 
-For completion and checks while you type (Taplo, Even Better TOML in VS Code), save the schema
-and point the file at it:
+For completion in editors (Taplo, Even Better TOML), save the schema and point the file at it:
 
 ```sh
 mrun config schema > ~/.mrun/config.schema.json
@@ -137,16 +133,15 @@ mrun config schema > ~/.mrun/config.schema.json
 | `MRUN_MAX_OUTPUT` | `serve --max-output` | 32768 (all three APIs, clamped to the context left); at least 1 |
 | `MRUN_QUEUE` | `serve --queue` | 16; at least 1 |
 | `MRUN_QUEUE_WAIT_S` | `serve --queue-wait-s` | 240 (non-streaming requests only); at least 1 |
-| `MRUN_BUDGET_GIB` | `--budget-gib` (`serve`, `run`, `ls`) | MLX's recommended working set; can only be lowered |
+| `MRUN_BUDGET_GIB` | `--budget-gib` (`serve`, `run`, `ls`) | Metal's recommended working set; can only be lowered |
 | `MRUN_NO_CACHE` | `serve --no-cache` | off |
 | `MRUN_REJECT_TOOL_IMAGES` | `serve --reject-tool-images` | off |
 | `MRUN_DETACH` | `serve --detach` | off |
 | `MRUN_UI_PORT` | `ui --port` | 8485 (the window's own loopback port; the next free one when taken) |
 | `MRUN_CALIBRATION_DEBUG` | — | unset; any value prints the per-layer timings of chunk calibration to stderr |
 
-`--record`, `--yes`, `--dry-run`, `--write` and `--restore` exist only as flags (and are not
-config keys), so they are never left on by accident. Boolean variables take `true`/`false`,
-`1`/`0` or `yes`/`no`.
+`--record`, `--yes`, `--dry-run`, `--write` and `--restore` exist only as flags. Boolean variables
+take `true`/`false`, `1`/`0` or `yes`/`no`.
 
 mrun also reads the Hugging Face variables `HF_HOME`, `HF_HUB_CACHE`, `HF_ENDPOINT` (a mirror) and
 `HF_TOKEN` (gated models; otherwise the token saved by `hf auth login`), and Claude Code's
@@ -158,6 +153,7 @@ mrun also reads the Hugging Face variables `HF_HOME`, `HF_HUB_CACHE`, `HF_ENDPOI
 | --- | --- | --- |
 | `~/.mrun/config.toml` | The optional config file (read only; mrun never writes it) | `MRUN_CONFIG`, `MRUN_HOME` |
 | `~/.mrun/manifests` | One manifest per pulled model: pinned revision and file hashes | `MRUN_HOME` |
+| `~/.mrun/models/<org>--<name>/<revision>/` | The model's files, weights aligned to be mapped from disk | `MRUN_HOME` |
 | `~/.mrun/server.log` | Log of background servers (all ports), moved to `server.log.1` at 10 MB | `MRUN_HOME` |
 | `~/.mrun/server-<port>.pid` | Pid of the background server on that port | `MRUN_HOME` |
 | `~/.mrun/claude/settings.json` | Claude Code settings file suggested or written by `connect` | `MRUN_HOME` |
@@ -165,19 +161,17 @@ mrun also reads the Hugging Face variables `HF_HOME`, `HF_HUB_CACHE`, `HF_ENDPOI
 | `~/.mrun/calibration.toml` | Prefill chunk calibration per device and model, reused on later starts | `MRUN_HOME` |
 | `~/.mrun/logs/cloud-<pod id>.log` | Full pod log saved by a failed `cloud up` | `MRUN_HOME` |
 | `~/.codex/mrun.config.toml` | The Codex profile written by `connect --write` (`launch` passes the same settings as `-c` overrides) | `CODEX_HOME` |
-| `~/.cache/huggingface/hub` | Model files, shared with other tools | `HF_HOME`, `HF_HUB_CACHE` |
-| `~/Library/Caches/mrun/` | MLX's Metal library, extracted from the binary on first use | — |
+| `~/.cache/huggingface/hub` | Read only: `pull` imports models other tools downloaded from here | `HF_HOME`, `HF_HUB_CACHE` |
 
 When `HOME` is unset, mrun uses the account's home directory, and `./.mrun` if that is unknown
 too.
 
 ## Build variables
 
-These apply when building from source; see `crates/mrun-mlx-sys/README.md` for the full list.
+These apply when building from source, except `NUVEC_NAX`, which is read at start.
 
 | Variable | Meaning |
 | --- | --- |
-| `MLX_SYS_CACHE_DIR` | Where the MLX build is cached (default `~/Library/Caches/mrun-mlx-sys` on macOS) |
-| `MLX_SYS_METAL` | `0` builds MLX for the CPU only (tests, machines without Xcode; too slow for real models) |
-| `MLX_SYS_SOURCE_DIR` | Directory with the pinned MLX and mlx-c source archives, for offline builds |
-| `MLX_SYS_PREBUILT_DIR` | Install prefix of an earlier MLX build; skips fetching and CMake |
+| `NUVEC_REQUIRE_METALLIB` | `1` fails the build when the Metal kernels cannot be precompiled, instead of compiling them at first start; the release build sets it |
+| `NUVEC_NAX` | `auto` (default), `on` or `off`: the M5 Neural Accelerator kernels; `auto` keeps them off until measured on an M5 |
+| `MRUN_BUILD_COMMIT` | The commit shown by `mrun --version` (default: the repository's `HEAD`) |

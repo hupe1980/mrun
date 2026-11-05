@@ -349,11 +349,7 @@ mod tests {
         );
         let broken =
             test_support::cached_model(&ctx.paths, None, "org/broken", &"b".repeat(40), files);
-        fs::write(
-            broken.snapshot_dir(&ctx.paths).join("model.safetensors"),
-            b"ww",
-        )
-        .unwrap();
+        fs::write(broken.dir(&ctx.paths).join("model.safetensors"), b"ww").unwrap();
 
         let rows = rows(&ctx);
         let text = render(&rows, "qwen3.6");

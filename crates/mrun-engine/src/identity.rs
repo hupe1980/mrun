@@ -64,6 +64,17 @@ struct Cache {
 
 /// Computes the identity of the model in `dir`, using and updating the cache file `cache_path`.
 pub fn identify(dir: &Path, cache_path: &Path) -> Result<Identity, IdentityError> {
+    identify_with(dir, cache_path, &BTreeMap::new())
+}
+
+/// [`identify`] with the sha256 of some files already known (file name → hash): a pulled model's
+/// manifest records the Hub's hashes, which its files in mrun's store (some realigned for
+/// mapping) keep as their identity without being hashed.
+pub fn identify_with(
+    dir: &Path,
+    cache_path: &Path,
+    known: &BTreeMap<String, String>,
+) -> Result<Identity, IdentityError> {
     let io_err = |path: &Path| {
         let path = path.to_path_buf();
         move |source| IdentityError::Io { path, source }
@@ -90,7 +101,10 @@ pub fn identify(dir: &Path, cache_path: &Path) -> Result<Identity, IdentityError
 
     let mut files = Vec::with_capacity(names.len());
     for name in names {
-        let sha = file_sha256(&dir.join(&name), &mut cache)?;
+        let sha = match known.get(&name) {
+            Some(sha) => sha.clone(),
+            None => file_sha256(&dir.join(&name), &mut cache)?,
+        };
         files.push((name, sha));
     }
     let mut hasher = Sha256::new();
@@ -304,6 +318,27 @@ mod tests {
         fs::write(dir.join("model.safetensors"), b"weights").unwrap();
         fs::write(dir.join("README.md"), "ignored").unwrap();
         dir
+    }
+
+    #[test]
+    fn known_hashes_stand_for_their_files() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = model_dir(root.path());
+        let cache = root.path().join("identity.toml");
+        let hashed = identify(&dir, &cache).unwrap();
+        // The weights rewritten (as a realigned copy would be), their original hash known.
+        let original = hashed
+            .files
+            .iter()
+            .find(|(name, _)| name == "model.safetensors")
+            .unwrap()
+            .1
+            .clone();
+        fs::write(dir.join("model.safetensors"), b"weights, realigned").unwrap();
+        let known = BTreeMap::from([("model.safetensors".to_string(), original)]);
+        let with = identify_with(&dir, &cache, &known).unwrap();
+        assert_eq!(with.value, hashed.value);
+        assert_ne!(identify(&dir, &cache).unwrap().value, hashed.value);
     }
 
     #[test]

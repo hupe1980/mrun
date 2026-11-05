@@ -30,4 +30,4 @@ index_format = "elasticlunr_json"
 [extra]
 repo = "https://github.com/hupe1980/mrun"
 tagline = "Your agent's context, computed once."
-status = "mrun is in development and not released yet. Build it from source; commands on this site match the current code."
+status = ""

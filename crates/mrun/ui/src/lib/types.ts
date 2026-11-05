@@ -64,22 +64,102 @@ export interface Status {
   finished?: Finished[];
   lanes: { configured: number; busy: number };
   /** Remote mode (013): the pod the relay serves from. */
-  pod?: { id: string | null; gpu: string | null; cost_per_hr: number | null; reachable: boolean } | null;
+  pod?: Pod | null;
 }
 
 /** What the server is doing, as one word the whole UI agrees on. */
 export type ServerState = "ready" | "reading" | "generating" | "loading" | "stopped" | "failed";
+
+/** The relay's pod (013, `/mrun/status` `pod`). */
+export interface Pod {
+  id: string | null;
+  gpu: string | null;
+  cost_per_hr: number | null;
+  reachable: boolean;
+  phase?: string;
+  uptime_s?: number;
+  spend_usd?: number;
+  idle_s?: number | null;
+  idle_stop_s?: number;
+}
+
+/** A step of `cloud up --json` (024): `pod`, `agent`, `loading`, `ready`. */
+export type CloudStep = "pod" | "agent" | "loading" | "ready";
 
 export interface Job {
   id: string;
   kind: ActionKind;
   target: string;
   state: "running" | "done" | "failed" | "cancelled";
-  progress: { file: string; bytes: number; total: number; rate: number; eta_s: number | null } | null;
+  progress: {
+    file: string;
+    bytes: number;
+    total: number;
+    rate: number;
+    eta_s: number | null;
+    step?: CloudStep;
+    text?: string;
+  } | null;
   error: string | null;
+  /** The last JSON line the command printed (`cloud up`'s `done`: model, gpu, cost_per_hr). */
+  output?: Record<string, any> | null;
 }
 
-export type ActionKind = "pull" | "use" | "remove" | "start" | "stop" | "connect" | "disconnect";
+export type ActionKind =
+  | "pull"
+  | "use"
+  | "remove"
+  | "start"
+  | "stop"
+  | "connect"
+  | "disconnect"
+  | "cloud-up"
+  | "cloud-down"
+  | "cloud-login"
+  | "cloud-logout";
+
+/** A curated model for a rented GPU (`mrun cloud models --json`). */
+export interface Offer {
+  repo: string;
+  weights_bytes: number;
+  context: number;
+  min_vram_gb: number;
+  note: string;
+  /** The cheapest fitting GPU and its $/h per cloud; `null` without a key or stock. */
+  secure: [string, number] | null;
+  community: [string, number] | null;
+  /** GPU type ids it fits (empty without a key). */
+  fits: string[];
+}
+
+/** A RunPod GPU type (`mrun cloud gpus --json`). */
+export interface Gpu {
+  id: string;
+  name: string;
+  memory_gb: number;
+  secure_per_hr: number | null;
+  community_per_hr: number | null;
+  /** `High`, `Medium`, `Low`; `null`: none available now. */
+  secure_stock: string | null;
+  community_stock: string | null;
+}
+
+export type KeySource = "env" | "dotenv" | "keychain" | null;
+
+/** The section `GET /app/cloud` (024 data model: CloudListing). */
+export interface CloudListing {
+  offers: Offer[];
+  gpus: Gpu[];
+  status: { pods: { id: string; model: string | null; gpu: string | null; cost_per_hr: number | null }[]; key: KeySource; error?: string };
+  added: CloudModel[];
+}
+
+/** A model the user added to the cloud section (window prefs `cloud_models`). */
+export interface CloudModel {
+  repo: string;
+  weights_bytes: number;
+  family?: string | null;
+}
 
 export interface Prefs {
   keep_chats: boolean | null;
@@ -88,6 +168,7 @@ export interface Prefs {
   server_port: number;
   /** The model the window last served (written by the host). */
   last_model?: string | null;
+  cloud_models?: CloudModel[];
 }
 
 export interface AppState {

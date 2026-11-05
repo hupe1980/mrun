@@ -1,5 +1,7 @@
-//! Models in the shared Hugging Face hub cache (`models--org--name/{blobs,snapshots,refs}`) and
-//! mrun's own state in `MRUN_HOME`: one manifest per pulled model.
+//! mrun's model store and state in `MRUN_HOME`: one manifest per pulled model and its files in
+//! `models/<org>--<name>/<commit>/`, safetensors laid out for mapping (022, [`realign`]). The
+//! shared Hugging Face hub cache (`models--org--name/{blobs,snapshots,refs}`) is only read: pulls
+//! import from it, and an unpulled repo there still loads by name.
 //!
 //! Resolution order (004 contract): existing path, then a manifest (alias or repo id), then a
 //! repo id already in the HF cache.
@@ -7,6 +9,7 @@
 pub mod aliases;
 pub mod download;
 pub mod progress;
+pub mod realign;
 pub mod verify;
 
 use crate::errors::{CliError, Code};
@@ -61,12 +64,9 @@ impl Paths {
         self.hf_cache.join(repo_folder(repo))
     }
 
-    /// `.locks/models--org--name/<blob>.lock`, the lock `huggingface_hub` takes for a blob.
-    pub fn blob_lock(&self, repo: &str, blob: &str) -> PathBuf {
-        self.hf_cache
-            .join(".locks")
-            .join(repo_folder(repo))
-            .join(format!("{blob}.lock"))
+    /// mrun's model store: `models/<org>--<name>/<commit>/`.
+    pub fn models(&self) -> PathBuf {
+        self.mrun_home.join("models")
     }
 
     pub fn manifests(&self) -> PathBuf {
@@ -84,7 +84,7 @@ fn repo_folder(repo: &str) -> String {
 }
 
 /// A commit id: 40 lowercase hex digits. Commits come from the hub (or a mirror) and from
-/// manifests and are joined into cache paths, so nothing else is accepted.
+/// manifests and are joined into store paths, so nothing else is accepted.
 pub fn is_commit(text: &str) -> bool {
     is_lower_hex(text, 40)
 }
@@ -99,7 +99,7 @@ fn is_lower_hex(text: &str, len: usize) -> bool {
 }
 
 /// A revision the user may name (`@main`, `@v1.0`, `@abc1234`): it becomes a URL segment and
-/// a `refs/` file name, so `/`, `\`, `..`, control characters and a leading `.` or `-` are
+/// a path component in the HF cache, so `/`, `\`, `..`, control characters and a leading `.` or `-` are
 /// refused.
 pub fn is_revision(text: &str) -> bool {
     !text.is_empty()
@@ -112,7 +112,7 @@ pub fn is_revision(text: &str) -> bool {
 }
 
 /// `org/name` with exactly one slash and hub-safe characters in each part (`[A-Za-z0-9._-]`,
-/// no `.` or `..` part, no `--` that would collide in the cache folder name).
+/// no `.` or `..` part, no `--` that would collide in `org--name` folder names).
 pub fn is_repo_id(repo: &str) -> bool {
     let part = |text: &str| {
         !text.is_empty()
@@ -127,7 +127,7 @@ pub fn is_repo_id(repo: &str) -> bool {
     matches!((parts.next(), parts.next(), parts.next()), (Some(org), Some(name), None) if part(org) && part(name))
 }
 
-/// A file name of a snapshot: one path component, never `.` or `..`.
+/// A file name in a model directory: one path component, never `.` or `..`.
 pub fn is_file_name(text: &str) -> bool {
     !text.is_empty() && text != "." && text != ".." && !text.contains(['/', '\\', '\0'])
 }
@@ -187,7 +187,7 @@ pub struct Ctx {
     pub hub: Hub,
     /// This machine's memory, for fit and maximum context; `None` when unknown.
     pub device: Option<DeviceMemory>,
-    /// Free bytes on the cache's disk; `None` asks the system (`df`).
+    /// Free bytes on the store's disk; `None` asks the system (`df`).
     pub free_space: Option<u64>,
 }
 
@@ -219,10 +219,10 @@ impl Ctx {
     }
 }
 
-/// This machine's memory. On a Mac with Metal it is the device's own figure, MLX `device_info`
+/// This machine's memory. On a Mac with Metal it is the device's own figure, Metal's device info
 /// (`recommendedMaxWorkingSetSize`), the same number the engine budgets with, so `pull`, `ls`,
 /// `show` and `launch` fit before a load as the load will. Only without a Metal device (Linux, a
-/// build without `mlx`) does it fall back to the system's numbers, marked `estimated`.
+/// build without the engine) does it fall back to the system's numbers, marked `estimated`.
 pub fn device_memory() -> Option<DeviceMemory> {
     #[cfg(feature = "engine")]
     if let Some((physical, recommended_working_set)) = mrun_engine::tensor::device_memory()
@@ -323,12 +323,19 @@ pub struct Quantization {
 /// One file of a manifest: content hash plus the fast-check record.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct ManifestFile {
-    /// Path relative to the snapshot directory.
+    /// Path relative to the model directory.
     pub path: String,
     pub size: u64,
     pub sha256: String,
-    /// Modification time of the file content (the blob), nanoseconds since the epoch.
+    /// Modification time of the file in the store, nanoseconds since the epoch.
     pub mtime_ns: u64,
+    /// Spaces added after a safetensors header ([`realign`]); on disk the file is `size + pad`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pad: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// `MRUN_HOME/manifests/<alias or org--name>.toml` (data model, ModelManifest).
@@ -361,7 +368,7 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// Refuses a manifest whose repo, revision or file names would leave the cache when joined
+    /// Refuses a manifest whose repo, revision or file names would leave the store when joined
     /// into a path (a tampered manifest, or one written from a hostile mirror's metadata).
     pub fn validate(&self) -> Result<(), String> {
         if !is_repo_id(&self.repo) {
@@ -384,6 +391,12 @@ impl Manifest {
             .find(|file| !is_file_name(&file.path) || !is_lower_hex(&file.sha256, 64))
         {
             return Err(format!("invalid file entry '{}'", file.path));
+        }
+        if let Some(file) = self.files.iter().find(|file| {
+            u64::from(file.pad) > realign::MAX_PAD
+                || (file.pad > 0 && !file.path.ends_with(".safetensors"))
+        }) {
+            return Err(format!("invalid pad {} for '{}'", file.pad, file.path));
         }
         Ok(())
     }
@@ -410,15 +423,20 @@ impl Manifest {
         paths.manifests().join(format!("{}.toml", self.file_stem()))
     }
 
-    pub fn snapshot_dir(&self, paths: &Paths) -> PathBuf {
+    /// The model's directory in the store.
+    pub fn dir(&self, paths: &Paths) -> PathBuf {
         paths
-            .repo_dir(&self.repo)
-            .join("snapshots")
+            .models()
+            .join(self.repo.replace('/', "--"))
             .join(&self.revision)
     }
 
+    /// Bytes on disk.
     pub fn size(&self) -> u64 {
-        self.files.iter().map(|file| file.size).sum()
+        self.files
+            .iter()
+            .map(|file| file.size + u64::from(file.pad))
+            .sum()
     }
 
     pub fn weights(&self) -> u64 {
@@ -641,7 +659,7 @@ pub fn resolve(paths: &Paths, name: &str) -> Result<LocalModel, CliError> {
             return Err(verify::corrupt_error(&manifest, &problems));
         }
         return Ok(LocalModel {
-            dir: manifest.snapshot_dir(paths),
+            dir: manifest.dir(paths),
             manifest: Some(manifest),
         });
     }
@@ -678,7 +696,7 @@ fn shadowed(name: &str) -> CliError {
 /// Fast checks of a pulled model. A file that was only touched is re-hashed; when its content
 /// still matches, the new modification time is recorded so the next check is fast again.
 pub fn check(paths: &Paths, manifest: &mut Manifest) -> verify::Status {
-    let dir = manifest.snapshot_dir(paths);
+    let dir = manifest.dir(paths);
     let before = manifest.files.clone();
     let status = verify::fast_check(manifest, &dir);
     if manifest.files != before
@@ -911,7 +929,7 @@ pub mod test_support {
         }
     }
 
-    /// A manifest for `repo` at `revision` whose files are cached as blobs (path, content).
+    /// A pulled model: `repo` at `revision` with its files (path, content) in the store.
     pub fn cached_model(
         paths: &Paths,
         alias: Option<&str>,
@@ -919,23 +937,18 @@ pub mod test_support {
         revision: &str,
         files: &[(&str, &[u8])],
     ) -> Manifest {
-        let repo_dir = paths.repo_dir(repo);
-        let snapshot = repo_dir.join("snapshots").join(revision);
-        fs::create_dir_all(repo_dir.join("blobs")).unwrap();
-        fs::create_dir_all(&snapshot).unwrap();
+        let dir = paths.models().join(repo.replace('/', "--")).join(revision);
+        fs::create_dir_all(&dir).unwrap();
         let mut entries = Vec::new();
         for (path, content) in files {
-            let sha = verify::sha256_bytes(content);
-            let blob = repo_dir.join("blobs").join(&sha);
-            fs::write(&blob, content).unwrap();
-            let link = snapshot.join(path);
-            let _ = fs::remove_file(&link);
-            download::link_blob(&link, &sha, path).unwrap();
+            let file = dir.join(path);
+            fs::write(&file, content).unwrap();
             entries.push(ManifestFile {
                 path: path.to_string(),
                 size: content.len() as u64,
-                sha256: sha,
-                mtime_ns: verify::mtime_ns(&fs::metadata(&blob).unwrap()),
+                sha256: verify::sha256_bytes(content),
+                mtime_ns: verify::mtime_ns(&fs::metadata(&file).unwrap()),
+                pad: 0,
             });
         }
         let manifest = Manifest {
@@ -980,10 +993,7 @@ mod tests {
         assert_eq!(paths.mrun_home, Path::new("/h/.mrun"));
         let paths = Paths::from_vars(&vars(&[("HOME", "/h"), ("XDG_CACHE_HOME", "/x")]));
         assert_eq!(paths.hf_cache, Path::new("/x/huggingface/hub"));
-        assert_eq!(
-            paths.blob_lock("org/m", "abc"),
-            Path::new("/x/huggingface/hub/.locks/models--org--m/abc.lock")
-        );
+        assert_eq!(paths.models(), Path::new("/h/.mrun/models"));
         // Without HOME the account's home directory is used, never a relative path.
         assert!(Paths::from_vars(&vars(&[])).mrun_home.is_absolute());
         let paths = Paths::from_vars(&vars(&[("HOME", "/h"), ("HF_HOME", "/hf")]));
@@ -1039,7 +1049,7 @@ mod tests {
             &[("config.json", b"{}"), ("model.safetensors", b"w")],
         );
         let local = resolve(&ctx.paths, "small").unwrap();
-        assert_eq!(local.dir, manifest.snapshot_dir(&ctx.paths));
+        assert_eq!(local.dir, manifest.dir(&ctx.paths));
         assert!(local.manifest.is_some());
         assert_eq!(
             find_manifest(&ctx.paths, "org/small@aaaa").unwrap().name(),
@@ -1317,8 +1327,29 @@ mod tests {
                 size: 2,
                 sha256: "0".repeat(64),
                 mtime_ns: 1,
+                pad: 0,
             }],
         }
+    }
+
+    #[test]
+    fn pads_are_validated_and_counted_on_disk() {
+        let mut manifest = test_manifest();
+        manifest.files.push(ManifestFile {
+            path: "model.safetensors".into(),
+            size: 100,
+            sha256: "1".repeat(64),
+            mtime_ns: 1,
+            pad: 7,
+        });
+        assert_eq!(manifest.validate(), Ok(()));
+        assert_eq!(manifest.size(), 2 + 100 + 7);
+        assert_eq!(manifest.weights(), 100, "weights are the Hub's bytes");
+        manifest.files[1].pad = 16;
+        assert!(manifest.validate().unwrap_err().contains("invalid pad 16"));
+        manifest.files[1].pad = 0;
+        manifest.files[0].pad = 1;
+        assert!(manifest.validate().unwrap_err().contains("'config.json'"));
     }
 
     #[test]

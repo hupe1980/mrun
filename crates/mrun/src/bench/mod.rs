@@ -69,7 +69,8 @@ pub struct BenchArgs {
     /// Benchmark several systems one at a time (without --system: every bundled profile).
     #[arg(long)]
     pub compare: bool,
-    /// Repetitions (raises the per-suite minimums: synthetic 5, cancel 50, agent 3).
+    /// Repetitions (raises the per-suite minimums: synthetic 5, cancel 50, agent 3; the synthetic
+    /// maximum-context cell runs once).
     #[arg(long)]
     pub reps: Option<u32>,
     /// Output directory [default: ./mrun-bench/<timestamp>].

@@ -2,7 +2,7 @@
 //! its pending pipelined step, the attention capacity and the growth limit, the stored
 //! checkpoints and segments, the byte accounting and the poisoned state after a failed move.
 //!
-//! `MlxEngine` and the scripted test double both keep their state here, so the double cannot
+//! `NuvecEngine` and the scripted test double both keep their state here, so the double cannot
 //! credit memory the real engine would not. The pattern of every operation is the same: a pure
 //! `plan_*` call validates and checks memory without changing anything (so an error leaves the
 //! state as it was), the engine rolls back a pending step and does the physical work, then a

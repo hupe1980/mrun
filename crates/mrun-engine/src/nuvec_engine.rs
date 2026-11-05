@@ -1,4 +1,4 @@
-//! `MlxEngine`: the [`Engine`] contract v2 (D028) over MLX, for attention-only and hybrid
+//! `NuvecEngine`: the [`Engine`] contract v2 (D028) over nuvec, for attention-only and hybrid
 //! (attention + Gated DeltaNet) families. `ScriptedEngine` in `mrun` is the behavioural
 //! reference; both allocate and account alike.
 //!
@@ -18,7 +18,7 @@
 //!   checkpoints share the evaluated handles; `detach_tail` moves the live recurrent state into
 //!   the segment, after which prefill and forward fail with `NoRecurrentState` until `restore` or
 //!   `attach`.
-//! - Memory (D029, D048): the MLX buffer cache is limited and cleared after growth, moves, drops, each
+//! - Memory (D029, D048): the buffer cache is limited and cleared after growth, moves, drops, each
 //!   prefill chunk and every 256 decode positions; weights are measured after warm-up and wired;
 //!   scratch is (warm-up peak above the weights and the warm-up's own state +
 //!   [`analytic_scratch`]) × 1.25, its position-dependent terms at the capacity-limited depth.
@@ -41,7 +41,7 @@ use crate::sample;
 use crate::state::{self, KvTail, LayerKv, LayerState, Recurrent, RecurrentState, SeqState};
 use crate::tensor::{self, Array};
 
-/// MLX's buffer cache limit; counted inside scratch.
+/// The buffer cache limit; counted inside scratch.
 pub const CACHE_LIMIT: u64 = 256 << 20;
 /// Safety factor on scratch.
 const SCRATCH_MARGIN: f64 = 1.25;
@@ -54,7 +54,7 @@ pub struct LoadOptions {
     /// Content identity of the model directory ([`identity::identify`]).
     pub identity: String,
     pub overrides: Overrides,
-    /// Memory to plan with when MLX reports none (CPU device).
+    /// Memory to plan with when the device reports none (CPU).
     pub fallback_device: Option<DeviceMemory>,
     /// Run on the CPU even when a Metal device is present.
     pub cpu: bool,
@@ -63,7 +63,7 @@ pub struct LoadOptions {
     pub calibration: Option<PathBuf>,
 }
 
-/// Where an injected failure strikes (test hook for FR-028/SC-012, [`MlxEngine::fail_next`]).
+/// Where an injected failure strikes (test hook for FR-028/SC-012, [`NuvecEngine::fail_next`]).
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailPoint {
@@ -80,7 +80,7 @@ pub enum FailPoint {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum MlxLoadError {
+pub enum NuvecLoadError {
     #[error(transparent)]
     Model(#[from] LoadError),
     #[error(transparent)]
@@ -88,14 +88,11 @@ pub enum MlxLoadError {
     #[error(transparent)]
     Identity(#[from] IdentityError),
     #[error(transparent)]
-    Mlx(#[from] tensor::Error),
+    Tensor(#[from] tensor::Error),
     #[error("cannot read {path}: {message}")]
     Config { path: String, message: String },
-    #[error("MLX reports no device memory and none was given")]
+    #[error("the device reports no memory and none was given")]
     NoDevice,
-    /// The embedded GPU kernels could not be extracted (names the path).
-    #[error("{0}")]
-    Kernels(String),
 }
 
 /// A step fed before the caller asked for it: its token, step id, logits and (hybrids) the
@@ -117,7 +114,7 @@ struct StoredSegment {
     ids: Vec<u32>,
 }
 
-pub struct MlxEngine {
+pub struct NuvecEngine {
     info: ModelInfo,
     model: Box<dyn Model>,
     seq: SeqState,
@@ -135,9 +132,9 @@ pub struct MlxEngine {
     fail: Option<FailPoint>,
 }
 
-impl std::fmt::Debug for MlxEngine {
+impl std::fmt::Debug for NuvecEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MlxEngine")
+        f.debug_struct("NuvecEngine")
             .field("family", &self.info.family)
             .field("len", &self.ledger.len())
             .field("capacity", &self.seq.capacity())
@@ -153,20 +150,18 @@ fn injected() -> EngineError {
     EngineError::Backend("injected failure".into())
 }
 
-impl MlxEngine {
+impl NuvecEngine {
     /// Loads the model in `dir`: family and layout from `config.json`, the weights (read and
     /// measured by a one-token warm-up), then the memory budget.
-    pub fn load(dir: &Path, options: LoadOptions) -> Result<Self, MlxLoadError> {
+    pub fn load(dir: &Path, options: LoadOptions) -> Result<Self, NuvecLoadError> {
         if options.cpu {
             tensor::use_device(tensor::Device::Cpu);
-        } else {
-            tensor::metallib::ensure().map_err(MlxLoadError::Kernels)?;
         }
         let config_path = dir.join("config.json");
         let config: serde_json::Value = std::fs::read_to_string(&config_path)
             .map_err(|e| e.to_string())
             .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
-            .map_err(|message| MlxLoadError::Config {
+            .map_err(|message| NuvecLoadError::Config {
                 path: config_path.display().to_string(),
                 message,
             })?;
@@ -187,7 +182,7 @@ impl MlxEngine {
                 available: crate::sysmem::available(),
                 estimated: false,
             },
-            _ => options.fallback_device.ok_or(MlxLoadError::NoDevice)?,
+            _ => options.fallback_device.ok_or(NuvecLoadError::NoDevice)?,
         };
         let plan = budget::plan(device, options.overrides)?;
         // Refuse early, before reading gigabytes, when the files alone cannot fit.
@@ -266,7 +261,6 @@ impl MlxEngine {
             crate::engine::Numerics {
                 nax: false,
                 gpu_arch: "cpu".into(),
-                backend: crate::engine::Backend::BUILD,
             }
         } else {
             tensor::numerics()
@@ -484,9 +478,9 @@ impl MlxEngine {
     }
 
     /// A chunk and one decode step through every layer: reads all weights and compiles the
-    /// kernels. Returns the bytes MLX holds afterwards without any sequence state (the weights)
-    /// and the peak above them and the warm-up's own sequence state during the warm-up.
-    fn warm_up(&mut self) -> Result<(u64, u64), MlxLoadError> {
+    /// kernels. Returns the bytes the allocator holds afterwards without sequence state (the
+    /// weights), and the peak above them and the warm-up's own state during the warm-up.
+    fn warm_up(&mut self) -> Result<(u64, u64), NuvecLoadError> {
         // A multi-token chunk and one decode step: both paths compile their kernels and
         // compiled ops here instead of on the first request (≈ 1 s on Qwen3.6).
         let backend = |e: EngineError| tensor::Error(e.to_string());
@@ -664,7 +658,7 @@ impl MlxEngine {
 
 /// Scratch beyond the warm-up peak (FR-017) for sequences up to `depth` positions: the family's
 /// largest chunk term over the chunk schedule up to `depth`, one attention layer at `depth` (the
-/// transient of growth and moves), one recurrent state (rollback copy) and the MLX cache limit.
+/// transient of growth and moves), one recurrent state (rollback copy) and the cache limit.
 fn analytic_scratch(model: &dyn Model, info: &ModelInfo, depth: u32) -> u64 {
     let depth = depth.min(info.max_position);
     let mut at = 0u32;
@@ -683,7 +677,7 @@ fn analytic_scratch(model: &dyn Model, info: &ModelInfo, depth: u32) -> u64 {
     chunk + layer + info.recurrent_bytes + CACHE_LIMIT
 }
 
-impl Engine for MlxEngine {
+impl Engine for NuvecEngine {
     fn info(&self) -> &ModelInfo {
         &self.info
     }
@@ -989,7 +983,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         testing::write_tiny_qwen3(dir.path(), 64).unwrap();
         let mut engine = testing::load_cpu(dir.path(), None).unwrap();
-        let live = |e: &MlxEngine| e.ids[..e.ledger.len() as usize].to_vec();
+        let live = |e: &NuvecEngine| e.ids[..e.ledger.len() as usize].to_vec();
         let penalty = Sampling {
             repetition_penalty: 1.3,
             ..Sampling::GREEDY

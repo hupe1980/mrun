@@ -2,7 +2,7 @@
 name = "mrun"
 description = "Local inference server for coding agents on Apple Silicon"
 readme = "../../README.md"
-keywords = ["llm", "inference", "apple-silicon", "mlx", "agents"]
+keywords = ["llm", "inference", "apple-silicon", "metal", "agents"]
 categories = ["command-line-utilities", "science"]
 version.workspace = true
 edition.workspace = true
@@ -10,20 +10,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+# Recorded sessions for `mrun bench --trace`, kept in the repository only.
+exclude = ["bench/traces"]
 
 [features]
-default = ["mlx", "app"]
-# `ScriptedEngine` and test fixtures, for integration tests and the test suites of later features.
+default = ["engine", "app"]
+# `ScriptedEngine` and test fixtures for the integration tests.
 test-support = []
-# The MLX engine (builds MLX from source once; Metal needs Xcode, `MLX_SYS_METAL=0` builds CPU
-# only). `--no-default-features` builds the engine-agnostic parts alone (fast Linux CI).
-mlx = ["engine", "mrun-engine/mlx"]
-# nuvec instead of MLX (spec 016): `--no-default-features --features nuvec`.
-nuvec = ["engine", "mrun-engine/nuvec"]
-# Set by a backend feature: the engine-dependent CLI parts (serve, run, doctor's GPU checks).
-engine = []
-# `mrun ui`'s native window and menu bar item (macOS; spec 018). Without it `mrun ui` opens the
-# browser. The shell crates exist for macOS targets only, so the feature is inert elsewhere.
+# The engine and what needs it (serve, run, doctor's GPU checks). `--no-default-features` builds
+# the rest alone (the Linux agent, fast CI).
+engine = ["mrun-engine/engine"]
+# `mrun ui`'s native window and menu bar item (macOS); without it `mrun ui` opens the browser.
 app = ["dep:tao", "dep:wry", "dep:tray-icon", "dep:muda"]
 
 [dependencies]

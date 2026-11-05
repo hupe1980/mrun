@@ -4,8 +4,8 @@
 //! and then decoded greedily through the engine's pipelined path (`sample` submits the token and
 //! the next forward with `async_eval` before reading the token back), plus a dense and an
 //! affine-quantized product long enough in K to take the split-K kernels (nuvec 0.4.1:
-//! `gemm_splitk` for few output tiles over K ≥ max(M, N); `qmm_splitk` above the vector kernels' row limit; MLX has the
-//! same split-K paths).
+//! `gemm_splitk` for few output tiles over K ≥ max(M, N); `qmm_splitk` above the vector kernels'
+//! row limit; MLX has the same split-K paths).
 //!
 //! The second process is this test binary itself, running [`child_writes_outputs`] with
 //! `MRUN_DETERMINISM_OUT` set; without that variable the child test does nothing.
@@ -20,7 +20,7 @@ use std::path::Path;
 use common::{Device, Reference, devices, greedy, load, prefill};
 use mrun_engine::budget::{DeviceMemory, GIB};
 use mrun_engine::tensor::{self, Array, Dtype};
-use mrun_engine::{Engine, LoadOptions, MlxEngine};
+use mrun_engine::{Engine, LoadOptions, NuvecEngine};
 
 const OUT: &str = "MRUN_DETERMINISM_OUT";
 const STEPS: usize = 8;
@@ -109,8 +109,8 @@ fn write_tiny_qwen3(dir: &Path) {
     tensor::save_safetensors(&dir.join("model.safetensors"), &refs).unwrap();
 }
 
-fn load_dir(dir: &Path, device: Device) -> MlxEngine {
-    MlxEngine::load(
+fn load_dir(dir: &Path, device: Device) -> NuvecEngine {
+    NuvecEngine::load(
         dir,
         LoadOptions {
             identity: "tiny_qwen3".into(),
@@ -128,7 +128,7 @@ fn load_dir(dir: &Path, device: Device) -> MlxEngine {
 }
 
 /// Chunked prefill, then [`STEPS`] pipelined greedy steps: every row's bits and the tokens.
-fn decode(out: &mut Outputs, key: &str, mut engine: MlxEngine, prompt: &[u32], ends: &[u32]) {
+fn decode(out: &mut Outputs, key: &str, mut engine: NuvecEngine, prompt: &[u32], ends: &[u32]) {
     engine.set_limit(64).unwrap();
     let (last, body) = prompt.split_last().unwrap();
     prefill(&mut engine, body, ends);

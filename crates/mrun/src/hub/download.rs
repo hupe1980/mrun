@@ -1,16 +1,19 @@
 //! `mrun pull`: hub metadata, pinned hashes and the architecture gate (`config.json` before any
-//! weight, FR-014), the size/license/fit preview, a disk-space check, resumable downloads into
-//! the HF cache layout, verification and the manifest.
+//! weight, FR-014), the size/license/fit preview, a disk-space check, the files into mrun's model
+//! store (022), verification and the manifest.
 //!
 //! Plain HTTP against the hub: `GET {endpoint}/api/models/{repo}/revision/{rev}?blobs=true` for
 //! the commit, file list, sizes and hashes, and `GET {endpoint}/{repo}/resolve/{commit}/{file}`
-//! for content. A file downloads into `blobs/<hash>.incomplete` (resumed with `Range`, retried
-//! with backoff), is verified (sha256 for LFS files, the git blob id otherwise) and renamed to
-//! `blobs/<hash>`; `snapshots/<commit>/<file>` links to it, and `.locks/` guards each blob, as
-//! `huggingface_hub` does.
+//! for content. Each file goes to `models/<org>--<name>/<commit>/<file>`, guarded by
+//! `<file>.lock`: imported from the Hugging Face cache when it holds the file with the Hub's hash
+//! (never written there), otherwise downloaded into `<file>.incomplete` (resumed with `Range`,
+//! retried with backoff) and verified (sha256 for LFS files, the git blob id otherwise).
+//! Safetensors files are then written laid out for mapping ([`realign`]); others are renamed or
+//! cloned unchanged.
 
 use super::aliases::{self, Alias};
 use super::progress::Report;
+use super::realign;
 use super::verify::{self, git_sha1_file, sha256_file};
 use super::{
     Ctx, Fit, Hub, Manifest, ManifestFile, Quantization, TARGET_48GB, fit, human_bytes, is_blob_id,
@@ -265,7 +268,7 @@ pub async fn pull_with(
         report.emit(serde_json::json!({
             "event": "done",
             "model": manifest.name(),
-            "path": manifest.snapshot_dir(&ctx.paths),
+            "path": manifest.dir(&ctx.paths),
             "already_pulled": already,
         }));
     };
@@ -466,6 +469,37 @@ fn already_pulled(ctx: &Ctx, plan: &Plan) -> Option<Manifest> {
 
 /// Metadata and `config.json` of `target`; nothing else is fetched. Refuses unsupported
 /// architectures and quantizations, and an alias whose pins the hub no longer matches.
+/// The bytes of a repo's weights (`.safetensors` at the top level), for a model a rented GPU
+/// serves (024): no family check, nothing downloaded.
+pub async fn weights_bytes(ctx: &Ctx, repo: &str) -> Result<u64, CliError> {
+    let (repo, revision) = match split_revision(repo) {
+        (repo, rev) if is_repo_id(repo) && rev.is_none_or(is_revision) => {
+            (repo, rev.unwrap_or("main"))
+        }
+        _ => return Err(not_a_model(repo, &[])),
+    };
+    let remote = Remote::new(&ctx.hub, repo)?;
+    let api = format!(
+        "{}/api/models/{repo}/revision/{revision}?blobs=true",
+        ctx.hub.endpoint
+    );
+    let info: RepoInfo = remote.get(&api, 0).await?.json().await.map_err(|error| {
+        CliError::new(Code::Network, format!("invalid reply from {api}: {error}"))
+    })?;
+    let bytes: u64 = remote_files(&info, repo)?
+        .iter()
+        .filter(|f| f.path.ends_with(".safetensors"))
+        .map(|f| f.size)
+        .sum();
+    if bytes == 0 {
+        return Err(CliError::new(
+            Code::InvalidArguments,
+            format!("{repo} has no safetensors weights"),
+        ));
+    }
+    Ok(bytes)
+}
+
 pub async fn plan(ctx: &Ctx, target: &str) -> Result<Plan, CliError> {
     if ctx.hub.offline {
         return Err(CliError::new(
@@ -591,7 +625,7 @@ fn check_pins(alias: &Alias, commit: &str, files: &[RemoteFile]) -> Result<(), C
     Ok(())
 }
 
-/// Downloads (or reuses) and verifies every file of `plan`, links the snapshot and writes the
+/// Downloads (or imports) and verifies every file of `plan` into the store and writes the
 /// manifest.
 pub async fn download(ctx: &Ctx, plan: &Plan) -> Result<Manifest, CliError> {
     download_with(ctx, plan, &Report::Human).await
@@ -601,44 +635,69 @@ pub async fn download(ctx: &Ctx, plan: &Plan) -> Result<Manifest, CliError> {
 pub async fn download_with(ctx: &Ctx, plan: &Plan, report: &Report) -> Result<Manifest, CliError> {
     let repo = plan.repo.as_str();
     let remote = Remote::new(&ctx.hub, repo)?;
-    let repo_dir = ctx.paths.repo_dir(repo);
-    let blobs = repo_dir.join("blobs");
-    fs::create_dir_all(&blobs).map_err(|error| write_error(error, &blobs))?;
-    check_disk(ctx, plan, &blobs)?;
+    let dir = ctx
+        .paths
+        .models()
+        .join(repo.replace('/', "--"))
+        .join(&plan.commit);
+    fs::create_dir_all(&dir).map_err(|error| write_error(error, &dir))?;
+    check_disk(ctx, plan, &dir)?;
 
     let recorded = manifests(&ctx.paths);
-    let snapshot = repo_dir.join("snapshots").join(&plan.commit);
+    let cached = ctx
+        .paths
+        .repo_dir(repo)
+        .join("snapshots")
+        .join(&plan.commit);
+    let mut pads = Vec::with_capacity(plan.files.len());
+    let mut imported = 0;
     for file in &plan.files {
-        let lock = ctx.paths.blob_lock(repo, &file.blob);
-        let _lock = lock_blob(&lock, &file.path).await?;
-        let blob = blobs.join(&file.blob);
-        if is_file_of_size(&blob, file.size)
-            && needs_hash(file, &blob, &recorded)
-            && !blob_matches(&blob, file)
-        {
-            eprintln!(
-                "  {} does not match its hash; downloading it again",
-                file.path
-            );
-            fs::remove_file(&blob).map_err(|error| write_error(error, &blob))?;
+        let _lock = lock_file(&dir.join(format!("{}.lock", file.path)), &file.path).await?;
+        let target = dir.join(&file.path);
+        if let Some(pad) = present(&target, file, &recorded) {
+            pads.push(pad);
+            continue;
         }
-        if !blob.exists() {
-            fetch_with_retries(&remote, plan, file, &blobs, report).await?;
+        if target.exists() {
+            eprintln!("  {} does not match its hash; fetching it again", file.path);
+            fs::remove_file(&target).map_err(|error| write_error(error, &target))?;
         }
-        let link = snapshot.join(&file.path);
-        link_blob(&link, &file.blob, &file.path).map_err(|error| write_error(error, &link))?;
+        let source = cached.join(&file.path);
+        let pad = if in_cache(&source, file) {
+            if imported == 0 {
+                report.note(&format!(
+                    "Importing {} from the Hugging Face cache ({}, no download).",
+                    plan.alias.map_or(repo, |alias| alias.name),
+                    human_bytes(plan.size())
+                ));
+            }
+            imported += file.size;
+            // A download an earlier pull left unfinished is not needed any more.
+            let _ = fs::remove_file(incomplete(&dir, file));
+            place(&source, &target, file, false)?
+        } else {
+            fetch_with_retries(&remote, plan, file, &dir, report).await?;
+            place(&incomplete(&dir, file), &target, file, true)?
+        };
+        pads.push(pad);
     }
-    // Branches and tags get a ref; a commit (or its prefix) is not a name.
-    if !plan.commit.starts_with(&plan.revision) {
-        let reference = repo_dir.join("refs").join(&plan.revision);
-        let written = reference
-            .parent()
-            .map_or(Ok(()), fs::create_dir_all)
-            .and_then(|()| fs::write(&reference, &plan.commit));
-        written.map_err(|error| write_error(error, &reference))?;
-    }
-    let manifest = manifest(ctx, plan, &blobs, &snapshot)?;
+    let manifest = manifest(ctx, plan, &dir, &pads)?;
     manifest.save(&ctx.paths)?;
+    for file in &plan.files {
+        let _ = fs::remove_file(dir.join(format!("{}.lock", file.path)));
+    }
+    if imported > 0 {
+        let held: u64 = plan
+            .files
+            .iter()
+            .filter(|file| in_cache(&cached.join(&file.path), file))
+            .map(|file| file.size)
+            .sum();
+        report.note(&format!(
+            "The Hugging Face cache still holds {} for {repo}; mrun no longer needs it.",
+            human_bytes(held)
+        ));
+    }
     // One manifest per revision: an earlier one under another name (repo id vs alias) goes.
     for other in recorded {
         if other.repo == manifest.repo
@@ -651,25 +710,31 @@ pub async fn download_with(ctx: &Ctx, plan: &Plan, report: &Report) -> Result<Ma
     Ok(manifest)
 }
 
-/// Disk space for what is missing (+5%), counting resumable partial files.
-fn check_disk(ctx: &Ctx, plan: &Plan, blobs: &Path) -> Result<(), CliError> {
+/// Disk space for what is missing (+5%), counting resumable partial files, plus the largest
+/// missing safetensors file once more: it briefly exists twice while it is realigned.
+fn check_disk(ctx: &Ctx, plan: &Plan, dir: &Path) -> Result<(), CliError> {
     let mut missing = 0;
     let mut partial = 0;
+    let mut largest = 0;
     for file in &plan.files {
-        if !is_file_of_size(&blobs.join(&file.blob), file.size) {
-            let have = fs::metadata(incomplete(blobs, file))
+        let on_disk = fs::metadata(dir.join(&file.path)).map_or(0, |meta| meta.len());
+        if on_disk < file.size {
+            let have = fs::metadata(incomplete(dir, file))
                 .map(|meta| meta.len())
                 .unwrap_or(0)
                 .min(file.size);
             partial += have;
-            missing += file.size - have;
+            missing += file.size - have + realign::MAX_PAD;
+            if file.path.ends_with(".safetensors") {
+                largest = largest.max(file.size);
+            }
         }
     }
     if missing == 0 {
         return Ok(());
     }
-    let needed = missing + missing / 20;
-    match ctx.free_space.or_else(|| free_space(blobs)) {
+    let needed = missing + missing / 20 + largest;
+    match ctx.free_space.or_else(|| free_space(dir)) {
         Some(free) if free < needed => {
             let kept = if partial > 0 {
                 format!("; partial downloads kept: {}", human_bytes(partial))
@@ -680,49 +745,105 @@ fn check_disk(ctx: &Ctx, plan: &Plan, blobs: &Path) -> Result<(), CliError> {
                 Code::DiskFull,
                 format!(
                     "not enough disk space in {}: {} needed, {} available{kept}",
-                    ctx.paths.hf_cache.display(),
+                    ctx.paths.models().display(),
                     human_bytes(needed),
                     human_bytes(free)
                 ),
             )
-            .hint("free disk space, or set HF_HUB_CACHE to a larger disk, and run the same 'mrun pull' again"))
+            .hint("free disk space, or set MRUN_HOME to a larger disk, and run the same 'mrun pull' again"))
         }
         _ => Ok(()),
     }
 }
 
-/// Whether a blob of the right size must be hashed before it is trusted: small git files always;
-/// LFS blobs only when a manifest recorded them with another modification time (someone wrote
-/// to them). Blobs other tools downloaded are trusted by size, as `huggingface_hub` does.
-fn needs_hash(file: &RemoteFile, blob: &Path, recorded: &[Manifest]) -> bool {
-    if !file.lfs {
-        return true;
+/// The pad of `target` when it is complete and intact: on disk `size + pad` bytes; trusted when a
+/// manifest recorded it with this modification time, hashed otherwise.
+fn present(target: &Path, file: &RemoteFile, recorded: &[Manifest]) -> Option<u32> {
+    let meta = fs::metadata(target).ok()?;
+    let pad = meta.len().checked_sub(file.size)?;
+    if pad > realign::MAX_PAD || (pad > 0 && !file.path.ends_with(".safetensors")) {
+        return None;
     }
-    let mtime = fs::metadata(blob).map_or(0, |meta| verify::mtime_ns(&meta));
-    recorded
+    let pad = pad as u32;
+    let mtime = verify::mtime_ns(&meta);
+    let known = recorded
         .iter()
         .flat_map(|manifest| &manifest.files)
-        .any(|known| known.sha256 == file.blob && known.mtime_ns != mtime)
+        .any(|known| known.path == file.path && known.size == file.size && known.mtime_ns == mtime);
+    let hash = if !file.lfs {
+        git_sha1_file(target)
+    } else if known {
+        return Some(pad);
+    } else {
+        realign::original_sha256(target, pad)
+    };
+    hash.is_ok_and(|hash| hash == file.blob).then_some(pad)
 }
 
-fn manifest(ctx: &Ctx, plan: &Plan, blobs: &Path, snapshot: &Path) -> Result<Manifest, CliError> {
+/// Whether the Hugging Face cache holds `file` at `source` (a snapshot link): an LFS file of the
+/// right size whose snapshot link names its sha256 (`../../blobs/<sha256>`, trusted by size as
+/// `huggingface_hub` does; newer versions link that blob on into a shared store under another
+/// name), or a small file with the right git blob id.
+fn in_cache(source: &Path, file: &RemoteFile) -> bool {
+    let Ok(content) = fs::canonicalize(source) else {
+        return false;
+    };
+    if !is_file_of_size(&content, file.size) {
+        return false;
+    }
+    if file.lfs {
+        fs::read_link(source).is_ok_and(|blob| {
+            blob.file_name()
+                .is_some_and(|name| name == file.blob.as_str())
+        })
+    } else {
+        git_sha1_file(&content).is_ok_and(|hash| hash == file.blob)
+    }
+}
+
+/// Puts the verified `source` at `target`, realigned when it is a safetensors file that needs it,
+/// and returns the pad. A downloaded `source` (`owned`) is moved or removed; a cached one is
+/// only read.
+fn place(source: &Path, target: &Path, file: &RemoteFile, owned: bool) -> Result<u32, CliError> {
+    let source_error = |error| write_error(error, source);
+    if owned && realign::pad_of(source, &file.path).map_err(source_error)? == 0 {
+        fs::rename(source, target).map_err(|error| write_error(error, target))?;
+        return Ok(0);
+    }
+    let temp = target.with_file_name(format!("{}.realigned", file.path));
+    let pad =
+        realign::realign(source, &temp, &file.path).map_err(|error| write_error(error, &temp))?;
+    fs::rename(&temp, target).map_err(|error| write_error(error, target))?;
+    if owned {
+        let _ = fs::remove_file(source);
+    }
+    Ok(pad)
+}
+
+fn manifest(ctx: &Ctx, plan: &Plan, dir: &Path, pads: &[u32]) -> Result<Manifest, CliError> {
     let mut entries = Vec::with_capacity(plan.files.len());
-    for file in &plan.files {
-        let blob = blobs.join(&file.blob);
-        let meta = fs::metadata(&blob).map_err(|error| write_error(error, &blob))?;
+    for (file, &pad) in plan.files.iter().zip(pads) {
+        let path = dir.join(&file.path);
+        let meta = fs::metadata(&path).map_err(|error| write_error(error, &path))?;
         let sha256 = if file.lfs {
             file.blob.clone()
         } else {
-            sha256_file(&blob).map_err(|error| write_error(error, &blob))?
+            sha256_file(&path).map_err(|error| write_error(error, &path))?
         };
         entries.push(ManifestFile {
             path: file.path.clone(),
             size: file.size,
             sha256,
             mtime_ns: verify::mtime_ns(&meta),
+            pad,
         });
     }
-    let identity = identity::identify(snapshot, &ctx.paths.identity_cache())
+    // The identity hashes the Hub's content, so realigned files keep the identity they had.
+    let known = entries
+        .iter()
+        .map(|file| (file.path.clone(), file.sha256.clone()))
+        .collect();
+    let identity = identity::identify_with(dir, &ctx.paths.identity_cache(), &known)
         .map_err(|error| CliError::new(Code::Internal, error.to_string()))?;
     let family = &plan.family;
     let model_info = family.model_info(String::new(), Vec::new());
@@ -754,7 +875,7 @@ fn gate(message: String) -> CliError {
     CliError::new(Code::UnsupportedArchitecture, message)
 }
 
-/// Hub metadata that would be unsafe to join into a cache path; nothing is downloaded.
+/// Hub metadata that would be unsafe to join into a store path; nothing is downloaded.
 fn invalid_reply(api: &str, what: &str) -> CliError {
     CliError::new(
         Code::Network,
@@ -788,7 +909,8 @@ fn remote_files(info: &RepoInfo, repo: &str) -> Result<Vec<RemoteFile>, CliError
             })
         })
         .collect();
-    // Blob ids name files in `blobs/` and `.locks/`: only hashes are accepted.
+    // Blob ids are matched against HF cache links and names joined into store paths: only
+    // hashes and plain file names are accepted.
     if let Some(file) = files
         .iter()
         .find(|file| !is_blob_id(&file.blob) || !is_file_name(&file.path))
@@ -845,8 +967,8 @@ pub fn syntax_name(syntax: SyntaxId) -> &'static str {
     }
 }
 
-fn incomplete(blobs: &Path, file: &RemoteFile) -> PathBuf {
-    blobs.join(format!("{}.incomplete", file.blob))
+fn incomplete(dir: &Path, file: &RemoteFile) -> PathBuf {
+    dir.join(format!("{}.incomplete", file.path))
 }
 
 fn is_file_of_size(path: &Path, size: u64) -> bool {
@@ -862,8 +984,8 @@ fn blob_matches(path: &Path, file: &RemoteFile) -> bool {
     hash.is_ok_and(|hash| hash == file.blob)
 }
 
-/// Takes `huggingface_hub`'s lock for a blob, waiting while another download holds it.
-async fn lock_blob(lock: &Path, path: &str) -> Result<fs::File, CliError> {
+/// Takes the lock for one file of the store, waiting while another pull holds it.
+async fn lock_file(lock: &Path, path: &str) -> Result<fs::File, CliError> {
     if let Some(dir) = lock.parent() {
         fs::create_dir_all(dir).map_err(|error| write_error(error, dir))?;
     }
@@ -894,12 +1016,12 @@ async fn fetch_with_retries(
     remote: &Remote<'_>,
     plan: &Plan,
     file: &RemoteFile,
-    blobs: &Path,
+    dir: &Path,
     report: &Report,
 ) -> Result<(), CliError> {
     let mut attempt = 0;
     loop {
-        match fetch(remote, plan, file, blobs, report).await {
+        match fetch(remote, plan, file, dir, report).await {
             Err(error) if error.code == Code::Network && attempt < RETRIES => {
                 let wait = Duration::from_secs(1 << attempt);
                 attempt += 1;
@@ -915,16 +1037,16 @@ async fn fetch_with_retries(
     }
 }
 
-/// Downloads one file into `blobs/<hash>.incomplete`, resuming what is there, verifies it and
-/// renames it into place. Partial files are kept on any failure except a hash mismatch.
+/// Downloads one file into `<file>.incomplete`, resuming what is there, and verifies it.
+/// Partial files are kept on any failure except a hash mismatch.
 async fn fetch(
     remote: &Remote<'_>,
     plan: &Plan,
     file: &RemoteFile,
-    blobs: &Path,
+    dir: &Path,
     report: &Report,
 ) -> Result<(), CliError> {
-    let partial = incomplete(blobs, file);
+    let partial = incomplete(dir, file);
     let mut offset = fs::metadata(&partial).map(|meta| meta.len()).unwrap_or(0);
     if offset > file.size {
         offset = 0;
@@ -990,8 +1112,7 @@ async fn fetch(
         )
         .hint(again()));
     }
-    let blob = blobs.join(&file.blob);
-    fs::rename(&partial, &blob).map_err(|error| write_error(error, &blob))
+    Ok(())
 }
 
 /// A write failure: a full disk is E052 (partial files are kept for resume).
@@ -1012,29 +1133,7 @@ fn write_error(error: io::Error, path: &Path) -> CliError {
         Code::Internal,
         format!("cannot write {}: {error}", path.display()),
     )
-    .hint("check permissions of the Hugging Face cache (HF_HUB_CACHE)")
-}
-
-/// `snapshots/<commit>/<path>` → `../../blobs/<blob>` (relative, as `huggingface_hub` links).
-pub fn link_blob(link: &Path, blob: &str, path: &str) -> io::Result<()> {
-    if let Some(parent) = link.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    if fs::symlink_metadata(link).is_ok() {
-        fs::remove_file(link)?;
-    }
-    let target = format!(
-        "{}../../blobs/{blob}",
-        "../".repeat(path.matches('/').count())
-    );
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link)
-    }
-    #[cfg(not(unix))]
-    {
-        fs::copy(link.parent().unwrap_or(link).join(target), link).map(drop)
-    }
+    .hint("check permissions of mrun's model store (MRUN_HOME, ~/.mrun)")
 }
 
 /// Free bytes on the disk holding `dir` (`df -Pk`), if it can be read.
@@ -1247,7 +1346,7 @@ mod tests {
     async fn blob_locks_are_exclusive() {
         let root = tempfile::tempdir().unwrap();
         let lock = root.path().join(".locks/models--org--m/abc.lock");
-        let held = lock_blob(&lock, "f").await.unwrap();
+        let held = lock_file(&lock, "f").await.unwrap();
         let other = fs::File::open(&lock).unwrap();
         assert!(matches!(
             other.try_lock(),

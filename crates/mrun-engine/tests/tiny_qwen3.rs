@@ -1,4 +1,4 @@
-//! A tiny random-weight `qwen3` checkpoint on the MLX CPU backend: chunked prefill matches
+//! A tiny random-weight `qwen3` checkpoint on the CPU: chunked prefill matches
 //! token-by-token stepping (001 T013), cancel keeps exactly the whole chunks (T019a), and moves
 //! and trims are exact (T033 attention part, SC-008).
 
@@ -6,7 +6,9 @@
 
 use mrun_engine::budget::{DeviceMemory, GIB};
 use mrun_engine::tensor::{self, Array};
-use mrun_engine::{CancelToken, Engine, EngineError, LoadOptions, MlxEngine, Sampling, TokenMask};
+use mrun_engine::{
+    CancelToken, Engine, EngineError, LoadOptions, NuvecEngine, Sampling, TokenMask,
+};
 use std::path::Path;
 
 const VOCAB: i32 = 64;
@@ -109,10 +111,10 @@ fn write_model(dir: &Path) {
     tensor::save_safetensors(&dir.join("model.safetensors"), &refs).unwrap();
 }
 
-fn engine() -> (tempfile::TempDir, MlxEngine) {
+fn engine() -> (tempfile::TempDir, NuvecEngine) {
     let dir = tempfile::tempdir().unwrap();
     write_model(dir.path());
-    let engine = MlxEngine::load(
+    let engine = NuvecEngine::load(
         dir.path(),
         LoadOptions {
             identity: "tiny".into(),
@@ -135,7 +137,7 @@ fn tokens() -> Vec<u32> {
 }
 
 /// Log-probabilities of every token at the next position after feeding `last`.
-fn next_logprobs(engine: &mut MlxEngine, last: u32) -> Vec<f32> {
+fn next_logprobs(engine: &mut NuvecEngine, last: u32) -> Vec<f32> {
     let step = engine.forward(last).unwrap();
     let mut top = engine.top_logprobs(&step, VOCAB as usize).unwrap();
     top.sort_by_key(|&(id, _)| id);
@@ -143,7 +145,7 @@ fn next_logprobs(engine: &mut MlxEngine, last: u32) -> Vec<f32> {
 }
 
 /// Prefills `tokens` in chunks ending at `boundaries` (absolute positions), as the runtime does.
-fn prefill(engine: &mut MlxEngine, tokens: &[u32], boundaries: &[u32]) -> u32 {
+fn prefill(engine: &mut NuvecEngine, tokens: &[u32], boundaries: &[u32]) -> u32 {
     let start = engine.len();
     let mut at = 0usize;
     for end in boundaries

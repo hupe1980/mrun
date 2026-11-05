@@ -2,7 +2,7 @@
 // per-start token, which arrives in the URL fragment (never sent to a server) and lives in this
 // tab's sessionStorage (contracts/ui-host.md §Security).
 
-import type { AgentEntry, AppEntry, AppState, Chat, Job, Miss, ModelEntry, Plan, Prefs, Status } from "./types";
+import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, Job, Miss, ModelEntry, Offer, Plan, Prefs, Status } from "./types";
 
 const KEY = "mrun.token";
 
@@ -76,10 +76,14 @@ export const host = {
   state: () => call<AppState>("/app/state"),
   models: (fresh = false) => listing<ModelEntry[]>("/app/models", fresh),
   agents: (fresh = false) => listing<AgentEntry[]>("/app/agents", fresh),
+  cloud: (fresh = false) => listing<CloudListing>("/app/cloud", fresh),
+  /** A repo's weights and fitting GPUs (`mrun cloud models <repo> --json`). */
+  cloudModel: (repo: string) => call<Offer>(`/app/cloud/model?repo=${encodeURIComponent(repo)}`),
   config: () => call<unknown>("/app/config"),
   modelInfo: (id: string) => call<Record<string, unknown>>(`/v1/models/${encodeURIComponent(id)}`),
-  act: (kind: string, target: string, confirm = false) =>
-    call<{ job: Job }>("/app/actions", json("POST", { kind, target, confirm })),
+  /** `secret` is `cloud-login`'s key: the host writes it to the command's stdin. */
+  act: (kind: string, target: string, confirm = false, secret?: string) =>
+    call<{ job: Job }>("/app/actions", json("POST", { kind, target, confirm, secret })),
   job: (id: string) => call<Job>(`/app/jobs/${id}`),
   cancel: (id: string) => call<Job>(`/app/jobs/${id}`, { method: "DELETE" }),
   command: (kind: string, target: string) =>

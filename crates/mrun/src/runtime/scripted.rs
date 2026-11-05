@@ -1,7 +1,7 @@
-//! `ScriptedEngine`: a deterministic [`Engine`] (contract v2) for tests on any OS, without MLX.
+//! `ScriptedEngine`: a deterministic [`Engine`] (contract v2) for tests on any OS, without a GPU.
 //!
 //! It emits a fixed token script and models what the runtime relies on. Its bookkeeping is
-//! `MlxEngine`'s own ([`Ledger`]): lazy growth, `NeedsMemory` with nothing changed, the limit, one
+//! `NuvecEngine`'s own ([`Ledger`]): lazy growth, `NeedsMemory` with nothing changed, the limit, one
 //! pending pipelined step, non-trimmable position-bound state (hybrid mode), checkpoints, moves
 //! that shrink the live allocation to `align(at)` and credit a consumed segment, and the poisoned
 //! state after a failed move. On top it models per-layer cancellation inside a chunk and the
@@ -322,7 +322,7 @@ impl ScriptedEngine {
         self.check_consumed()?;
         let before = self.ledger.capacity();
         if let Some(capacity) = growth {
-            // A growth moves the state into a larger allocation, like MLX's resize.
+            // A growth moves the state into a larger allocation, like the engine's resize.
             self.moved("growth")?;
             self.ledger.set_capacity(capacity);
             self.note_peak();

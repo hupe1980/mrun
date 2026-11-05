@@ -1,6 +1,6 @@
 //! Test support (feature `test-support`): tiny random-weight checkpoints that `mrun`'s suites
 //! (prefix cache, splicing, exactness oracle) and this crate's tests load on a real
-//! [`MlxEngine`](crate::MlxEngine).
+//! [`NuvecEngine`](crate::NuvecEngine).
 //!
 //! - [`write_tiny_qwen3`]: a dense `qwen3` (hidden 32, 2 layers, f32) with any vocabulary — 64
 //!   rows for fast tests, [`QWEN3_VOCAB`] rows so the real Qwen3 tokenizer's ids are valid;
@@ -10,7 +10,7 @@
 
 use crate::budget::{DeviceMemory, GIB, Overrides};
 use crate::tensor::{self, Array};
-use crate::{LoadOptions, MlxEngine, MlxLoadError};
+use crate::{LoadOptions, NuvecEngine, NuvecLoadError};
 use std::path::{Path, PathBuf};
 
 /// Rows of the real Qwen3 vocabulary (`vocab_size` of Qwen3-8B).
@@ -157,12 +157,12 @@ pub fn fixture(name: &str) -> PathBuf {
 }
 
 /// Loads `dir` on the CPU backend with a 16 GiB device, optionally lowering the budget.
-pub fn load_cpu(dir: &Path, budget: Option<u64>) -> Result<MlxEngine, MlxLoadError> {
+pub fn load_cpu(dir: &Path, budget: Option<u64>) -> Result<NuvecEngine, NuvecLoadError> {
     load_on(dir, budget, true)
 }
 
-fn load_on(dir: &Path, budget: Option<u64>, cpu: bool) -> Result<MlxEngine, MlxLoadError> {
-    MlxEngine::load(
+fn load_on(dir: &Path, budget: Option<u64>, cpu: bool) -> Result<NuvecEngine, NuvecLoadError> {
+    NuvecEngine::load(
         dir,
         LoadOptions {
             identity: dir.display().to_string(),

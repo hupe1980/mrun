@@ -21,6 +21,18 @@ pub struct Prefs {
     pub last_model: Option<String>,
     /// The window's last frame, written by the shell only (019 FR-010).
     pub window: Option<Frame>,
+    /// Models the user added to Models' cloud section (024).
+    pub cloud_models: Vec<CloudModel>,
+}
+
+/// A model added to the cloud section: the repo and what `pull --dry-run` said of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CloudModel {
+    pub repo: String,
+    #[serde(default)]
+    pub weights_bytes: u64,
+    #[serde(default)]
+    pub family: Option<String>,
 }
 
 /// A window frame in logical points (origin top-left, as the shell's monitors report it).
@@ -70,6 +82,7 @@ impl Default for Prefs {
             open_at_login: false,
             last_model: None,
             window: None,
+            cloud_models: Vec::new(),
         }
     }
 }
@@ -358,6 +371,23 @@ mod tests {
         let chat = serde_json::json!({});
         assert!(store.save_chat("../../etc/passwd", &chat).is_err());
         assert!(store.chat("../ui").is_none());
+    }
+
+    #[test]
+    fn added_cloud_models_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path());
+        store
+            .update(&serde_json::json!({"cloud_models": [
+                {"repo": "org/name", "weights_bytes": 30, "family": "qwen3"}
+            ]}))
+            .unwrap();
+        let kept = Store::open(dir.path()).prefs().cloud_models;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            (kept[0].repo.as_str(), kept[0].weights_bytes),
+            ("org/name", 30)
+        );
     }
 
     #[test]

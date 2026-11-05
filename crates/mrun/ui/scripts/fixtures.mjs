@@ -65,6 +65,38 @@ export const apps = [
 ];
 
 /** The file the shots attach to a chat. */
+// Cloud in the window (024): the catalog priced with a key, one added model, a start on its way.
+const gpu = (id, name, memory_gb, secure_per_hr, secure_stock, community_per_hr = null) => ({
+  id, name, memory_gb, secure_per_hr, community_per_hr, secure_stock, community_stock: community_per_hr ? "High" : null,
+});
+
+export const cloud = {
+  offers: [
+    { repo: "Qwen/Qwen3.6-35B-A3B-FP8", weights_bytes: 35.1e9, context: 262144, min_vram_gb: 48, note: "The local qwen3.6 at full precision and GPU speed.", secure: ["L40S", 0.86], community: ["L40S", 0.69], fits: ["NVIDIA L40S", "NVIDIA A100 80GB PCIe", "NVIDIA H100 80GB HBM3"] },
+    { repo: "Qwen/Qwen3-Coder-Next-FP8", weights_bytes: 81.4e9, context: 262144, min_vram_gb: 96, note: "An 80B coder; does not fit a 48 GB Mac.", secure: ["RTX PRO 6000", 1.89], community: null, fits: ["NVIDIA RTX PRO 6000 Blackwell Server Edition"] },
+  ],
+  gpus: [
+    gpu("NVIDIA L40S", "L40S", 48, 0.86, "High", 0.69),
+    gpu("NVIDIA A100 80GB PCIe", "A100 80GB", 80, 1.19, "Low"),
+    gpu("NVIDIA H100 80GB HBM3", "H100 80GB", 80, 2.69, null),
+    gpu("NVIDIA RTX PRO 6000 Blackwell Server Edition", "RTX PRO 6000", 96, 1.89, "Medium"),
+  ],
+  status: { pods: [], relay: null, key: "keychain" },
+  added: [{ repo: "org/my-finetune", weights_bytes: 30.4e9 }],
+};
+
+export const cloudJob = {
+  id: "j9", kind: "cloud-up", target: "Qwen/Qwen3.6-35B-A3B-FP8|NVIDIA L40S|secure", state: "running", error: null,
+  progress: { file: "", bytes: 12.4e9, total: 35.1e9, rate: 0, eta_s: null, step: "loading", text: "loading: 12.4 GB of weights on disk" },
+};
+
+export const podStatus = {
+  ...status,
+  model: { id: "Qwen/Qwen3.6-35B-A3B-FP8", identity: "remote", family: "remote", syntax: "remote" },
+  numerics: null, budget: null, cache: null, requests: [], finished: [], last: null,
+  pod: { id: "p1", gpu: "NVIDIA L40S", cost_per_hr: 0.86, reachable: true, phase: "ready", uptime_s: 42 * 60, spend_usd: 0.6, idle_s: 12 * 60, idle_stop_s: 1800 },
+};
+
 export const sourceFile = `pub fn parse(input: &str) -> Result<Ast, Error> {
     let mut tokens = lex(input)?.peekable();
     let first = tokens.next().unwrap();

@@ -1,5 +1,6 @@
 //! `mrun pull` against a mock hub on 127.0.0.1: metadata, the architecture gate, resume and
-//! retry, corruption, disk space, gated and missing repos, refs, locks, `HF_ENDPOINT` and the
+//! retry, corruption, disk space, gated and missing repos, the model store (realigned weights,
+//! locks, import from the Hugging Face cache, which is never written), `HF_ENDPOINT` and the
 //! manifest. No real network.
 
 use axum::body::{Body, Bytes};
@@ -22,6 +23,21 @@ use std::sync::{Arc, Mutex};
 
 const REPO: &str = "org/tiny";
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// A safetensors file of `n` bytes of `fill`, its header unpadded as MLX writes it.
+fn safetensors(fill: u8, n: usize) -> Vec<u8> {
+    let header = format!(r#"{{"w":{{"dtype":"U8","shape":[{n}],"data_offsets":[0,{n}]}}}}"#);
+    let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+    bytes.extend_from_slice(header.as_bytes());
+    bytes.extend(std::iter::repeat_n(fill, n));
+    bytes
+}
+
+/// Where the data of the safetensors file at `path` starts.
+fn data_start(path: &Path) -> u64 {
+    let bytes = fs::read(path).unwrap();
+    8 + u64::from_le_bytes(bytes[..8].try_into().unwrap())
+}
 
 fn config(model_type: &str) -> Vec<u8> {
     json!({
@@ -58,7 +74,7 @@ impl Mock {
                 ("config.json".into(), config(model_type), false),
                 ("tokenizer.json".into(), b"{}".to_vec(), false),
                 ("README.md".into(), b"# tiny".to_vec(), false),
-                ("model.safetensors".into(), vec![7; 64 * 1024], true),
+                ("model.safetensors".into(), safetensors(7, 64 * 1024), true),
             ],
             ..Self::default()
         }
@@ -258,18 +274,20 @@ async fn pull_downloads_verifies_links_and_records_a_manifest() {
     assert!(log[1].contains("/config.json"));
     assert!(!log.iter().any(|line| line.contains("README")));
 
-    // HF cache layout: snapshot symlinks into blobs named by hash, refs/main = commit.
-    let repo = ctx.paths.repo_dir(REPO);
-    let weights = repo
-        .join("snapshots")
-        .join(COMMIT)
-        .join("model.safetensors");
-    let target = fs::read_link(&weights).unwrap();
+    // mrun's store: the weights realigned for mapping, their pad recorded; the Hugging Face
+    // cache is not written.
+    let dir = ctx.paths.models().join("org--tiny").join(COMMIT);
+    assert_eq!(manifest.dir(&ctx.paths), dir);
+    let weights = dir.join("model.safetensors");
+    assert_eq!(data_start(&weights) % 16, 0);
+    let pad = manifest.files[2].pad;
+    assert!(pad > 0, "MLX's unpadded header needs a pad");
     assert_eq!(
-        target,
-        Path::new("../../blobs").join(sha256_bytes(&vec![7; 64 * 1024]))
+        fs::metadata(&weights).unwrap().len(),
+        safetensors(7, 64 * 1024).len() as u64 + u64::from(pad)
     );
-    assert_eq!(fs::read_to_string(repo.join("refs/main")).unwrap(), COMMIT);
+    assert_eq!(fs::read(dir.join("config.json")).unwrap(), config("qwen3"));
+    assert!(!ctx.paths.hf_cache.exists());
     assert!(ctx.paths.manifests().join("org--tiny.toml").exists());
 
     let rows = pulled_rows(&ctx);
@@ -278,32 +296,125 @@ async fn pull_downloads_verifies_links_and_records_a_manifest() {
     assert_eq!(rows[0].fits, Some(true));
     assert_eq!(rows[0].max_context, Some(4096));
 
-    // Already in the cache: verified and recorded without downloading again.
+    // Already in the store: verified and recorded without downloading again.
     let requests = mock.log().len();
     pull_tiny(&ctx).await.unwrap();
     let again = &mock.log()[requests..];
     assert_eq!(again.len(), 2, "metadata and config.json only: {again:?}");
 
-    // Blobs are locked like huggingface_hub does it.
-    let lock = ctx
-        .paths
-        .hf_cache
-        .join(".locks/models--org--tiny")
-        .join(format!("{}.lock", sha256_bytes(&vec![7; 64 * 1024])));
-    assert!(lock.exists(), "{}", lock.display());
+    // Each file is locked while it is written; no lock is left behind.
+    assert!(!dir.join("model.safetensors.lock").exists());
 }
 
 #[tokio::test]
-async fn a_commit_is_not_written_as_a_ref() {
+async fn a_pull_by_commit_lands_in_the_store() {
     let mock = Arc::new(Mock::new("qwen3"));
     let url = serve(mock.clone()).await;
     let root = tempfile::tempdir().unwrap();
     let ctx = ctx(root.path(), &url);
-    pull(&ctx, &format!("{REPO}@{COMMIT}"), &mut never)
+    let manifest = pull(&ctx, &format!("{REPO}@{COMMIT}"), &mut never)
         .await
         .unwrap();
-    let refs = ctx.paths.repo_dir(REPO).join("refs");
-    assert!(!refs.exists(), "no refs/<commit>");
+    assert!(manifest.dir(&ctx.paths).join("config.json").exists());
+    assert!(!ctx.paths.hf_cache.exists());
+}
+
+/// The mock's files in a Hugging Face cache layout: blobs named by hash, snapshot links to them.
+fn cache_like_huggingface_hub(paths: &Paths, mock: &Mock) {
+    let repo = paths.repo_dir(REPO);
+    let snapshot = repo.join("snapshots").join(COMMIT);
+    fs::create_dir_all(repo.join("blobs")).unwrap();
+    fs::create_dir_all(&snapshot).unwrap();
+    for (name, content, lfs) in &mock.files {
+        let blob = if *lfs {
+            sha256_bytes(content)
+        } else {
+            git_blob_id(content)
+        };
+        fs::write(repo.join("blobs").join(&blob), content).unwrap();
+        std::os::unix::fs::symlink(Path::new("../../blobs").join(&blob), snapshot.join(name))
+            .unwrap();
+    }
+}
+
+/// Every file under `dir` with its bytes and modification time.
+fn snapshot_of(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>, std::time::SystemTime)> {
+    let mut files: Vec<_> = files_under(dir)
+        .into_iter()
+        .map(|path| {
+            let meta = fs::metadata(&path).unwrap();
+            (
+                path.clone(),
+                fs::read(&path).unwrap(),
+                meta.modified().unwrap(),
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// 022 FR-013: a model the Hugging Face cache holds is imported without downloading its files,
+/// realigned into the store, and the cache is left byte for byte as it was.
+#[tokio::test]
+async fn a_model_in_the_hugging_face_cache_is_imported_without_a_download() {
+    let mock = Arc::new(Mock::new("qwen3"));
+    let url = serve(mock.clone()).await;
+    let root = tempfile::tempdir().unwrap();
+    let ctx = ctx(root.path(), &url);
+    cache_like_huggingface_hub(&ctx.paths, &mock);
+    let before = snapshot_of(&ctx.paths.hf_cache);
+
+    let manifest = pull_tiny(&ctx).await.unwrap();
+    let fetched: Vec<_> = mock
+        .log()
+        .into_iter()
+        .filter(|line| line.contains("/resolve/"))
+        .collect();
+    assert_eq!(fetched.len(), 1, "only the gate's config.json: {fetched:?}");
+    assert_eq!(
+        snapshot_of(&ctx.paths.hf_cache),
+        before,
+        "the cache is untouched"
+    );
+    let weights = manifest.dir(&ctx.paths).join("model.safetensors");
+    assert_eq!(data_start(&weights) % 16, 0);
+    assert_eq!(verify_model(&ctx.paths, REPO).unwrap(), 3);
+
+    // Newer huggingface_hub links the repository's blob on into a shared store whose file has
+    // another name: still imported.
+    let root = tempfile::tempdir().unwrap();
+    let ctx = self::ctx(root.path(), &url);
+    cache_like_huggingface_hub(&ctx.paths, &mock);
+    let sha = sha256_bytes(&mock.files[3].1);
+    let blob = ctx.paths.repo_dir(REPO).join("blobs").join(&sha);
+    let shared = ctx.paths.hf_cache.join("blobs/xx");
+    fs::create_dir_all(&shared).unwrap();
+    fs::rename(&blob, shared.join("other-name")).unwrap();
+    std::os::unix::fs::symlink(shared.join("other-name"), &blob).unwrap();
+    let before = mock.weight_requests();
+    pull_tiny(&ctx).await.unwrap();
+    assert_eq!(
+        mock.weight_requests(),
+        before,
+        "imported through the shared store"
+    );
+    assert_eq!(verify_model(&ctx.paths, REPO).unwrap(), 3);
+
+    // A cached blob that does not match (here: the wrong size) is downloaded instead.
+    let root = tempfile::tempdir().unwrap();
+    let ctx = self::ctx(root.path(), &url);
+    cache_like_huggingface_hub(&ctx.paths, &mock);
+    let blob = ctx
+        .paths
+        .repo_dir(REPO)
+        .join("blobs")
+        .join(sha256_bytes(&mock.files[3].1));
+    fs::write(&blob, b"short").unwrap();
+    let before = mock.weight_requests();
+    pull_tiny(&ctx).await.unwrap();
+    assert_eq!(mock.weight_requests(), before + 1);
+    assert_eq!(verify_model(&ctx.paths, REPO).unwrap(), 3);
 }
 
 /// Rows of pulled models (`ls` also lists the curated aliases).
@@ -332,7 +443,7 @@ async fn unsupported_architecture_is_refused_before_any_weight() {
         "{text}"
     );
     assert_eq!(mock.weight_requests(), 0);
-    assert!(!ctx.paths.repo_dir(REPO).join("blobs").exists());
+    assert!(!ctx.paths.models().exists());
     assert!(pulled_rows(&ctx).is_empty(), "no manifest written");
 }
 
@@ -364,9 +475,8 @@ async fn an_interrupted_download_resumes_without_refetching_completed_bytes() {
 
     // The cut is retried within the same pull, from where it stopped.
     pull_tiny(&ctx).await.unwrap();
-    let blobs = ctx.paths.repo_dir(REPO).join("blobs");
-    let sha = sha256_bytes(&vec![7; 64 * 1024]);
-    assert!(!blobs.join(format!("{sha}.incomplete")).exists());
+    let dir = ctx.paths.models().join("org--tiny").join(COMMIT);
+    assert!(!dir.join("model.safetensors.incomplete").exists());
     let requests = mock
         .log()
         .into_iter()
@@ -374,7 +484,7 @@ async fn an_interrupted_download_resumes_without_refetching_completed_bytes() {
         .collect::<Vec<_>>();
     assert_eq!(requests.len(), 2);
     assert!(
-        requests[1].ends_with(&format!("bytes={}-", 32 * 1024)),
+        requests[1].ends_with(&format!("bytes={}-", mock.files[3].1.len() / 2)),
         "{requests:?}"
     );
     assert_eq!(verify_model(&ctx.paths, REPO).unwrap(), 3);
@@ -397,8 +507,8 @@ async fn a_download_with_the_wrong_hash_is_removed_and_fetched_again() {
         2,
         "fetched again after the mismatch"
     );
-    let blobs = ctx.paths.repo_dir(REPO).join("blobs");
-    assert!(!fs::read_dir(&blobs).unwrap().any(|entry| {
+    let dir = ctx.paths.models().join("org--tiny").join(COMMIT);
+    assert!(!fs::read_dir(&dir).unwrap().any(|entry| {
         entry
             .unwrap()
             .file_name()
@@ -416,7 +526,7 @@ async fn corruption_is_repaired_by_pulling_again() {
     let ctx = ctx(root.path(), &url);
     let manifest = pull_tiny(&ctx).await.unwrap();
 
-    let weights = manifest.snapshot_dir(&ctx.paths).join("model.safetensors");
+    let weights = manifest.dir(&ctx.paths).join("model.safetensors");
     let mut content = fs::read(&weights).unwrap();
     content[100] ^= 1;
     fs::write(&weights, &content).unwrap();
@@ -439,20 +549,23 @@ async fn corruption_is_repaired_by_pulling_again() {
     assert!(mrun::hub::resolve(&ctx.paths, REPO).is_ok());
 }
 
-/// T012: a present LFS blob whose size and modification time match the manifest is trusted
-/// without hashing; one whose time changed is hashed again, alone, and its time is refreshed
-/// when it matches.
+/// T012: a present file whose size and modification time match the manifest is trusted without
+/// hashing; one whose time changed is hashed again, alone, and its time is refreshed when it
+/// matches.
 #[tokio::test]
 async fn present_blobs_are_hashed_only_when_their_time_changed() {
     let mut mock = Mock::new("qwen3");
-    mock.files
-        .push(("model-2.safetensors".into(), vec![9; 32 * 1024], true));
+    mock.files.push((
+        "model-2.safetensors".into(),
+        safetensors(9, 32 * 1024),
+        true,
+    ));
     let mock = Arc::new(mock);
     let url = serve(mock.clone()).await;
     let root = tempfile::tempdir().unwrap();
     let ctx = ctx(root.path(), &url);
     let manifest = pull_tiny(&ctx).await.unwrap();
-    let snapshot = manifest.snapshot_dir(&ctx.paths);
+    let snapshot = manifest.dir(&ctx.paths);
     let recorded = |manifest: &Manifest, path: &str| {
         manifest
             .files
@@ -474,7 +587,8 @@ async fn present_blobs_are_hashed_only_when_their_time_changed() {
     let first = snapshot.join("model.safetensors");
     let time = fs::metadata(&first).unwrap().modified().unwrap();
     let mut bytes = fs::read(&first).unwrap();
-    bytes[10] ^= 1;
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
     fs::write(&first, &bytes).unwrap();
     set_mtime(&first, time);
     let before = mock.weight_requests();

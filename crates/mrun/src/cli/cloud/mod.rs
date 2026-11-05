@@ -14,6 +14,7 @@
 //! tells `mrun launch` to wait for the relay instead of offering a local model.
 
 pub mod catalog;
+pub mod keychain;
 
 use crate::cli::server::{self, Health};
 use crate::cli::{confirm, info};
@@ -57,10 +58,14 @@ pub enum CloudCommand {
     Status(StatusArgs),
     /// GPU types with VRAM and prices.
     Gpus(ListArgs),
-    /// Curated models with the smallest GPU each fits on.
-    Models(ListArgs),
+    /// Curated models with the smallest GPU each fits on, or one Hugging Face repo's.
+    Models(ModelsArgs),
     /// The running pod's full log (vLLM's output and the agent's lines).
     Logs(LogsArgs),
+    /// Store the RunPod API key in the macOS Keychain (read from stdin, or asked for).
+    Login,
+    /// Remove the stored RunPod API key from the Keychain.
+    Logout,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -128,6 +133,9 @@ pub struct UpArgs {
     /// Print the pod's full log (vLLM's output) live while it starts.
     #[arg(long, short = 'v')]
     pub verbose: bool,
+    /// Progress as JSON lines on stdout (`step` events, then `done`); needs `--yes`.
+    #[arg(long)]
+    pub json: bool,
     /// Where the pod fetches the agent (a Linux build of mrun) [default: this version's
     /// release asset].
     #[arg(long, requires = "agent_sha256", conflicts_with = "agent_file")]
@@ -174,6 +182,14 @@ pub struct StatusArgs {
 }
 
 #[derive(Debug, Clone, clap::Args)]
+pub struct ModelsArgs {
+    /// A Hugging Face repo outside the list: its weights and the GPUs it fits.
+    pub repo: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, clap::Args)]
 pub struct ListArgs {
     #[arg(long)]
     pub json: bool,
@@ -195,18 +211,97 @@ pub fn run(command: CloudCommand) -> u8 {
             CloudCommand::Gpus(args) => gpus(args).await,
             CloudCommand::Models(args) => models(args).await,
             CloudCommand::Logs(args) => logs(args).await,
+            CloudCommand::Login => login().await,
+            CloudCommand::Logout => logout(),
         }
     });
     crate::cli::exit(result)
 }
 
-/// The account key (environment, else `./.env`).
+/// `cloud up --json`: progress events on stdout, and the weights' total for `loading`.
+static EVENTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static WEIGHTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Prints one JSON event line when `--json` asked for them.
+fn event(value: Value) {
+    if EVENTS.load(std::sync::atomic::Ordering::Relaxed) {
+        println!("{value}");
+    }
+}
+
+/// The account key: `RUNPOD_API_KEY`, else `./.env`, else the Keychain (`mrun cloud login`).
 fn key() -> Result<ApiKey, CliError> {
     let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    ApiKey::from_env_or_dotenv(&dir).ok_or_else(|| {
-        CliError::new(Code::InvalidArguments, "RUNPOD_API_KEY is not set")
-            .hint("create a key at https://console.runpod.io/user/settings and export RUNPOD_API_KEY (or put it in ./.env)")
-    })
+    ApiKey::from_env_or_dotenv(&dir)
+        .or_else(|| keychain::find().map(ApiKey::new))
+        .ok_or_else(|| {
+            CliError::new(Code::InvalidArguments, "no RunPod API key")
+                .hint("create a key at https://console.runpod.io/user/settings, then run 'mrun cloud login' (or export RUNPOD_API_KEY)")
+        })
+}
+
+/// Where [`key`] finds the key: `env`, `dotenv`, `keychain`, or none.
+fn key_source() -> Option<&'static str> {
+    let set = |v: Option<String>| v.is_some_and(|k| !k.trim().is_empty());
+    if set(std::env::var(mrun_runpod::KEY_VARIABLE).ok()) {
+        return Some("env");
+    }
+    let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if ApiKey::from_env_or_dotenv(&dir).is_some() {
+        return Some("dotenv");
+    }
+    keychain::find().map(|_| "keychain")
+}
+
+/// `mrun cloud login`: the key from stdin (or a hidden prompt), checked with RunPod, stored.
+async fn login() -> Result<(), CliError> {
+    let key = if std::io::stdin().is_terminal() {
+        eprint!("RunPod API key (input hidden): ");
+        let echo = |on: bool| {
+            let _ = std::process::Command::new("stty")
+                .arg(if on { "echo" } else { "-echo" })
+                .stdin(std::process::Stdio::inherit())
+                .status();
+        };
+        echo(false);
+        let mut line = String::new();
+        let read = std::io::stdin().read_line(&mut line);
+        echo(true);
+        eprintln!();
+        read.map_err(|e| CliError::new(Code::Internal, e.to_string()))?;
+        line
+    } else {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+            .map_err(|e| CliError::new(Code::Internal, e.to_string()))?;
+        text
+    };
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        return Err(CliError::new(Code::InvalidArguments, "no key given").hint(
+            "create one at https://console.runpod.io/user/settings (read and write access)",
+        ));
+    }
+    let client = Client::new(ApiKey::new(key.clone())).map_err(api_error)?;
+    client.gpu_types().await.map_err(|error| match error {
+        mrun_runpod::Error::Unauthorized { .. } => {
+            CliError::new(Code::InvalidArguments, "RunPod refused this key")
+                .hint("copy the key again from https://console.runpod.io/user/settings (read and write access)")
+        }
+        other => api_error(other),
+    })?;
+    keychain::store(&key).map_err(|e| CliError::new(Code::Internal, e))?;
+    eprintln!("key stored in the Keychain; `mrun cloud` uses it when RUNPOD_API_KEY is not set");
+    Ok(())
+}
+
+/// `mrun cloud logout`: removes the stored key.
+fn logout() -> Result<(), CliError> {
+    match keychain::delete().map_err(|e| CliError::new(Code::Internal, e))? {
+        true => eprintln!("removed the RunPod key from the Keychain"),
+        false => eprintln!("no RunPod key in the Keychain"),
+    }
+    Ok(())
 }
 
 fn client() -> Result<Client, CliError> {
@@ -641,8 +736,17 @@ fn consent_lines(c: &Consent, from_file: &dyn Fn(&str) -> bool) -> Vec<String> {
 }
 
 async fn up(args: UpArgs) -> Result<(), CliError> {
+    if args.json && !args.yes {
+        return Err(CliError::new(Code::InvalidArguments, "--json needs --yes")
+            .hint("JSON output cannot ask for confirmation"));
+    }
+    EVENTS.store(args.json, std::sync::atomic::Ordering::Relaxed);
     let client = client()?;
     let (offer, max_model_len, tool_parser, reasoning_parser) = offer_for(&args);
+    WEIGHTS.store(
+        offer.map_or(0, |o| o.weights_bytes),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let model = args.model.clone();
 
     // One pod per account (v1): attach to the same model, refuse another.
@@ -1061,6 +1165,24 @@ async fn wait_ready(
     let say = |said: &mut String, line: String| {
         if *said != line {
             info(&format!("  [{}] {line}", elapsed()));
+            let step = if line.starts_with("ready") {
+                "ready"
+            } else if line.starts_with("loading") {
+                "loading"
+            } else if line.starts_with("agent up") {
+                "agent"
+            } else {
+                "pod"
+            };
+            let total = WEIGHTS.load(std::sync::atomic::Ordering::Relaxed);
+            let mut value = json!({"event": "step", "step": step, "text": line});
+            if step == "loading" {
+                value["bytes"] = json!(loaded_bytes(&line));
+                if total > 0 {
+                    value["total"] = json!(total);
+                }
+            }
+            event(value);
             *said = line;
         }
     };
@@ -1553,6 +1675,14 @@ fn pod_env(spec: &PodEnv) -> BTreeMap<String, String> {
 }
 
 /// Starts `mrun serve --relay` in the background with the token in its environment only.
+/// The bytes in a `loading: 12.4 GB of weights on disk` line.
+fn loaded_bytes(line: &str) -> u64 {
+    line.split_whitespace()
+        .nth(1)
+        .and_then(|gb| gb.parse::<f64>().ok())
+        .map_or(0, |gb| (gb * 1e9) as u64)
+}
+
 fn start_relay(
     args: &UpArgs,
     pod: &Pod,
@@ -1601,6 +1731,10 @@ fn start_relay(
         pod.id,
         human_duration(args.idle_stop.as_secs())
     ));
+    event(
+        json!({"event": "done", "model": model, "gpu": gpu, "cost_per_hr": price,
+        "pod": pod.id, "idle_stop_s": args.idle_stop.as_secs()}),
+    );
     Ok(())
 }
 
@@ -1654,6 +1788,12 @@ async fn down(args: DownArgs) -> Result<(), CliError> {
 }
 
 async fn status(args: StatusArgs) -> Result<(), CliError> {
+    // Without a key there are no pods to list; the window still needs the answer.
+    if args.json && key().is_err() {
+        let relay = local_server(args.port).filter(|u| !u.is_empty());
+        println!("{}", json!({"pods": [], "relay": relay, "key": null}));
+        return Ok(());
+    }
     let client = client()?;
     let pods = mrun_pods(&client).await?;
     let http = http();
@@ -1684,7 +1824,10 @@ async fn status(args: StatusArgs) -> Result<(), CliError> {
     if args.json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&json!({"pods": out, "relay": relay})).unwrap_or_default()
+            serde_json::to_string_pretty(
+                &json!({"pods": out, "relay": relay, "key": key_source()})
+            )
+            .unwrap_or_default()
         );
         return Ok(());
     }
@@ -1791,7 +1934,62 @@ async fn gpus(args: ListArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn models(args: ListArgs) -> Result<(), CliError> {
+/// GPU memory a model outside the catalog needs: its weights, a fifth more, and 4 GB for
+/// context and vLLM (024; the page's `needGb`).
+fn need_gb(weights_bytes: u64) -> f64 {
+    (weights_bytes as f64 / 1e9 * 1.2 + 4.0).ceil()
+}
+
+/// `cloud models <repo>`: the catalog's row, else the repo's weights from the Hub and the GPUs
+/// with enough memory.
+async fn one_model(repo: &str, gpus: &[GpuType], json_out: bool) -> Result<(), CliError> {
+    let (weights, need, context, note, fits): (u64, f64, Option<u32>, &str, Vec<&GpuType>) =
+        match catalog::find(repo) {
+            Some(o) => (
+                o.weights_bytes,
+                o.min_vram_gib().ceil(),
+                Some(o.max_model_len),
+                o.note,
+                gpus.iter().filter(|g| g.is_nvidia() && o.fits(g)).collect(),
+            ),
+            None => {
+                let weights =
+                    crate::hub::download::weights_bytes(&crate::hub::Ctx::from_env(), repo).await?;
+                let need = need_gb(weights);
+                let fits = gpus
+                    .iter()
+                    .filter(|g| g.is_nvidia() && f64::from(g.memory_gb) >= need)
+                    .collect();
+                (weights, need, None, "", fits)
+            }
+        };
+    let cheapest = |cloud: CloudType| {
+        fits.iter()
+            .filter_map(|g| g.price(cloud).map(|p| (g.display_name.clone(), p)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    };
+    let (secure, community) = (cheapest(CloudType::Secure), cheapest(CloudType::Community));
+    if json_out {
+        let ids: Vec<&str> = fits.iter().map(|g| g.id.as_str()).collect();
+        println!(
+            "{}",
+            json!({"repo": repo, "weights_bytes": weights, "context": context,
+                "min_vram_gb": need, "secure": secure, "community": community,
+                "note": note, "fits": ids})
+        );
+        return Ok(());
+    }
+    let price = secure
+        .or(community)
+        .map_or("—".to_string(), |(g, p)| format!("{g} ${p:.2}/h"));
+    println!(
+        "{repo}\n  {:.1} GB weights, needs ≥ {need:.0} GB; cheapest: {price}",
+        weights as f64 / 1e9
+    );
+    Ok(())
+}
+
+async fn models(args: ModelsArgs) -> Result<(), CliError> {
     // Prices need the key; without one the list shows VRAM only.
     let gpus = match key() {
         Ok(key) => match Client::new(key) {
@@ -1800,6 +1998,9 @@ async fn models(args: ListArgs) -> Result<(), CliError> {
         },
         Err(_) => Vec::new(),
     };
+    if let Some(repo) = &args.repo {
+        return one_model(repo, &gpus, args.json).await;
+    }
     let cheapest = |offer: &Offer| {
         let secure = catalog::fitting(offer, &gpus, CloudType::Secure);
         let community = catalog::fitting(offer, &gpus, CloudType::Community);
@@ -1813,10 +2014,16 @@ async fn models(args: ListArgs) -> Result<(), CliError> {
             .iter()
             .map(|o| {
                 let (secure, community) = cheapest(o);
+                // The GPU types it fits, for the window's choice (024).
+                let fits: Vec<&str> = gpus
+                    .iter()
+                    .filter(|g| g.is_nvidia() && o.fits(g))
+                    .map(|g| g.id.as_str())
+                    .collect();
                 json!({"repo": o.repo, "weights_bytes": o.weights_bytes,
                     "context": o.max_model_len, "min_vram_gb": o.min_vram_gib().ceil(),
                     "tool_parser": o.tool_parser, "reasoning_parser": o.reasoning_parser,
-                    "secure": secure, "community": community, "note": o.note})
+                    "secure": secure, "community": community, "note": o.note, "fits": fits})
             })
             .collect();
         println!(
@@ -1870,6 +2077,20 @@ async fn drop_created_volume(client: &Client, id: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_added_model_needs_its_weights_a_fifth_and_4_gb() {
+        assert_eq!(need_gb(30_000_000_000), 40.0);
+    }
+
+    #[test]
+    fn loading_lines_give_their_bytes() {
+        assert_eq!(
+            loaded_bytes("loading: 12.4 GB of weights on disk"),
+            12_400_000_000
+        );
+        assert_eq!(loaded_bytes("agent up; vLLM starting"), 0);
+    }
 
     fn consent() -> Consent<'static> {
         Consent {
@@ -2191,6 +2412,7 @@ mod tests {
             any_cloud: false,
             keep_on_error: false,
             verbose: false,
+            json: false,
             agent_url: None,
             agent_sha256: None,
             agent_file: None,

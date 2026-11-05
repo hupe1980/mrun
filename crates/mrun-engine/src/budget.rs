@@ -8,9 +8,9 @@
 //! [`margin`]. mrun's own accounting enforces the budget: every allocation of sequence state is
 //! checked against `state_capacity_bytes`. Scratch terms that grow with the position are taken at
 //! the capacity-limited depth, not at the family's maximum position: capacity and scratch are
-//! solved together ([`with_state_capacity`]). Pure arithmetic over [`DeviceMemory`]; the MLX
-//! engine and the hub fill it from MLX `device_info` (Metal's `recommendedMaxWorkingSetSize`)
-//! and `vm_stat`; only without a Metal device does the hub estimate the working set
+//! solved together ([`with_state_capacity`]). Pure arithmetic over [`DeviceMemory`]; the engine
+//! and the hub fill it from nuvec's `device_info` (Metal's `recommendedMaxWorkingSetSize`) and
+//! `vm_stat`; only without a Metal device does the hub estimate the working set
 //! (`DeviceMemory::estimated`).
 
 pub use crate::engine::Binding;
@@ -39,7 +39,7 @@ pub struct DeviceMemory {
     /// then follows D048.
     pub available: Option<u64>,
     /// The working set is an estimate, not the Metal device's own figure (no Metal device:
-    /// Linux, or a build without MLX); outputs say so.
+    /// Linux, or a build without the engine); outputs say so.
     pub estimated: bool,
 }
 
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn budget_is_the_working_set_below_the_system_guard() {
-        // 16 GB: the working set (⅔) binds; 48 GB as MLX reports it: 37.4 GiB.
+        // 16 GB: the working set (⅔) binds; 48 GB as Metal reports it: 37.4 GiB.
         let small = plan(mac(16, 0.67), Overrides::default()).unwrap();
         assert_eq!(small.budget, mac(16, 0.67).recommended_working_set);
         let m4_pro = DeviceMemory {

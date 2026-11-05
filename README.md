@@ -1,7 +1,7 @@
 # mrun
 
 A local inference server for coding agents on Apple Silicon (M1 and later), written in Rust on
-Apple's MLX.
+nuvec, a pure-Rust port of Apple's MLX.
 
 Coding agents resend tens of thousands of tokens of instructions, tool schemas and history on
 every turn. mrun computes that context once, reuses it exactly across turns, subagents and tool
@@ -18,8 +18,8 @@ the Anthropic Messages, OpenAI Chat Completions and OpenAI Responses APIs on `12
 
 ## Status
 
-**In development; 0.1 is not released.** Build from source to try it. mrun is qualified on one
-Mac (M4 Pro, 48 GB); smaller Macs are simulated there with `--budget-gib`.
+**0.1**, the first release: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
+(M4 Pro, 48 GB); smaller Macs are simulated there with `--budget-gib`.
 
 - **Models**: `qwen3.6` (Qwen3.6-35B-A3B 4-bit), the default wherever it leaves at least 64K
   tokens of context, and `qwen3.5` (Qwen3.5-9B 4-bit, a preview) on smaller Macs; also Qwen3-8B
@@ -28,12 +28,13 @@ Mac (M4 Pro, 48 GB); smaller Macs are simulated there with `--budget-gib`.
   cancellation latency are on [Benchmarks](https://hupe1980.github.io/mrun/docs/benchmarks/).
   The client gate (Claude Code, Codex and OpenCode on scripted tasks) is on
   [Clients](https://hupe1980.github.io/mrun/docs/clients/#client-gate).
-- **Before 0.1**: see the [roadmap](https://hupe1980.github.io/mrun/docs/roadmap/). Results from
-  other Macs are welcome: [Hardware reports](CONTRIBUTING.md#hardware-reports).
+- **Not yet measured**: a full comparison against llama.cpp, Ollama, oMLX and mlx-lm, and
+  cancellation on M1. Results from other Macs are welcome:
+  [Hardware reports](CONTRIBUTING.md#hardware-reports).
 
 ## What mrun claims
 
-Each claim is a release gate on the target Mac:
+Each is measured on the target Mac ([Benchmarks](https://hupe1980.github.io/mrun/docs/benchmarks/)):
 
 - **Exact reuse, proven**: a request served from the cache gets bit-identical output to
   recomputing its prompt with the same chunk plan.
@@ -45,21 +46,17 @@ Each claim is a release gate on the target Mac:
 - **A memory budget that holds**: weights, state, cache and scratch stay inside one budget
   measured at startup, including what other apps hold. Requests that cannot fit are refused up
   front with the numbers.
-- **An independent benchmark**: `mrun bench` replays whole agent sessions against other servers
-  and publishes the comparison whatever it shows.
+- **An honest benchmark**: `mrun bench` replays whole agent sessions against other servers;
+  published results include every cell mrun loses.
 
 mrun does not claim the fastest decode.
 
 ## Quick start
 
-Requirements: an Apple Silicon Mac, Xcode with the Metal toolchain
-(`xcodebuild -downloadComponent MetalToolchain` on Xcode 26), CMake and the Rust toolchain pinned
-in `rust-toolchain.toml`. The first build compiles MLX from sha256-pinned sources (a few minutes
-to 40 minutes, depending on the machine) and caches it.
+An Apple Silicon Mac with macOS 15 or later:
 
 ```sh
-git clone https://github.com/hupe1980/mrun && cd mrun
-cargo install --path crates/mrun     # or: cargo build --release (binary in target/release/mrun)
+brew install hupe1980/tap/mrun
 
 mrun ls                      # the aliases, the context each leaves here and this Mac's default
 mrun pull qwen3.6            # or qwen3.5, where qwen3.6 leaves less than 64K tokens
@@ -69,8 +66,11 @@ mrun launch claude-code      # or: codex, opencode
 mrun ui                      # the window: status, chat, models, agents
 ```
 
+To build from source instead (Rust and Xcode's Metal toolchain): `cargo install mrun`, or see
+[Getting started](https://hupe1980.github.io/mrun/docs/getting-started/).
+
 `mrun launch` also offers to pull this Mac's default model and start the server. The binary
-embeds the MLX Metal library, so no files are needed next to it. `mrun doctor` checks the
+embeds its Metal kernels, so no files are needed next to it. `mrun doctor` checks the
 machine, the server and the clients.
 
 ## The window
@@ -96,7 +96,8 @@ See [The mrun window](https://hupe1980.github.io/mrun/docs/ui/). Click a screens
 For models that don't fit a Mac, `mrun cloud up --model <repo>` rents a GPU on RunPod, serves the
 model there with vLLM and relays it on `127.0.0.1:8484`, so `launch` and `connect` work as usual.
 **This sends your prompts and code to RunPod and costs money by the hour.** mrun shows the price
-and asks first, the pod stops itself when idle, and `mrun cloud down` terminates it. See
+and asks first, the pod stops itself when idle, and `mrun cloud down` terminates it. In the
+window it is Models → *On a rented GPU*. See
 [Remote GPU](https://hupe1980.github.io/mrun/docs/cloud/).
 
 ## Configuration
@@ -110,16 +111,9 @@ whose keys are the flag names. `mrun config show` prints every setting and where
 ## Development
 
 ```sh
-cargo test --workspace --no-default-features   # engine-agnostic tests (Linux or macOS, fast)
-cargo test --workspace                         # plus the MLX engine
-MLX_SYS_METAL=0 cargo test --workspace         # CPU-only MLX build (no Xcode; far too slow for real models)
-cargo test --workspace --no-default-features --features mrun/nuvec   # the nuvec backend instead of MLX
+cargo test --workspace                         # on a Mac: every suite, CPU and GPU
+cargo test --workspace --no-default-features   # without the engine (Linux, CI): the rest
 ```
-
-The MLX build is cached once per configuration in `MLX_SYS_CACHE_DIR` (default
-`~/Library/Caches/mrun-mlx-sys` on macOS) and shared by debug, release, test builds and
-worktrees; it survives `cargo clean`. Other build variables are listed in
-[crates/mrun-mlx-sys/README.md](crates/mrun-mlx-sys/README.md).
 
 The window's page lives in `crates/mrun/ui` (Svelte, built to `ui/dist`, which is committed and
 embedded at build time, so Rust builds need no Node). After changing it:
@@ -127,8 +121,7 @@ embedded at build time, so Rust builds need no Node). After changing it:
 in light and dark from fixed data into `ui/shots/` without a model; the screenshots in
 `site/static/screenshots` come from there.
 
-Development follows the [Spec Kit](https://github.com/github/spec-kit) workflow (`specs/`). The
-website is a [Zola](https://www.getzola.org/) site in `site/` (`zola --root site serve`).
+The website is a [Zola](https://www.getzola.org/) site in `site/` (`zola --root site serve`).
 
 ## License
 

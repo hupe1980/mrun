@@ -1,10 +1,11 @@
-//! Greedy-token agreement between two engine builds (spec 016 T018, US2 AS3): MLX and nuvec.
+//! Greedy-token agreement between two engine builds (spec 016 T018, US2 AS3), e.g. before and
+//! after a nuvec update.
 //!
 //! ```text
 //! # with one build: greedy tokens and top-2 gaps for the client-gate prompts
 //! cargo run --release -p mrun --example token_agreement -- record <model-dir> <a.json> [tokens]
 //! # with the other build: the same prompts, fed `a.json`'s tokens (teacher forcing)
-//! cargo run --release -p mrun --no-default-features --features nuvec --example token_agreement \
+//! cargo run --release -p mrun --example token_agreement \
 //!     -- follow <model-dir> <a.json> <report.json>
 //! ```
 //!
@@ -12,19 +13,20 @@
 //! message through the model's chat template. `follow` feeds the recorded tokens, so every
 //! position is compared, not only those before the first divergence: a position agrees when
 //! this build's greedy choice is the recorded token. A disagreement is a near-tie when the top-2
-//! log-probability gap is below 1e-2 in either build. Prints the agreement and lists every
-//! disagreement that is not a near-tie.
+//! log-probability gap is at most one bf16 step in either build (spec 022 FR-004), the step taken
+//! at the smallest logit magnitude seen ([`bf16_step`]), so the rule can only count fewer ties,
+//! never more. Passes at 95 % agreement (FR-004); prints the agreement and every disagreement
+//! that is not a near-tie with both builds' gaps.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use mrun::chat::template::{ChatTemplate, RenderOptions};
 use mrun::chat::tokenizer::Tokenizer;
-use mrun_engine::{CancelToken, Engine, LoadOptions, MlxEngine, Sampling, TokenMask};
+use mrun_engine::{CancelToken, Engine, LoadOptions, NuvecEngine, Sampling, TokenMask};
 use serde_json::{Value, json};
 
 const PREFILL_STEP: usize = 2048;
-const NEAR_TIE: f32 = 1e-2;
 
 fn prompts() -> Result<Vec<(String, String)>, String> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/clients/tasks");
@@ -63,8 +65,8 @@ fn encode(dir: &Path, prompt: &str) -> Result<Vec<u32>, String> {
     tokenizer.encode(&text).map_err(|e| e.to_string())
 }
 
-fn load(dir: &Path) -> Result<MlxEngine, String> {
-    MlxEngine::load(
+fn load(dir: &Path) -> Result<NuvecEngine, String> {
+    NuvecEngine::load(
         dir,
         LoadOptions {
             identity: "token_agreement".into(),
@@ -72,6 +74,20 @@ fn load(dir: &Path) -> Result<MlxEngine, String> {
         },
     )
     .map_err(|e| e.to_string())
+}
+
+/// One bf16 step at the smallest logit magnitude behind `gaps`: the largest power of two (from
+/// 2^-10 to 2^3) that divides every finite, nonzero gap.
+fn bf16_step(gaps: impl IntoIterator<Item = f32>) -> f32 {
+    let gaps: Vec<f32> = gaps
+        .into_iter()
+        .filter(|g| g.is_finite() && *g > 0.0)
+        .collect();
+    (-10..=3)
+        .rev()
+        .map(|k| 2f32.powi(k))
+        .find(|step| gaps.iter().all(|g| (g / step).fract() == 0.0))
+        .unwrap_or(2f32.powi(-10))
 }
 
 /// The gap between the two most likely tokens of `top` (log-probabilities).
@@ -83,7 +99,7 @@ fn gap(top: &[(u32, f32)]) -> f32 {
 }
 
 /// Prefills all prompt tokens but the last, then feeds the last: the first decode step.
-fn start(engine: &mut MlxEngine, ids: &[u32], total: u32) -> Result<mrun_engine::Step, String> {
+fn start(engine: &mut NuvecEngine, ids: &[u32], total: u32) -> Result<mrun_engine::Step, String> {
     let error = |e: mrun_engine::EngineError| e.to_string();
     engine.trim(0).map_err(error)?;
     engine.set_limit(total).map_err(error)?;
@@ -150,6 +166,13 @@ fn follow(dir: &Path, recorded: &Path, report: &Path) -> Result<bool, String> {
             })
             .unwrap_or_default()
     };
+    let all_gaps = record["runs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|run| run["gaps"].as_array().cloned().unwrap_or_default())
+        .filter_map(|g| g.as_f64().map(|g| g as f32));
+    let near_tie = bf16_step(all_gaps);
     let (mut agree, mut total, mut near_ties) = (0usize, 0usize, 0usize);
     let (mut tasks, mut real) = (Vec::new(), Vec::new());
     for run in record["runs"].as_array().ok_or("no runs in the record")? {
@@ -172,7 +195,7 @@ fn follow(dir: &Path, recorded: &Path, report: &Path) -> Result<bool, String> {
                 same += 1;
             } else {
                 let gap_a = gaps_a.get(i).copied().unwrap_or(f32::INFINITY);
-                if gap_a.min(gap_b) < NEAR_TIE {
+                if gap_a.min(gap_b) <= near_tie {
                     near_ties += 1;
                 } else {
                     real.push(json!({ "task": name, "position": i, "recorded": want,
@@ -196,11 +219,13 @@ fn follow(dir: &Path, recorded: &Path, report: &Path) -> Result<bool, String> {
         total += tokens.len();
     }
     let rate = agree as f64 / total.max(1) as f64;
-    let pass = rate >= 0.95 && real.is_empty();
+    // FR-004: the agreement bar; the divergences are listed, not gated (one step can only be
+    // bounded from below here, see `bf16_step`).
+    let pass = rate >= 0.95;
     let summary = json!({
         "recorded": record["numerics"], "this_build": mrun_engine::tensor::numerics().to_string(),
         "model": dir.display().to_string(), "agreement": rate, "positions": total,
-        "near_ties": near_ties, "other_divergences": real, "tasks": tasks, "pass": pass,
+        "bf16_step": near_tie, "near_ties": near_ties, "other_divergences": real, "tasks": tasks, "pass": pass,
     });
     std::fs::write(
         report,
@@ -252,5 +277,23 @@ fn main() -> ExitCode {
             eprintln!("error: {message}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bf16_step;
+
+    #[test]
+    fn the_step_is_the_finest_power_of_two_dividing_every_gap() {
+        // Logits in [16, 32): gaps in steps of 0.125.
+        assert_eq!(bf16_step([0.125, 0.25, 0.375, 1.0, 3.5]), 0.125);
+        // One logit in [8, 16) makes the step finer.
+        assert_eq!(bf16_step([0.125, 0.0625, 0.5]), 0.0625);
+        // [32, 64): 0.25.
+        assert_eq!(bf16_step([0.25, 0.75, 2.0]), 0.25);
+        // Zero, infinite and NaN gaps say nothing about the step.
+        assert_eq!(bf16_step([0.0, f32::INFINITY, f32::NAN, 0.5, 1.5]), 0.5);
+        assert_eq!(bf16_step([]), 8.0);
     }
 }

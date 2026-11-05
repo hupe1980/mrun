@@ -1,11 +1,11 @@
 +++
 title = "API reference"
-description = "mrun's HTTP endpoints: Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, model listing, health and status, its response headers, in-band warnings and error codes."
+description = "mrun's HTTP endpoints, behaviour, response headers, warnings and error codes."
 weight = 70
 +++
 
 Base URL: `http://127.0.0.1:8484`. Request and response bodies follow the upstream API
-definitions; this page lists what mrun serves and where it deliberately differs.
+definitions; this page lists what mrun serves and where it differs.
 
 ## Endpoints
 
@@ -34,36 +34,34 @@ Query strings such as `?beta=true` and `anthropic-beta` headers are accepted on 
   warning when the limit came from the request. Only a prompt that leaves no room at all is
   refused.
 - **Stateless Responses.** `previous_response_id`, `conversation` and item references are refused
-  with 400, because nothing is stored. Clients resend the conversation, and the prefix cache makes
-  that cheap.
-- **Queueing.** One request runs at a time; up to 16 others wait (`--queue`). Streaming requests wait as long as needed, with keepalives. A non-streaming request
-  waits at most 240 seconds (`--queue-wait-s`) and is refused at once when its estimated wait is
-  longer.
-- **Keepalives.** Streams receive a keepalive whenever 10 seconds pass since the last byte sent,
-  whatever the server is doing, in each API's own form: Anthropic `ping`, Responses
-  `response.in_progress`, and for Chat Completions an empty `chat.completion.chunk` data event
-  (`"choices": []`), because some clients reset their timeout only on parsed events.
+  with 400; nothing is stored.
+- **Queueing.** One request runs at a time; up to 16 others wait (`--queue`). Streaming requests
+  wait as long as needed. A non-streaming request waits at most 240 seconds (`--queue-wait-s`) and
+  is refused at once when its estimated wait is longer.
+- **Keepalives.** Streams receive a keepalive after 10 seconds without a byte: Anthropic `ping`,
+  Responses `response.in_progress`, Chat Completions an empty `chat.completion.chunk`
+  (`"choices": []`).
 - **Disconnect cancels.** Closing the connection stops queued or running work.
-- **Repetition penalty.** `repetition_penalty` (a number above 0, default 1 = off) is accepted on
-  all three APIs, as in mlx-lm: the logits of the last 20 tokens (prompt and reply) are divided
-  (positive) or multiplied (negative) by it before sampling. Unset or 1, output is unchanged.
+- **Repetition penalty.** `repetition_penalty` (above 0, default 1 = off) is accepted on all
+  three APIs, as in mlx-lm: logits of the last 20 tokens (prompt and reply) are divided
+  (positive) or multiplied (negative) by it before sampling.
 - **Structured output and forced tool calls.** JSON output formats (`response_format`,
   `text.format`, `output_config.format`) and `tool_choice` set to required (`any`) or a named tool
-  are enforced while the model writes: tokens the grammar does not allow are masked. Nothing is
-  inserted without sampling. Tools marked `strict` under `tool_choice: auto` are not enforced (the
-  server logs them). `tool_choice: none` keeps the model from starting a call.
+  are enforced by masking tokens the grammar does not allow. Tools marked `strict` under
+  `tool_choice: auto` are not enforced (the server logs them). `tool_choice: none` keeps the model
+  from starting a call.
 - **Invalid tool arguments.** When the model emits arguments that are not a valid JSON object
   (or, for a `strict` tool, do not match its schema), mrun passes them on raw (Chat Completions,
   Responses) or as text (Messages, which has no raw form) and adds a `tool-args-invalid` warning.
 - **Thinking.** On Chat Completions and Responses a thinking model (Qwen3, Qwen3.5, Qwen3.6)
-  thinks by default, as its own template does; send `reasoning_effort: "none"` (or `"minimal"`, or Responses
-  `reasoning.effort`) to turn it off. On Anthropic Messages it thinks only when the request asks
-  (`thinking` enabled or adaptive), as Claude Code does. An Anthropic `budget_tokens` is accepted
-  and not enforced.
+  thinks by default; `reasoning_effort: "none"` or `"minimal"` (Responses: `reasoning.effort`)
+  turns it off. Chat Completions also accepts `chat_template_kwargs: {"enable_thinking": false}`
+  (or `true`), which wins over `reasoning_effort`; other `chat_template_kwargs` keys are ignored.
+  On Anthropic Messages the model thinks only when `thinking` is enabled or adaptive;
+  `budget_tokens` is accepted and not enforced.
 - **Runaway repetition.** When the last 512 output tokens repeat with a period of 128 tokens or
   less, generation stops with a `repetition-stopped` warning. The check runs every 16 tokens,
-  never inside tool-call arguments (a long list of similar items is not a loop), and is off when
-  `x-mrun-ignore-eos: on` is set.
+  never inside tool-call arguments, and is off with `x-mrun-ignore-eos: on`.
 - **MCP and deferred tools.** Codex namespaces are flattened and restored; `defer_loading` tools
   and `tool_reference` results are handled; server-executed tools (`mcp_servers`, `container`)
   are refused. See [MCP and skills](@/docs/mcp-and-skills.md).
@@ -73,17 +71,16 @@ Query strings such as `?beta=true` and `anthropic-beta` headers are accepted on 
   token) gets a server error, and the prefix cache is kept; only an engine failure resets it.
 - **Shutdown.** On `mrun stop` (SIGTERM) new and queued requests get the overload error, running
   ones get 5 seconds and are then cancelled.
-- **No server-side context editing.** Anthropic `context_management` is accepted and ignored; mrun
-  never rewrites or summarizes your conversation. Clients compact on their own at the reported
-  context window.
+- **No server-side context editing.** Anthropic `context_management` is accepted and ignored;
+  clients compact on their own at the reported context window.
 - **Images.** Images are not passed to the model. Images in user messages are refused, naming
   the field; images inside tool results are replaced by a placeholder with an `image-omitted`
   warning (`--reject-tool-images` refuses them instead).
 
 ## mrun metadata
 
-Response bodies stay standard. mrun's own information travels beside them, in headers on
-non-streaming responses and in `: mrun {…}` SSE comment lines in streams (clients ignore both):
+mrun's own information travels in headers on non-streaming responses and in `: mrun {…}` SSE
+comment lines in streams:
 
 | Header | Meaning |
 | --- | --- |
@@ -103,7 +100,7 @@ In a stream, the first comment carries `cached`, `processed`, `max_tokens`, `spl
 report (`cause`, `divergence`, `message`, `gap`, `unreused`, `ring_wrapped`); a second comment
 with `warnings` comes before the terminal event when there are any. See [Prefix cache](@/docs/prefix-cache.md) for the causes.
 
-There are exactly four warnings:
+Warnings:
 
 | Warning | When |
 | --- | --- |
@@ -115,8 +112,8 @@ There are exactly four warnings:
 Other conditions, such as a call to an undeclared tool or a schema the constrained decoder cannot
 compile, are written to the server log without prompt content.
 
-One request header changes generation: `x-mrun-ignore-eos: on` makes the model write until the
-output limit and turns the loop guard off, for benchmarks that need a fixed output length.
+Request header `x-mrun-ignore-eos: on` makes the model write until the output limit and turns
+the loop guard off, for benchmarks.
 
 ## mrun status
 
@@ -142,10 +139,9 @@ object:
 `message`, `unreused`), `generated`, `ttft_ms` (from arrival), `decode_tps` and `stop` (`end`,
 `stopped`, `error`). It holds counters only, never content.
 
-`POST /mrun/cache/clear` runs on the model worker between requests, so it waits for a running
-request, then drops every branch, checkpoint and the live conversation and answers `200` with
-`{"branches_dropped": N, "bytes_freed": B}`. `mrun cache clear` calls it and prints
-`cleared N branches (M MiB) and the live conversation`. The next request reports cause `new`.
+`POST /mrun/cache/clear` waits for a running request, then drops every branch, checkpoint and
+the live conversation and answers `200` with `{"branches_dropped": N, "bytes_freed": B}`
+(`mrun cache clear`). The next request reports cause `new`.
 
 ## Errors
 
@@ -164,5 +160,4 @@ request, then drops every branch, checkpoint and the live conversation and answe
 ## Security
 
 mrun listens on `127.0.0.1` only. It accepts only loopback `Host` headers and rejects browser
-requests from other origins, which blocks DNS rebinding and requests from web pages. No API key is
-needed or checked. Listening on other addresses is not supported.
+requests from other origins (DNS rebinding, web pages). No API key is needed or checked.

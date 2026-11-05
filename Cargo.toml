@@ -1,11 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/mrun-engine", "crates/mrun-runpod", "crates/mrun"]
-# `mrun-mlx-sys` builds MLX from source (15-40 min, once per configuration; the build is shared
-# across profiles), so it is not a member. It is pulled in by `mrun-engine --features mlx` (on by
-# default in `mrun`) and tested on its own with
-# `cargo test --manifest-path crates/mrun-mlx-sys/Cargo.toml`.
-exclude = ["crates/mrun-mlx-sys"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,7 +14,6 @@ authors = ["hupe1980"]
 # Path plus version: local builds use the path, published crates the version.
 mrun-engine = { path = "crates/mrun-engine", version = "=0.1.0", default-features = false }
 mrun-runpod = { path = "crates/mrun-runpod", version = "=0.1.0" }
-mlx-sys = { package = "mrun-mlx-sys", path = "crates/mrun-mlx-sys", version = "=0.1.0" }
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
 minijinja = { version = "3.0.0", features = ["serde", "json", "loop_controls", "preserve_order"] }
 minijinja-contrib = { version = "3.0.0", features = ["pycompat"] }
@@ -30,7 +24,6 @@ tempfile = "3.27"
 thiserror = "2.0.21"
 tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
 toml = "1.1"
-zstd = { version = "0.14.2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

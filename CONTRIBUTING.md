@@ -1,15 +1,27 @@
 # Contributing to mrun
 
-mrun is in development and not released; breaking changes are fine. Before a pull request, run:
+mrun is 0.x: minor versions may break.
+
+You need Rust (the version in `rust-toolchain.toml`; rustup installs it) and, on a Mac, Xcode with
+its Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`), which compiles the engine's
+GPU kernels into the binary. Nothing else: no C++ build. Without the Metal toolchain mrun
+still builds and compiles its kernels when it starts (`mrun doctor` says so).
+
+```sh
+cargo build --release      # the binary, with the engine (nuvec)
+cargo test --workspace     # every Rust suite, CPU and GPU (a Mac)
+```
+
+Before a pull request, also run what CI runs:
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --no-default-features --all-targets -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --no-default-features --all-targets -- -D warnings   # the Linux agent
 cargo test --workspace --no-default-features
-cargo test --workspace            # on an Apple Silicon Mac with Xcode: the MLX engine too
 ```
 
-Remote GPU mode (013): its tests run on loopback with a stub upstream and need no account. A live
+Remote GPU mode: its tests run on loopback with a stub upstream and need no account. A live
 check needs a RunPod key in `RUNPOD_API_KEY` or `./.env` (git-ignored; never commit or log it) and
 a Linux build of the agent, cross-built on the Mac:
 
@@ -23,7 +35,7 @@ Run the transport checks on a CPU pod first (`mrun cloud up --cpu --model stub`,
 
 ## Client gate
 
-The client gate (002 SC-001, D057) checks that Claude Code, Codex and OpenCode complete real
+The client gate checks that Claude Code, Codex and OpenCode complete real
 tasks through `mrun launch`. It needs a Mac with the Metal build, the three clients on `PATH` and
 the model pulled:
 
@@ -44,13 +56,14 @@ and its fixture files; `check.sh` must also fail when the agent edits files it w
 
 ## Hardware reports
 
-mrun is qualified on one Mac: the maintainer's M4 Pro with 48 GB (D060). Smaller Macs are
+mrun is qualified on one Mac: the maintainer's M4 Pro with 48 GB. Smaller Macs are
 simulated there with `--budget-gib` set to their measured working set, which reproduces fit, the
 default model, the 64K floor and admission. What simulation cannot show is published as
 unmeasured until someone measures it:
 
 - cancellation latency on a slower GPU (M1, M2, M3),
-- speed with MLX's NAX kernels on an M5,
+- speed with the NAX kernels on an M5 (nuvec keeps them off until measured: `NUVEC_NAX=on` turns
+  them on),
 - real memory pressure on a 16 or 24 GB Mac (other apps, swap).
 
 If you have one of these Macs, a report helps everyone:
@@ -58,7 +71,7 @@ If you have one of these Macs, a report helps everyone:
 1. Build mrun (see the [README](README.md#quick-start)) and pull the model this Mac defaults to
    (`mrun ls` shows it).
 2. Run `mrun doctor --report`. It prints a Markdown block with the mrun version and numerics
-   class, chip and GPU family, physical memory, MLX's recommended working set, macOS version, NAX
+   class, chip and GPU family, physical memory, Metal's recommended working set, macOS version, NAX
    availability, the pulled models with their identity, the calibration table and the doctor
    findings. It contains no prompts and shows your home directory as `~`; read it before you
    paste it.

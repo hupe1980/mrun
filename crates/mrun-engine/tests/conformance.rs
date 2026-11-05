@@ -2,7 +2,7 @@
 //! `scripts/gen_reference.py` writes to `tests/reference/<model>.json`.
 //!
 //! ```text
-//! MRUN_TEST_MODELS=qwen3,qwen3.5 cargo test -p mrun-engine --features mlx --release \
+//! MRUN_TEST_MODELS=qwen3,qwen3.5 cargo test -p mrun-engine --features engine --release \
 //!     --test conformance -- --ignored --nocapture
 //! ```
 //!
@@ -159,7 +159,7 @@ fn greedy_output_matches_mlx_lm() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-fn run(engine: &mut mrun_engine::MlxEngine, case: &Case, split: Option<u32>) -> Outcome {
+fn run(engine: &mut mrun_engine::NuvecEngine, case: &Case, split: Option<u32>) -> Outcome {
     engine.reset();
     let n = case.tokens.len() as u32;
     engine.set_limit(case.prompt.len() as u32 + n).unwrap();

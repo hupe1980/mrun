@@ -116,7 +116,7 @@ impl Code {
             }
             Self::Network => "check the connection and rerun; downloads resume",
             Self::Gated => "accept the license on huggingface.co and set HF_TOKEN",
-            Self::DiskFull => "free disk space, or point HF_HUB_CACHE at a larger volume",
+            Self::DiskFull => "free disk space, or point MRUN_HOME at a larger volume",
         }
     }
 

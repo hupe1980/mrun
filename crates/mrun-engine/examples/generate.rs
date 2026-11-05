@@ -1,7 +1,7 @@
 //! Greedy generation from token ids, for parity and speed checks against mlx-lm.
 //!
 //! ```text
-//! cargo run --release -p mrun-engine --features mlx --example generate -- \
+//! cargo run --release -p mrun-engine --features engine --example generate -- \
 //!     <model-dir> <ids> [max-tokens] [--cpu]
 //! ```
 //!
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use mrun_engine::{CancelToken, Engine, LoadOptions, MlxEngine, Sampling};
+use mrun_engine::{CancelToken, Engine, LoadOptions, NuvecEngine, Sampling};
 
 const PREFILL_STEP: usize = 2048;
 
@@ -48,7 +48,7 @@ fn run() -> Result<(), String> {
     };
 
     let loaded = Instant::now();
-    let mut engine = MlxEngine::load(
+    let mut engine = NuvecEngine::load(
         &PathBuf::from(dir),
         LoadOptions {
             identity: "generate".into(),

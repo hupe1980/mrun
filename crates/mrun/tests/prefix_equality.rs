@@ -10,7 +10,7 @@
 //! interleaved conversations, an edit that cuts the trunk inside a chunk, rewinds, identical
 //! retries, cancels and their retries, spliced replies (the next prompt carries the model's own
 //! ids), and on the hybrid checkpoint restores — on tiny `qwen3` and the tiny `qwen3_5_moe`
-//! hybrid (MLX CPU backend).
+//! hybrid (on the CPU).
 
 #![cfg(feature = "engine")]
 
@@ -22,7 +22,7 @@ use mrun::chat::prompt::{MessageMark, RenderedPrompt, Role};
 use mrun::chat::tokenizer::test_support::byte_tokenizer;
 use mrun::runtime::generate::{Event, EventSink, FinishReason, GenerateRequest, generate};
 use mrun::runtime::pressure::PressureGauge;
-use mrun_engine::{Engine, MlxEngine};
+use mrun_engine::{Engine, NuvecEngine};
 use support::{Recorder, Served, oracle, tiny};
 
 /// A conversation under construction: tokens and message marks.
@@ -135,10 +135,10 @@ impl EventSink for CancelAfter {
 }
 
 struct Bench {
-    engine: Recorder<MlxEngine>,
+    engine: Recorder<NuvecEngine>,
     /// An empty engine of the same model; `None`: the oracle runs on the served engine after
     /// the scenario (real models, one copy of the weights).
-    fresh: Option<MlxEngine>,
+    fresh: Option<NuvecEngine>,
     /// Cases waiting for the oracle when there is no second engine.
     pending: Vec<(Served, String)>,
     store: PrefixStore,
@@ -151,13 +151,13 @@ struct Bench {
 }
 
 impl Bench {
-    fn new(engine: MlxEngine, fresh: MlxEngine) -> Self {
+    fn new(engine: NuvecEngine, fresh: NuvecEngine) -> Self {
         Self::with_tokenizer(engine, Some(fresh), byte_tokenizer())
     }
 
     fn with_tokenizer(
-        engine: MlxEngine,
-        fresh: Option<MlxEngine>,
+        engine: NuvecEngine,
+        fresh: Option<NuvecEngine>,
         tokenizer: mrun::chat::tokenizer::Tokenizer,
     ) -> Self {
         Self {
@@ -264,7 +264,7 @@ fn real_model(repo: &str) -> Option<Bench> {
     };
     let tokenizer =
         mrun::chat::tokenizer::Tokenizer::from_file(&dir.join("tokenizer.json")).ok()?;
-    let engine = MlxEngine::load(
+    let engine = NuvecEngine::load(
         &dir,
         mrun_engine::LoadOptions {
             identity: repo.into(),
@@ -314,7 +314,7 @@ fn cache_hits_are_bit_identical_to_recomputation_on_qwen3_8b() {
         .unwrap()
         .to_path_buf();
     let load = || {
-        MlxEngine::load(
+        NuvecEngine::load(
             &dir,
             mrun_engine::LoadOptions {
                 identity: "qwen3-8b".into(),

@@ -150,6 +150,8 @@ pub fn router(host: Host) -> Router {
         .route("/app/models", get(models))
         .route("/app/agents", get(agents))
         .route("/app/apps", get(apps))
+        .route("/app/cloud", get(cloud))
+        .route("/app/cloud/model", get(cloud_model))
         .route("/app/plan", get(plan))
         .route("/app/export", post(export))
         .route("/app/config", get(config))
@@ -388,6 +390,7 @@ async fn read_json(host: &Host, argv: &[&str]) -> Response {
 enum Read {
     Models,
     Agents,
+    Cloud,
 }
 
 impl Read {
@@ -396,6 +399,7 @@ impl Read {
         match self {
             Self::Models => "models",
             Self::Agents => "agents",
+            Self::Cloud => "cloud",
         }
     }
 
@@ -407,6 +411,7 @@ impl Read {
                 fetch_json(host, &argv).await
             }
             Self::Agents => Ok(agent_list(host).await),
+            Self::Cloud => Ok(cloud_listing(host).await),
         }
     }
 }
@@ -455,6 +460,43 @@ async fn agents(State(host): State<Host>, Query(q): Query<HashMap<String, String
     listing(host, Read::Agents, &q).await
 }
 
+async fn cloud(State(host): State<Host>, Query(q): Query<HashMap<String, String>>) -> Response {
+    listing(host, Read::Cloud, &q).await
+}
+
+/// A model to add to the cloud section: `cloud models <repo> --json` (its weights from the Hub,
+/// the GPUs it fits).
+async fn cloud_model(
+    State(host): State<Host>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let repo = q.get("repo").map_or("", String::as_str);
+    let argv = match actions::cloud_model_argv(repo) {
+        Ok(argv) => argv,
+        Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+    };
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    read_json(&host, &argv).await
+}
+
+/// The cloud section (024 data model: CloudListing): the catalog, RunPod's GPUs (none without
+/// a key), the pods and the key's source, and the models the user added.
+async fn cloud_listing(host: &Host) -> Value {
+    let port = host.server_port.to_string();
+    let status_argv = ["cloud", "status", "--json", "--port", &port];
+    let (offers, gpus, status) = tokio::join!(
+        fetch_json(host, &["cloud", "models", "--json"]),
+        fetch_json(host, &["cloud", "gpus", "--json"]),
+        fetch_json(host, &status_argv),
+    );
+    json!({
+        "offers": offers.unwrap_or_else(|_| json!([])),
+        "gpus": gpus.unwrap_or_else(|_| json!([])),
+        "status": status.unwrap_or_else(|e| json!({"pods": [], "key": null, "error": e})),
+        "added": host.store.prefs().cloud_models,
+    })
+}
+
 /// Other apps (020 FR-008): `connect --json` of the print-only targets, with their blocks.
 async fn apps(State(host): State<Host>) -> Response {
     axum::Json(connect_states(&host, &actions::APPS).await).into_response()
@@ -480,13 +522,17 @@ async fn connect_states(host: &Host, clients: &[&str]) -> Value {
     Value::Array(list)
 }
 
-#[derive(Debug, serde::Deserialize)]
+// No `Debug`: `secret` is a RunPod key.
+#[derive(serde::Deserialize)]
 struct ActionBody {
     kind: String,
     #[serde(default)]
     target: String,
     #[serde(default)]
     confirm: bool,
+    /// `cloud-login`'s key, written to the command's stdin (024 FR-005).
+    #[serde(default)]
+    secret: Option<String>,
 }
 
 async fn start_action(
@@ -517,6 +563,11 @@ async fn start_action(
             "this server was started outside the window; confirm to change it",
         );
     }
+    let stdin = match (kind, body.secret) {
+        (Kind::CloudLogin, Some(secret)) if !secret.trim().is_empty() => Some(secret),
+        (Kind::CloudLogin, _) => return error(StatusCode::BAD_REQUEST, "no key"),
+        _ => None,
+    };
     let started = host.started.clone();
     let store = host.store.clone();
     let target = body.target.clone();
@@ -531,20 +582,24 @@ async fn start_action(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match kind {
-            Kind::Use | Kind::Start => {
+            Kind::Use | Kind::Start | Kind::CloudUp => {
                 *started = Some(StartedBy::Ui);
                 if kind == Kind::Use {
                     let _ = store.update(&json!({"last_model": target}));
                 }
             }
-            Kind::Stop => *started = None,
+            Kind::Stop | Kind::CloudDown => *started = None,
             _ => {}
         }
     };
-    match host
-        .jobs
-        .start(host.cli.to_path_buf(), kind, &body.target, steps, on_done)
-    {
+    match host.jobs.start(
+        host.cli.to_path_buf(),
+        kind,
+        &body.target,
+        steps,
+        stdin,
+        on_done,
+    ) {
         Some(job) => axum::Json(json!({"job": job})).into_response(),
         None => error(StatusCode::CONFLICT, "this action is already running"),
     }
@@ -559,7 +614,18 @@ async fn job(State(host): State<Host>, Path(id): Path<String>) -> Response {
 
 async fn cancel_job(State(host): State<Host>, Path(id): Path<String>) -> Response {
     match host.jobs.cancel(&id) {
-        Some(job) => axum::Json(job).into_response(),
+        Some(job) => {
+            // A cancelled cloud start may have rented a pod: end its billing.
+            if let Some(argv) = actions::undo(job.kind, host.server_port) {
+                let host = host.clone();
+                tokio::spawn(async move {
+                    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+                    let _ = actions::read(&host.cli, &argv).await;
+                    host.listings.invalidate("cloud");
+                });
+            }
+            axum::Json(job).into_response()
+        }
         None => error(StatusCode::NOT_FOUND, "no such job"),
     }
 }
