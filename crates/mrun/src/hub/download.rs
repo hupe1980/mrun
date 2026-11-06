@@ -204,6 +204,8 @@ pub struct Plan {
     family: FamilyConfig,
     config: Value,
     quantization: Option<Quantization>,
+    /// Layers `[first, end)` only, for a pool stage (026).
+    part: Option<[usize; 2]>,
 }
 
 impl Plan {
@@ -318,6 +320,62 @@ pub async fn pull_with(
     ));
     done(&manifest, false);
     Ok(manifest)
+}
+
+/// The layer a tensor belongs to (`….layers.<n>.…`), if any.
+pub fn layer_of(name: &str) -> Option<usize> {
+    let rest = &name[name.find(".layers.")? + ".layers.".len()..];
+    rest.split('.').next()?.parse().ok()
+}
+
+/// The shards of a safetensors index (`weight_map`) that hold a tensor of layers `first..end`.
+fn shards_for(index: &Value, first: usize, end: usize) -> std::collections::BTreeSet<String> {
+    index["weight_map"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| layer_of(name).is_some_and(|l| (first..end).contains(&l)))
+        .filter_map(|(_, file)| file.as_str().map(str::to_string))
+        .collect()
+}
+
+/// Layers `first..end` of `target` for a pool stage (026 T029): the small files and only the
+/// shards holding those layers, into the directory the whole model uses, with a manifest that
+/// records the part (a part pulled before widens to cover both). A whole model pulled already
+/// is returned as it is; `mrun pull` later completes a part with the files it has.
+pub async fn pull_part(
+    ctx: &Ctx,
+    target: &str,
+    first: usize,
+    end: usize,
+    report: &Report,
+) -> Result<Manifest, CliError> {
+    let mut plan = plan(ctx, target).await?;
+    if let Some(manifest) = already_pulled(ctx, &plan) {
+        return Ok(manifest);
+    }
+    let before = manifests(&ctx.paths)
+        .into_iter()
+        .find(|m| m.repo == plan.repo && m.revision == plan.commit)
+        .and_then(|m| m.part);
+    let [first, end] = before.map_or([first, end], |[a, b]| [a.min(first), b.max(end)]);
+    // One file holds every layer unless an index says where each tensor is.
+    if let Some(index) = plan
+        .files
+        .iter()
+        .find(|f| f.path == "model.safetensors.index.json")
+    {
+        let remote = Remote::new(&ctx.hub, &plan.repo)?;
+        let url = remote.resolve_url(&plan.commit, &index.path);
+        let index: Value = remote.get(&url, 0).await?.json().await.map_err(|error| {
+            CliError::new(Code::Network, format!("invalid reply from {url}: {error}"))
+        })?;
+        let shards = shards_for(&index, first, end);
+        plan.files
+            .retain(|f| !f.path.ends_with(".safetensors") || shards.contains(&f.path));
+    }
+    plan.part = Some([first, end]);
+    download_with(ctx, &plan, report).await
 }
 
 /// `mrun pull --dry-run` (020 FR-005): the plan line or `plan` event, then nothing else: no
@@ -592,6 +650,7 @@ pub async fn plan(ctx: &Ctx, target: &str) -> Result<Plan, CliError> {
         family,
         config,
         quantization,
+        part: None,
     })
 }
 
@@ -868,6 +927,7 @@ fn manifest(ctx: &Ctx, plan: &Plan, dir: &Path, pads: &[u32]) -> Result<Manifest
         identity: identity.value,
         quantization: plan.quantization.clone(),
         files: entries,
+        part: plan.part,
     })
 }
 

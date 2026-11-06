@@ -9,8 +9,11 @@
   import { bytes, context, percent, perHour, seconds, spend, stopsIn, stopWord, tokens, uptime } from "../lib/format";
   import { jobs } from "../lib/jobs.svelte";
   import { live } from "../lib/live.svelte";
+  import { host } from "../lib/api";
+  import { COLORS, hostRing, owner, placeWords, ring, type RingMac } from "../lib/pool";
+  import { onDestroy } from "svelte";
 
-  let { onAction }: { onAction: (kind: string, target?: string) => void } = $props();
+  let { onAction, onshow }: { onAction: (kind: string, target?: string) => void; onshow?: (id: number) => void } = $props();
 
   const s = $derived(live.status);
   const srv = $derived(live.state);
@@ -33,6 +36,44 @@
     const job = await jobs.run("cloud-down", "", true);
     if (job.state === "failed") onAction("notify", job.error ?? "The pod did not stop.");
   }
+
+  // The pool (026): the ring compactly, what it serves and, on a member, its place in the queue.
+  const pool = $derived(s?.pool ?? null);
+  const poolHost = $derived(pool?.role === "host" && pool.members.length ? pool : null);
+  const poolMember = $derived(pool?.role === "member" ? pool : null);
+  const poolMacs = $derived.by<RingMac[]>(() => {
+    if (poolHost) {
+      const first = poolHost.plan?.stages[0];
+      return hostRing({ mac_id: first?.mac_id ?? "this", name: first?.name ?? "This Mac", chip: "", layers: 0 }, poolHost.members, poolHost.plan?.stages);
+    }
+    if (poolMember) {
+      return [
+        { mac_id: poolMember.host.mac_id, name: poolMember.host.name, chip: "", layers: 0, host: true },
+        { mac_id: "this", name: "This Mac", chip: "", layers: 0, state: "serving" },
+      ];
+    }
+    return [];
+  });
+  let place = $state<string | null>(null);
+  let placeTimer: ReturnType<typeof setInterval> | null = null;
+  $effect(() => {
+    if (poolMember && !placeTimer) {
+      const ask = () =>
+        host
+          .pool()
+          .then((v) => (place = v.pool?.role === "member" ? placeWords(v.pool.place) : null))
+          .catch(() => {});
+      void ask();
+      placeTimer = setInterval(ask, 2000);
+    } else if (!poolMember && placeTimer) {
+      clearInterval(placeTimer);
+      placeTimer = null;
+      place = null;
+    }
+  });
+  onDestroy(() => placeTimer && clearInterval(placeTimer));
+  const poolShape = $derived(ring(poolMacs.map((m) => ({ mac_id: m.mac_id, name: m.name, layers: m.layers || 1 })), 36, 36, 28));
+  const poolWaiting = $derived(poolHost?.queue?.waiting.reduce((a, w) => a + w.waiting, 0) ?? 0);
 
   const headline = $derived.by(() => {
     switch (srv) {
@@ -106,6 +147,26 @@
     </section>
   {/if}
 
+  {#if poolMacs.length > 1}
+    <section class="card pool-now" aria-label="Pool">
+      <svg class="pool-ring" class:running={active.length > 0} viewBox="0 0 72 72" aria-hidden="true">
+        {#each poolShape.arcs as arc, i (arc.mac_id)}
+          <path d={arc.d} class:lost={poolMacs[i]?.state === "lost"} style:stroke="var({COLORS[i % COLORS.length]})" />
+        {/each}
+      </svg>
+      <div class="pool-main">
+        <div class="pod-title">{poolHost ? `${poolHost.model ?? poolHost.name} on ${poolMacs.length} Macs · you host` : `Lending to ${poolMember?.name}`}</div>
+        <div class="pod-facts num">
+          {#if poolHost?.degraded}<span class="warn">{poolHost.degraded}</span>
+          {:else if poolHost?.replanning}<span>Serving again on the Macs answering</span>
+          {:else if poolHost}<span>{poolWaiting ? `${poolWaiting} waiting in turns` : "Nothing waiting"}</span>
+          {:else if poolMember}<span>{place ?? `Your agents use the model on ${owner(poolMember.host.name)}'s Mac`}</span>{/if}
+        </div>
+      </div>
+      <button class="btn" onclick={() => onAction("pool")}>Open Pool</button>
+    </section>
+  {/if}
+
   {#if s?.budget && s.cache}
     <section class="card">
       <BudgetBar
@@ -142,6 +203,7 @@
                   {#if f.ttft_ms !== null}{seconds(f.ttft_ms)} to first token{/if}
                   {#if f.decode_tps} · {f.decode_tps.toFixed(1)} tok/s{/if}
                   {#if f.stop} · {stopWord(f.stop)}{/if}
+                  {#if onshow}<button class="show" onclick={() => onshow(f.id)} title="Show in Sessions" aria-label="Show request {f.id} in Sessions"><Symbol name="sessions" size={12} /></button>{/if}
                 </span>
               </div>
               <ReuseRibbon cached={f.cached} total={f.prompt_tokens} miss={f} />
@@ -252,6 +314,55 @@
   .meta {
     color: var(--muted);
     font-size: 12px;
+  }
+  .pool-now {
+    display: flex;
+    align-items: center;
+    gap: var(--s4);
+  }
+  .pool-ring {
+    width: 56px;
+    height: 56px;
+    flex: none;
+  }
+  .pool-ring path {
+    fill: none;
+    stroke-width: 7;
+    stroke-linecap: round;
+  }
+  .pool-ring path.lost {
+    stroke: var(--muted) !important;
+    opacity: 0.4;
+  }
+  .pool-ring.running {
+    animation: turn 6s linear infinite;
+  }
+  @keyframes turn {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pool-ring.running {
+      animation: none;
+    }
+  }
+  .pool-main {
+    flex: 1;
+    display: grid;
+    gap: 4px;
+  }
+  .show {
+    margin-left: 6px;
+    padding: 1px 4px;
+    border: none;
+    border-radius: var(--r-sm);
+    background: none;
+    color: var(--accent);
+    vertical-align: -2px;
+  }
+  .show:hover {
+    background: var(--accent-soft);
   }
   .empty {
     margin: 0;

@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use clap::{Arg, ArgAction, Command};
 
 /// Every `MRUN_*` variable mrun reads (`--record` has none by design).
-pub const KNOWN: [&str; 32] = [
+pub const KNOWN: [&str; 33] = [
     "MRUN_HOME",
     "MRUN_CONFIG",
     "MRUN_PORT",
@@ -48,6 +48,8 @@ pub const KNOWN: [&str; 32] = [
     "MRUN_BOOTSTRAP",
     // The Keychain stand-in for tests (024).
     "MRUN_KEYCHAIN_STUB",
+    // Mac pool (026).
+    "MRUN_POOL_PORT",
 ];
 
 /// `MRUN_*` variables of the build (`crates/mrun/build.rs`): not read at runtime, but often still

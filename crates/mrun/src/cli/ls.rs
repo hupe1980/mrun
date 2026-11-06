@@ -63,6 +63,9 @@ pub struct Row {
     /// processes hold the rest (D062).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub limited_by_available: bool,
+    /// A part (026): only layers `[first, end)` (0-based), for pool stages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part: Option<[usize; 2]>,
 }
 
 pub fn rows(ctx: &Ctx) -> Vec<Row> {
@@ -92,6 +95,7 @@ pub fn rows(ctx: &Ctx) -> Vec<Row> {
             preview: false,
             serving: false,
             limited_by_available,
+            part: None,
         }
     };
     let pulled = hub::manifests(&ctx.paths);
@@ -118,6 +122,7 @@ pub fn rows(ctx: &Ctx) -> Vec<Row> {
             let alias = manifest.alias_name().map(str::to_string);
             Row {
                 preview,
+                part: manifest.part,
                 size: manifest.size(),
                 status: status.label(),
                 pulled: true,
@@ -185,10 +190,12 @@ pub fn render(rows: &[Row], default: &str) -> String {
                 row.max_context
                     .filter(|tokens| *tokens > 0)
                     .map_or_else(|| "-".into(), |tokens| tokens.to_string()),
-                if row.preview {
-                    format!("{}, preview", row.status)
-                } else {
-                    row.status.to_string()
+                match (row.part, row.preview) {
+                    (Some([first, end]), _) => {
+                        format!("{}, layers {}–{end} · for pools", row.status, first + 1)
+                    }
+                    (None, true) => format!("{}, preview", row.status),
+                    (None, false) => row.status.to_string(),
                 },
             ]
         })

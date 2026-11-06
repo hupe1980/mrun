@@ -47,6 +47,9 @@ llguidance = { version = "1.9.1", default-features = false, features = ["lark"] 
 toktrie = "1.9.1"
 clap_complete = "4.6"
 indicatif = { version = "0.18", default-features = false }
+mdns-sd = "0.21.7"
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "crypto", "pem"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "logging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tao = { version = "0.37.2", optional = true }

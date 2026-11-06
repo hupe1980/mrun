@@ -132,6 +132,19 @@ async fn other_hosts_and_origins_are_refused_even_with_the_key() {
 async fn the_proxy_streams_the_server_and_reports_it_down() {
     let server = Router::new()
         .route("/mrun/status", get(|| async { axum::Json(serde_json::json!({"schema_version": 1})) }))
+        .route("/mrun/sessions", get(|| async { axum::Json(serde_json::json!({"sessions": []})) }))
+        .route(
+            "/mrun/requests/{id}/excerpt",
+            get(|axum::extract::Path(id): axum::extract::Path<u64>| async move {
+                axum::Json(serde_json::json!({"id": id}))
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(|headers: axum::http::HeaderMap| async move {
+                axum::Json(serde_json::json!({"ua": headers["user-agent"].to_str().unwrap()}))
+            }),
+        )
         .route(
             "/v1/messages",
             post(|| async {
@@ -156,6 +169,36 @@ async fn the_proxy_streams_the_server_and_reports_it_down() {
         .await
         .unwrap();
     assert_eq!(status["schema_version"], 1);
+    // 025: session replay's two routes, behind the key.
+    let get_json = |path: &'static str| async move {
+        let response = get_with(port, path, Some(TOKEN)).send().await.unwrap();
+        response.json::<serde_json::Value>().await.unwrap()
+    };
+    assert_eq!(
+        get_json("/mrun/sessions?since=3").await["sessions"],
+        serde_json::json!([])
+    );
+    assert_eq!(get_json("/mrun/requests/7/excerpt").await["id"], 7);
+    let unkeyed = get_with(port, "/mrun/requests/7/excerpt", None)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unkeyed.status(), 401);
+    // The window's chats are classed as the window's.
+    let chat: serde_json::Value = client()
+        .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
+        .bearer_auth(TOKEN)
+        .body("{}")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        chat["ua"].as_str().unwrap().starts_with("mrun-ui/"),
+        "{chat}"
+    );
     let stream = client()
         .post(format!("http://127.0.0.1:{port}/v1/messages"))
         .bearer_auth(TOKEN)

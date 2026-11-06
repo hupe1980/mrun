@@ -11,6 +11,7 @@ pub mod launch;
 pub mod logs;
 pub mod ls;
 pub mod model;
+pub mod pool;
 pub mod ps;
 pub mod pull;
 pub mod rm;

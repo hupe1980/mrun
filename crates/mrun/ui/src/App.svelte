@@ -1,6 +1,6 @@
 <script lang="ts">
-  // The window: a glass sidebar with four places, a toolbar with the model and its state, and
-  // the privacy line at the bottom (FR-001, FR-019). Keyboard-complete (FR-003): ⌘1–4 places,
+  // The window: a glass sidebar with six places, a toolbar with the model and its state, and
+  // the privacy line at the bottom (FR-001, FR-019). Keyboard-complete (FR-003): ⌘1–6 places,
   // ⌘K palette, ⌘L models, ⌘, settings; the chat adds its own keys.
   import { onMount } from "svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
@@ -16,12 +16,16 @@
   import Chat from "./places/Chat.svelte";
   import Models from "./places/Models.svelte";
   import Now from "./places/Now.svelte";
+  import Pool from "./places/Pool.svelte";
+  import Sessions from "./places/Sessions.svelte";
   import Settings from "./places/Settings.svelte";
 
-  type Place = "now" | "chat" | "models" | "agents";
+  type Place = "now" | "chat" | "sessions" | "pool" | "models" | "agents";
   const places: { id: Place; title: string; icon: string }[] = [
     { id: "now", title: "Now", icon: "now" },
     { id: "chat", title: "Chat", icon: "chat" },
+    { id: "sessions", title: "Sessions", icon: "sessions" },
+    { id: "pool", title: "Pool", icon: "pool" },
     { id: "models", title: "Models", icon: "models" },
     { id: "agents", title: "Agents", icon: "agents" },
   ];
@@ -32,6 +36,8 @@
   let firstRunDismissed = $state(false);
   let toast = $state<string | null>(null);
   let token = $state<string | null>(null);
+  /** A request Now asked Sessions to show (025). */
+  let focus = $state<number | null>(null);
 
   onMount(() => {
     token = adoptToken();
@@ -43,6 +49,16 @@
     !firstRunDismissed && live.models !== null && !live.models.some((m) => m.pulled) && live.state === "stopped",
   );
   const srv = $derived(live.state);
+  // A pool (026): prompts are processed on its Macs; the line says where.
+  const poolInfo = $derived(live.status?.pool ?? null);
+  const pooled = $derived(Boolean(poolInfo && (poolInfo.role === "member" || (poolInfo.role === "host" && poolInfo.members.length))));
+  const poolLine = $derived(
+    !poolInfo
+      ? ""
+      : poolInfo.role === "host"
+        ? `Pool: this Mac serves ${poolInfo.members.length + 1} Macs' prompts${poolInfo.unencrypted ? " · not encrypted" : ""}`
+        : `Pool: prompts are read on ${poolInfo.host.name} and processed on the pool's Macs${poolInfo.unencrypted ? " · not encrypted" : ""}`,
+  );
   const used = $derived(
     live.status?.budget && live.status.cache
       ? live.status.budget.weights + live.status.budget.scratch + live.status.cache.buffer_bytes + live.status.cache.checkpoint_bytes
@@ -56,6 +72,7 @@
 
   async function action(kind: string, target = "") {
     if (kind === "models") return void (place = "models");
+    if (kind === "pool") return void (place = "pool");
     if (kind === "open-log") return void host.open("log");
     if (kind === "notify") return void notify(target);
     try {
@@ -158,9 +175,11 @@
       </ul>
       <div class="spacer"></div>
       <button class="side-settings" onclick={() => (settings = true)} title="Settings (⌘,)"><Symbol name="settings" size={16} /> Settings</button>
-      <div class="privacy" class:remote={live.remote}>
-        <Symbol name={live.remote ? "cloud" : "lock"} size={13} />
-        {#if live.remote}
+      <div class="privacy" class:remote={live.remote || pooled}>
+        <Symbol name={live.remote ? "cloud" : pooled ? "pool" : "lock"} size={13} />
+        {#if pooled}
+          <button class="privacy-link" onclick={() => (place = "pool")}>{poolLine}</button>
+        {:else if live.remote}
           <span>Remote: prompts go to your RunPod pod{live.status?.pod?.cost_per_hr ? ` · $${live.status.pod.cost_per_hr.toFixed(2)}/h` : ""}</span>
         {:else}
           <span>Runs on this Mac. Nothing leaves it.</span>
@@ -180,10 +199,12 @@
           {#if used !== null && live.status?.budget}<span class="mem num">{bytes(used)} / {bytes(live.status.budget.budget)}</span>{/if}
         </button>
       </header>
-      <div class="scroll" class:flush={place === "chat"}>
-        {#if place === "now"}<Now onAction={action} />
+      <div class="scroll" class:flush={place === "chat" || place === "sessions"}>
+        {#if place === "now"}<Now onAction={action} onshow={(id) => ((focus = id), (place = "sessions"))} />
         {:else if place === "chat"}<Chat active={place === "chat" && !settings && !palette} />
-        {:else if place === "models"}<Models onError={notify} onstarted={() => (place = "now")} />
+        {:else if place === "sessions"}<Sessions {focus} onfocused={() => (focus = null)} />
+        {:else if place === "pool"}<Pool onError={notify} />
+        {:else if place === "models"}<Models onError={notify} onstarted={() => (place = "now")} onpool={() => (place = "pool")} />
         {:else}<Agents onError={notify} />{/if}
       </div>
     </main>
@@ -297,6 +318,14 @@
   }
   .privacy.remote {
     color: var(--remote);
+  }
+  .privacy-link {
+    border: none;
+    background: none;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
   }
   .content {
     flex: 1;

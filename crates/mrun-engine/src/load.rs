@@ -371,6 +371,11 @@ pub fn weights_bytes(dir: &Path) -> u64 {
     tensor::weights_footprint(dir, |name| !unused_tensor(name)).unwrap_or_else(|| files_bytes(dir))
 }
 
+/// [`weights_bytes`] of the tensors `keep` accepts (026: one Mac's part of a pool).
+pub fn weights_bytes_of(dir: &Path, keep: impl Fn(&str) -> bool) -> u64 {
+    tensor::weights_footprint(dir, keep).unwrap_or_else(|| files_bytes(dir))
+}
+
 /// Bytes of all `*.safetensors` files in `dir`.
 fn files_bytes(dir: &Path) -> u64 {
     fs::read_dir(dir)

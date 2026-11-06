@@ -22,6 +22,7 @@ variables.
 | `mrun connect <CLIENT>` | Print the persistent configuration for a client; `--write` writes it with a backup, `--restore` undoes that |
 | `mrun ps` | Show the running server: model, budget, requests, cache and the last miss |
 | `mrun doctor` | Check this Mac, the server and the clients; prints a fix for each problem |
+| `mrun pool` | `start [--unencrypted]`, `ls`, `join <pool>`, `confirm <code>`, `admit [<mac>]`, `decline <mac>`, `leave`, `remove <mac>`, `plan <model>`, `serve <model>`, `rejoin`, `replan`; `--json`, `--port`. A member's part of a model shows in `mrun ls` as `layers a–b · for pools`. See [Mac pool](@/docs/pool.md) |
 | `mrun stop` | Stop a server started with `mrun serve --detach`, also while it generates; exits 0 when nothing runs |
 | `mrun logs` | Show the log of servers started in the background |
 | `mrun cache clear` | Drop all cached state of the running server, the live conversation included (after the running request) |
@@ -106,7 +107,7 @@ refused with E040 before anything is pulled or started. See [Clients](@/docs/cli
 | Command | Flags |
 | --- | --- |
 | `mrun connect <CLIENT>` | `--write` writes the configuration (diff, confirmation, backup in `~/.mrun/backups/<client>/`, server check; not for `crush` and `zed`); `--restore` puts the newest backup back; `-y, --yes`; `--port <PORT>` (8484, `MRUN_PORT`). `--json` prints the client's state, the files changed (or that `--write` would change) and `blocks` (`path`, `note`, `text`) |
-| `mrun ps` | `--json` prints the status JSON; `--port`. `-w, --watch` keeps polling: it redraws twice a second on a terminal and prints one JSON line per poll otherwise (or with `--json`); Ctrl-C ends it with exit 0 |
+| `mrun ps` | `--json` prints the status JSON; `--port`. `--sessions` prints the sessions of coding agents and chats with their rows and reuse (`--json`: `/mrun/sessions`). `-w, --watch` keeps polling: it redraws twice a second on a terminal and prints one JSON line per poll otherwise (or with `--json`); Ctrl-C ends it with exit 0 |
 | `mrun doctor` | `--port` |
 | `mrun stop` | `--port`. Stops a generating server too: new requests are refused, running ones get 5 seconds, then are cancelled. Nothing running is a note, exit 0 |
 | `mrun logs` | `-f, --follow` keeps printing new lines; `-n, --lines <N>` lines from the end (50) |
@@ -176,3 +177,7 @@ error[E031]: model 'qwen3.7' not found
 | E050 | 6 | Network or download failure |
 | E051 | 6 | A gated model needs a Hugging Face token |
 | E052 | 6 | Not enough disk space for the download |
+| E060 | 6 | A Mac of the pool stopped answering; names it |
+| E061 | 2 | A pool refused the join, or the codes differ |
+| E062 | 4 | The model does not fit the pool; each Mac's numbers |
+| E063 | 2 | Another Mac of the pool runs another mrun version |

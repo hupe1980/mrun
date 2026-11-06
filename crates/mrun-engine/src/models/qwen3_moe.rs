@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::common::{self, Attention, Head, Mlp, int};
 use super::moe::{Ffn, MoeConfig, SparseMoe};
 use super::qwen3::attention_config;
-use super::{LoadError, Model};
+use super::{LoadError, Model, Part};
 use crate::engine::LayerKind;
 use crate::load::{Quantization, RmsNorm, Weights, invalid};
 use crate::state::LayerState;
@@ -27,7 +27,9 @@ struct Layer {
 
 #[derive(Debug)]
 pub struct Qwen3Moe {
-    head: Head,
+    head: Option<Head>,
+    /// The first layer of this part (026).
+    first: usize,
     layers: Vec<Layer>,
     kinds: Vec<LayerKind>,
     dtype: Dtype,
@@ -56,7 +58,7 @@ fn stack_experts(weights: &mut Weights, layers: usize, experts: i32) -> Result<(
 }
 
 impl Qwen3Moe {
-    pub fn load(config: &Value, mut weights: Weights) -> Result<Self, LoadError> {
+    pub fn load(config: &Value, mut weights: Weights, part: Part) -> Result<Self, LoadError> {
         let quant = Quantization::from_config(config)?;
         let layers = int(config, "num_hidden_layers")? as usize;
         let attn = attention_config(config)?;
@@ -88,17 +90,22 @@ impl Qwen3Moe {
             .unwrap_or_default();
         stack_experts(&mut weights, layers, moe.experts)?;
         let tied = config["tie_word_embeddings"].as_bool().unwrap_or(false);
-        let head = Head::load(
-            &mut weights,
-            "model",
-            "lm_head",
-            &quant,
-            attn.hidden,
-            attn.eps,
-            tied,
-        )?;
+        let head = part
+            .head
+            .then(|| {
+                Head::load(
+                    &mut weights,
+                    "model",
+                    "lm_head",
+                    &quant,
+                    attn.hidden,
+                    attn.eps,
+                    tied,
+                )
+            })
+            .transpose()?;
         let mut stack = Vec::with_capacity(layers);
-        for i in 0..layers {
+        for i in (0..layers).filter(|&i| part.contains(i)) {
             let p = format!("model.layers.{i}");
             let norm =
                 |w: &mut Weights, name: &str| RmsNorm::load(w, &format!("{p}.{name}"), attn.eps);
@@ -129,8 +136,9 @@ impl Qwen3Moe {
         weights.retain(|name| !name.contains("rotary_emb.inv_freq"));
         common::ensure_consumed(&weights)?;
         Ok(Self {
-            dtype: head.norm.weight.dtype(),
+            dtype: common::part_dtype(head.as_ref(), stack.first().map(|l| &l.input_layernorm))?,
             head,
+            first: part.first,
             layers: stack,
             kinds: vec![LayerKind::FullAttention; layers],
             hidden: attn.hidden as u64,
@@ -148,7 +156,7 @@ impl Model for Qwen3Moe {
     }
 
     fn embed(&self, ids: &Array) -> tensor::Result<Array> {
-        self.head.embed.forward(ids)
+        common::head(&self.head)?.embed.forward(ids)
     }
 
     fn layer(
@@ -158,7 +166,7 @@ impl Model for Qwen3Moe {
         state: &mut LayerState,
         offset: i32,
     ) -> tensor::Result<Array> {
-        let layer = &self.layers[i];
+        let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
         let x = tensor::add(x, &layer.attention.forward(&h, state.kv()?, offset)?)?;
         let h = layer.post_attention_layernorm.forward(&x)?;
@@ -166,7 +174,11 @@ impl Model for Qwen3Moe {
     }
 
     fn logits(&self, x: &Array) -> tensor::Result<Array> {
-        self.head.logits(x)
+        common::head(&self.head)?.logits(x)
+    }
+
+    fn hidden(&self) -> i32 {
+        self.hidden as i32
     }
 
     fn chunk_scratch(&self, len: u32, depth: u32) -> u64 {

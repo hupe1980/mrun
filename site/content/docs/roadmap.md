@@ -1,6 +1,6 @@
 +++
 title = "Roadmap"
-description = "What is planned for mrun 0.2 and 0.3."
+description = "What is planned for mrun 0.3 and 0.4."
 weight = 110
 +++
 
@@ -9,7 +9,7 @@ welcome as
 [hardware reports](https://github.com/hupe1980/mrun/blob/main/CONTRIBUTING.md#hardware-reports)
 and never gate a release.
 
-## 0.2: close the gap
+## 0.3: close the gap
 
 | Item | What |
 | --- | --- |
@@ -22,7 +22,7 @@ and never gate a release.
 | `qwen3.8` | Qwen3.8-27B as the quality option on Macs with 32 GB or more |
 | Small model | Granite-4.2-8B, LFM2.5-24B-A2B and gpt-oss-20b against the `qwen3.5` preview; a loop guard for near-repeating reasoning |
 
-## 0.3: bigger Macs, more clients
+## 0.4: bigger Macs, more clients
 
 | Item | What |
 | --- | --- |
@@ -34,13 +34,16 @@ and never gate a release.
 
 ## Later
 
+A pool keeps one request per Mac in flight, so several people's agents run at once and a pool's
+throughput grows with its Macs.
+
 More model families, ordered by agentic score per GB. An opt-in 8-bit KV cache if a long-context
 study shows no quality cost. Shared computation for lanes that receive the same prompt.
 Notarization and an SBOM.
 
 ## Not planned
 
-A model marketplace, running tools on the server, multi-model routing, multi-GPU or distributed
+A model marketplace, running tools on the server, multi-model routing, tensor-parallel
 serving, training or fine-tuning, a custom quantization format, Ollama's native API,
 server-stored Responses state, lossy context reuse by default, and performance work on Linux or
 CUDA.

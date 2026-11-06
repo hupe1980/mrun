@@ -58,6 +58,9 @@ pub struct ChatRequest {
     /// Client class from the `User-Agent` (003 FR-020, `splice::client_class`): keys
     /// `/mrun/status` `cache.splice`.
     pub client: String,
+    /// The pool member that sent it (026; `x-mrun-member`, set by this Mac's pool port from the
+    /// member's certificate); `None` from this Mac.
+    pub member: Option<String>,
 }
 
 impl ChatRequest {
@@ -82,6 +85,7 @@ impl ChatRequest {
             include_usage: false,
             ignore_eos: false,
             client: "other".into(),
+            member: None,
         }
     }
 

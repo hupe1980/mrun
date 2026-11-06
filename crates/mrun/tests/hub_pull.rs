@@ -952,3 +952,81 @@ impl std::io::Write for Shared {
         Ok(())
     }
 }
+
+/// A sharded model: layer 0 and the embeddings in one shard, layer 1 and the head in the other.
+fn sharded() -> Mock {
+    let index = json!({"weight_map": {
+        "model.embed_tokens.weight": "model-00001-of-00002.safetensors",
+        "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00002.safetensors",
+        "model.layers.1.self_attn.q_proj.weight": "model-00002-of-00002.safetensors",
+        "lm_head.weight": "model-00002-of-00002.safetensors",
+    }});
+    let mut mock = Mock::new("qwen3");
+    mock.files
+        .retain(|(name, ..)| !name.ends_with(".safetensors"));
+    mock.files.extend([
+        (
+            "model.safetensors.index.json".into(),
+            index.to_string().into_bytes(),
+            false,
+        ),
+        (
+            "model-00001-of-00002.safetensors".into(),
+            safetensors(1, 4096),
+            true,
+        ),
+        (
+            "model-00002-of-00002.safetensors".into(),
+            safetensors(2, 4096),
+            true,
+        ),
+    ]);
+    mock
+}
+
+/// 026 T029: a pool member downloads only the shards of its layers, kept as a part in the store
+/// (listed by `mrun ls`); a whole pull completes it with the files it has.
+#[tokio::test]
+async fn a_part_downloads_only_its_layers_and_a_pull_completes_it() {
+    let mock = Arc::new(sharded());
+    let url = serve(mock.clone()).await;
+    let root = tempfile::tempdir().unwrap();
+    let ctx = ctx(root.path(), &url);
+    let report = mrun::hub::progress::Report::default();
+    let part = mrun::hub::download::pull_part(&ctx, REPO, 1, 2, &report)
+        .await
+        .unwrap();
+    assert_eq!(part.part, Some([1, 2]));
+    let files: Vec<&str> = part.files.iter().map(|f| f.path.as_str()).collect();
+    assert!(
+        files.contains(&"model-00002-of-00002.safetensors"),
+        "{files:?}"
+    );
+    assert!(
+        !files.contains(&"model-00001-of-00002.safetensors"),
+        "{files:?}"
+    );
+    assert!(
+        !mock.log().iter().any(|l| l.contains("model-00001")),
+        "the other shard is not downloaded"
+    );
+    let rows = pulled_rows(&ctx);
+    assert_eq!(rows[0].part, Some([1, 2]));
+    assert!(
+        ls::render(&rows, "qwen3.6").contains("layers 2–2 · for pools"),
+        "{}",
+        ls::render(&rows, "qwen3.6")
+    );
+
+    // The whole model: only the missing shard comes down, and the manifest is whole.
+    let before = mock.weight_requests();
+    let whole = pull_tiny(&ctx).await.unwrap();
+    assert_eq!(whole.part, None);
+    assert_eq!(whole.files.len(), part.files.len() + 1);
+    assert_eq!(mock.weight_requests(), before + 1, "{:?}", mock.log());
+    assert_eq!(
+        pulled_rows(&ctx).len(),
+        1,
+        "one model, not a part beside it"
+    );
+}

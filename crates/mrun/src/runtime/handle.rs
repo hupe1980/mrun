@@ -320,8 +320,19 @@ fn worker<E: Engine>(
     queue: &QueueGauge,
     cache: &Mutex<Option<CacheStats>>,
 ) {
+    let mut waiting: std::collections::VecDeque<Command> = std::collections::VecDeque::new();
+    let mut last_turn: Option<Option<String>> = None;
     loop {
-        let command = match inbox.recv_timeout(IDLE_PRESSURE_POLL) {
+        // Everything that arrived waits here, so the next request can be chosen in turns.
+        while let Ok(command) = inbox.try_recv() {
+            waiting.push_back(command);
+        }
+        let next = if waiting.is_empty() {
+            inbox.recv_timeout(IDLE_PRESSURE_POLL)
+        } else {
+            Ok(next_turn(&mut waiting, last_turn.as_ref()))
+        };
+        let command = match next {
             Ok(command) => command,
             Err(flume::RecvTimeoutError::Timeout) => {
                 // Idle: memory pressure sheds cache here too (critical also drops the live state).
@@ -341,6 +352,7 @@ fn worker<E: Engine>(
                 finished,
             } => {
                 ticket.leave_queue();
+                last_turn = Some(request.turn.clone());
                 if request.cancel.is_cancelled() {
                     // Cancelled or expired while waiting: never reaches the engine.
                     drop(events);
@@ -390,6 +402,26 @@ fn worker<E: Engine>(
     }
 }
 
+/// The next command: control commands first, then the oldest request of another member than
+/// the one just served (026 FR-007), else the oldest.
+fn next_turn(
+    waiting: &mut std::collections::VecDeque<Command>,
+    last: Option<&Option<String>>,
+) -> Command {
+    let turn = |c: &Command| match c {
+        Command::Generate { request, .. } => Some(request.turn.clone()),
+        _ => None,
+    };
+    let at = waiting
+        .iter()
+        .position(|c| turn(c).is_none())
+        .or_else(|| {
+            last.and_then(|last| waiting.iter().position(|c| turn(c).as_ref() != Some(last)))
+        })
+        .unwrap_or(0);
+    waiting.remove(at).expect("a waiting command")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,6 +436,46 @@ mod tests {
     fn request(tokenizer: &Tokenizer, prompt: &str) -> GenerateRequest {
         let tokens = tokenizer.encode(prompt).unwrap();
         GenerateRequest::new(RenderedPrompt::from_tokens(tokens), 100)
+    }
+
+    #[test]
+    fn members_take_turns() {
+        let tokenizer = byte_tokenizer();
+        let command = |turn: Option<&str>, prompt: &str| {
+            let mut request = request(&tokenizer, prompt);
+            request.turn = turn.map(str::to_string);
+            let (events, _) = bounded(1);
+            let (finished, _) = bounded(1);
+            Command::Generate {
+                request,
+                ticket: Ticket::new(CancelToken::new(), Arc::default()),
+                events,
+                finished,
+            }
+        };
+        let mut waiting: std::collections::VecDeque<Command> = [
+            command(Some("anna"), "a1"),
+            command(Some("anna"), "a2"),
+            command(None, "b1"),
+            command(Some("anna"), "a3"),
+        ]
+        .into();
+        let mut order = Vec::new();
+        let mut last = Some(Some("anna".to_string()));
+        while !waiting.is_empty() {
+            if let Command::Generate { request, .. } = next_turn(&mut waiting, last.as_ref()) {
+                order.push(
+                    tokenizer
+                        .inner()
+                        .decode(&request.prompt.tokens, false)
+                        .unwrap(),
+                );
+                last = Some(request.turn);
+            }
+        }
+        assert_eq!(order, ["b1", "a1", "a2", "a3"]);
+        waiting.push_back(Command::Reset);
+        assert!(matches!(next_turn(&mut waiting, None), Command::Reset));
     }
 
     fn spawn(

@@ -7,6 +7,7 @@ use crate::api::handler;
 use crate::api::metrics::Metrics;
 use crate::api::model::ApiKind;
 use crate::api::run::DEFAULT_MAX_OUTPUT;
+use crate::api::sessions::{self, Finished, History};
 use crate::cache::miss::{Cause, MissReport, role_str};
 use crate::chat::syntax::registry::ChatSyntax;
 use crate::cli::serve::{Readiness, ServerState};
@@ -67,6 +68,8 @@ pub struct Entry {
     pub queued_at: Instant,
     /// Cancels the request (shutdown).
     pub ticket: Option<Ticket>,
+    /// The pool member that sent it (026); `None` from this Mac.
+    pub member: Option<String>,
 }
 
 impl Entry {
@@ -85,6 +88,7 @@ impl Entry {
             first_token: None,
             queued_at: Instant::now(),
             ticket: None,
+            member: None,
         }
     }
 
@@ -126,6 +130,15 @@ impl Entry {
     }
 }
 
+/// This Mac's pool for `/mrun/status`; a host's carries the queue by sender.
+fn pool_status(state: &ServerState) -> Value {
+    let mut pool = state.pool.status()["pool"].clone();
+    if pool["role"] == "host" {
+        pool["queue"] = state.tracker.pool_queue();
+    }
+    pool
+}
+
 /// Shutdown stages, observed by every relay.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Stage {
@@ -144,6 +157,10 @@ pub struct Tracker {
     /// The last [`FINISHED`] requests that left the queue, newest last (018 FR-005: Now's
     /// reuse ribbons). Counters only, no content.
     finished: Mutex<std::collections::VecDeque<Value>>,
+    /// Session replay's records (025).
+    pub history: Mutex<History>,
+    /// `ended_ms` counts from here.
+    started: Instant,
     pub metrics: Metrics,
     stage: watch::Sender<Stage>,
 }
@@ -153,6 +170,8 @@ impl Default for Tracker {
         Self {
             requests: Mutex::default(),
             finished: Mutex::default(),
+            history: Mutex::default(),
+            started: Instant::now(),
             metrics: Metrics::default(),
             stage: watch::Sender::new(Stage::Serving),
         }
@@ -168,6 +187,29 @@ impl Tracker {
         self.map().insert(entry.id, entry);
     }
 
+    /// The pool's queue (026 FR-007): who runs now, and how many requests wait per sender
+    /// (`null`: this Mac), oldest first.
+    pub fn pool_queue(&self) -> Value {
+        let map = self.map();
+        let running = map
+            .values()
+            .find(|e| e.phase != Phase::Queued)
+            .map(|e| e.member.clone());
+        let mut waiting: Vec<(Option<String>, u32)> = Vec::new();
+        let mut queued: Vec<&Entry> = map.values().filter(|e| e.phase == Phase::Queued).collect();
+        queued.sort_by_key(|e| e.queued_at);
+        for e in queued {
+            match waiting.iter_mut().find(|(m, _)| *m == e.member) {
+                Some((_, n)) => *n += 1,
+                None => waiting.push((e.member.clone(), 1)),
+            }
+        }
+        json!({
+            "running": running.map(|m| json!({"member": m})),
+            "waiting": waiting.iter().map(|(m, n)| json!({"member": m, "waiting": n})).collect::<Vec<_>>(),
+        })
+    }
+
     pub fn update(&self, id: u64, f: impl FnOnce(&mut Entry)) {
         if let Some(entry) = self.map().get_mut(&id) {
             f(entry);
@@ -181,8 +223,14 @@ impl Tracker {
     /// Removes a request that ended and keeps its record for `/mrun/status` `finished`: its
     /// reuse and miss report as `last` shows them, time to first token from arrival, decode
     /// speed and how it ended (`end`, `stopped`, `error`). Requests that never left the queue
-    /// leave no record.
-    pub fn finish(&self, id: u64, miss: Option<&MissReport>, stop: &'static str) {
+    /// leave no record. With `replay`, session replay keeps it too, with its session and row.
+    pub fn finish(
+        &self,
+        id: u64,
+        miss: Option<&MissReport>,
+        stop: &'static str,
+        replay: Option<Finished>,
+    ) {
         let Some(entry) = self.map().remove(&id) else {
             return;
         };
@@ -207,11 +255,37 @@ impl Tracker {
             .into();
         record["decode_tps"] = entry.decode_tps(now).into();
         record["stop"] = stop.into();
+        if let Some(replay) = replay {
+            let ended_ms = self.uptime_ms();
+            let mut history = self.history.lock().unwrap_or_else(PoisonError::into_inner);
+            // A member's agents are sessions of their own.
+            let key = match &replay.member {
+                Some(member) => format!("{}@{member}", replay.client),
+                None => replay.client.clone(),
+            };
+            let (session, row) = history.assign(&key, &replay.fingerprint, ended_ms);
+            let mut kept = record.clone();
+            kept["session"] = session.as_str().into();
+            kept["row"] = row.into();
+            kept["client"] = replay.client.into();
+            kept["member"] = replay.member.into();
+            kept["ended_ms"] = ended_ms.into();
+            kept["attention"] = miss
+                .is_some_and(|m| sessions::worth_fixing(m.cause, m.message, m.unreused))
+                .into();
+            kept["excerpt"] = replay.excerpt.is_some().into();
+            history.push(id, session, kept, replay.excerpt);
+        }
         let mut finished = self.finished.lock().unwrap_or_else(PoisonError::into_inner);
         finished.push_back(record);
         while finished.len() > FINISHED {
             finished.pop_front();
         }
+    }
+
+    /// Milliseconds since the tracker started: the clock of session replay's `ended_ms`.
+    pub fn uptime_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
     }
 
     /// The kept records of [`Self::finish`], oldest first.
@@ -443,6 +517,7 @@ pub async fn status(State(state): State<ServerState>) -> Response {
         "requests": [],
         "finished": [],
         "lanes": {"configured": 1, "busy": 0},
+        "pool": pool_status(&state),
     });
     if let Ok(loaded) = handler::ready(&state) {
         let info = loaded.handle.info();

@@ -23,7 +23,11 @@ fn args() -> ServeArgs {
 }
 
 fn scripted() -> EngineFactory {
-    Box::new(|_| {
+    scripted_with("{{ messages[0].content }}")
+}
+
+fn scripted_with(template: &'static str) -> EngineFactory {
+    Box::new(move |_| {
         let tokenizer = Arc::new(byte_tokenizer());
         let handle = EngineHandle::spawn(
             || Ok(ScriptedEngine::new(Vec::new(), 4096)),
@@ -34,7 +38,7 @@ fn scripted() -> EngineFactory {
             model_id: "scripted".into(),
             handle,
             tokenizer,
-            template: Arc::new(ChatTemplate::new("{{ messages[0].content }}".into()).unwrap()),
+            template: Arc::new(ChatTemplate::new(template.into()).unwrap()),
             syntax: SyntaxId::Hermes,
             supports_thinking: true,
             defaults: Sampling::GREEDY,
@@ -194,4 +198,125 @@ fn serve_flags_read_mrun_environment() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("not-a-port"));
+}
+
+/// 025: a tool loop and an edited prompt land on one session's main row; the edit's excerpt
+/// shows the changed text; `/mrun/sessions` carries no text.
+#[tokio::test]
+async fn sessions_group_a_tool_loop_and_explain_an_edit() {
+    let template = "{%- for m in messages %}<|im_start|>{{ m.role }}\n{{ m.content }}<|im_end|>\n\
+                    {%- endfor %}{%- if add_generation_prompt %}<|im_start|>assistant\n{%- endif %}";
+    let mut server = serve::start(args(), scripted_with(template)).await.unwrap();
+    server.loaded().await.unwrap();
+    let client = reqwest::Client::new();
+    let post = |messages: serde_json::Value| {
+        let request = client
+            .post(format!("http://{}/v1/chat/completions", server.addr))
+            .header("user-agent", "claude-cli/2.1.3 (external, cli)")
+            .json(&serde_json::json!({
+                "model": "scripted", "max_tokens": 1, "messages": messages,
+                "tools": [{"type": "function", "function": {"name": "bash", "parameters": {}}}],
+            }));
+        async move { assert_eq!(request.send().await.unwrap().status(), 200) }
+    };
+    let m = |role: &str, content: &str| serde_json::json!({"role": role, "content": content});
+    let sys = m("system", "You are a coding agent.");
+    let ask = m("user", "run the build");
+    post(serde_json::json!([sys, ask])).await;
+    let ran = |secs: &str| m("user", &format!("build ok in {secs} and the tests pass"));
+    post(serde_json::json!([
+        sys,
+        ask,
+        m("assistant", "running"),
+        ran("12.4s")
+    ]))
+    .await;
+    post(serde_json::json!([
+        sys,
+        ask,
+        m("assistant", "running"),
+        ran("12.4s"),
+        m("assistant", "done"),
+        m("user", "thanks")
+    ]))
+    .await;
+    post(serde_json::json!([
+        sys,
+        ask,
+        m("assistant", "running"),
+        ran("11.9s"),
+        m("assistant", "done"),
+        m("user", "thanks")
+    ]))
+    .await;
+
+    let (status, body) = get(&server, "/mrun/sessions", &[]).await;
+    assert_eq!(status, 200);
+    let sessions: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        sessions["sessions"].as_array().unwrap().len(),
+        1,
+        "{sessions}"
+    );
+    let session = &sessions["sessions"][0];
+    assert_eq!(
+        (session["label"].as_str(), session["requests"].as_u64()),
+        (Some("Claude Code"), Some(4))
+    );
+    assert_eq!(
+        session["rows"],
+        serde_json::json!([{"id": "main", "kind": "main", "requests": 4}]),
+        "{body}"
+    );
+    let requests = sessions["requests"].as_array().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|r| r["row"] == "main" && r["session"] == "s1")
+    );
+    let edit = requests.last().unwrap();
+    assert_eq!(
+        (edit["cause"].as_str(), edit["excerpt"].as_bool()),
+        (Some("diverged"), Some(true)),
+        "{edit}"
+    );
+    assert!(
+        !body.contains("build ok"),
+        "no prompt text in /mrun/sessions"
+    );
+    let (_, status_body) = get(&server, "/mrun/status", &[]).await;
+    assert!(
+        !status_body.contains("build ok"),
+        "no prompt text in /mrun/status"
+    );
+    let since = edit["id"].as_u64().unwrap() - 1;
+    let (_, newer) = get(&server, &format!("/mrun/sessions?since={since}"), &[]).await;
+    let newer: serde_json::Value = serde_json::from_str(&newer).unwrap();
+    assert_eq!(newer["requests"].as_array().unwrap().len(), 1);
+
+    let id = edit["id"].as_u64().unwrap();
+    let (status, body) = get(&server, &format!("/mrun/requests/{id}/excerpt"), &[]).await;
+    assert_eq!(status, 200, "{body}");
+    let excerpt: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        excerpt["context"]
+            .as_str()
+            .unwrap()
+            .ends_with("build ok in 1"),
+        "{excerpt}"
+    );
+    assert!(
+        excerpt["before"].as_str().unwrap().starts_with("2.4s"),
+        "{excerpt}"
+    );
+    assert!(
+        excerpt["after"].as_str().unwrap().starts_with("1.9s"),
+        "{excerpt}"
+    );
+    let (status, _) = get(&server, "/mrun/requests/999999/excerpt", &[]).await;
+    assert_eq!(status, 404);
+    let first = requests[0]["id"].as_u64().unwrap();
+    let (status, _) = get(&server, &format!("/mrun/requests/{first}/excerpt"), &[]).await;
+    assert_eq!(status, 404);
+    server.shutdown().await.unwrap();
 }

@@ -246,3 +246,32 @@ export function stopsIn(idleS: number | null | undefined, idleStopS = 1800): num
   if (idleS === null || idleS === undefined) return null;
   return Math.max(0, Math.ceil((idleStopS - idleS) / 60));
 }
+
+/** What to do about a miss (025 inspector): one sentence per cause and role. */
+export function hint(miss: Pick<Miss, "cause" | "message">): string {
+  switch (miss.cause) {
+    case "evicted":
+      return "Memory ran short and this conversation's state was dropped. A smaller model or a shorter context keeps more of it.";
+    case "disabled":
+      return "The cache is off (--no-cache). Start the server without it to reuse prompts.";
+    case "gap":
+      return "The model resumed from its nearest checkpoint; the tokens since then were computed again.";
+    case "new":
+      return "Nothing earlier matched: a new conversation, a subagent or a side request.";
+    case "diverged":
+      switch (miss.message?.role) {
+        case "user":
+          return "An earlier message was edited; everything after it is computed again. Expected.";
+        case "assistant":
+          return "An earlier reply came back in a different form than it was generated.";
+        case "tool":
+          return "The client re-sent an earlier tool result differently. Look for timestamps or changing output in it.";
+        case "system":
+          return "The system prompt or the tool list changed mid-session, often a date or a new tool.";
+        default:
+          return "The conversation changed before this point.";
+      }
+    default:
+      return "Everything before the new tokens was reused.";
+  }
+}

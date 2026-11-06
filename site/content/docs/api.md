@@ -19,6 +19,11 @@ definitions; this page lists what mrun serves and where it differs.
 | `GET /v1/models/{id}` | The same for one id, plus the model's sampling `defaults` and whether it thinks (`thinking`) |
 | `GET /health` | `{"status":"ok","model":…,"loaded":true}`; 503 with `"status":"loading"` or `"status":"error"` while loading or after a failed load |
 | `GET /mrun/status` | Everything `mrun ps` shows, as JSON ([below](#mrun-status)) |
+| `GET /mrun/sessions` | Session replay: sessions, rows and the last 2,000 requests, counters only ([below](#sessions)) |
+| `GET /mrun/requests/{id}/excerpt` | The text around where a request's prompt changed ([below](#sessions)) |
+| `GET /mrun/pool` | This Mac's pool, Macs waiting to join and (`?browse=true`) pools nearby ([Mac pool](@/docs/pool.md)) |
+| `GET /mrun/pool/plan?model=` | The plan for a model on the pool's Macs, with each Mac's download |
+| `POST /mrun/pool/rejoin` · `POST /mrun/pool/replan` | A member back without a code; the host serves again on the Macs answering |
 | `POST /mrun/cache/clear` | Drop all cached state; `200 {"branches_dropped":…,"bytes_freed":…}` ([below](#mrun-status)) |
 | `GET /metrics` | Prometheus text format: requests, tokens, cache, queue, memory and latency (`mrun_*`); no content |
 
@@ -134,6 +139,11 @@ object:
 | `pressure_events` | macOS memory-pressure levels acted on |
 | `enabled` | `false` under `--no-cache` |
 
+`pool` is this Mac's pool (`null` without one): its role, name, model, `unencrypted`, members
+with their state (`joined`, `downloading`, `loading`, `serving`, `lost`) and, on the host,
+`degraded` when a Mac stopped answering, `recovery` (`wait`, `smaller`) while it waits for one,
+`replanning`, and `queue` (who runs, how many wait per Mac).
+
 `finished` lists the last 20 requests that left the queue, oldest first, each with
 `prompt_tokens`, `cached`, `processed`, the miss fields of `last` (`cause`, `divergence`,
 `message`, `unreused`), `generated`, `ttft_ms` (from arrival), `decode_tps` and `stop` (`end`,
@@ -142,6 +152,20 @@ object:
 `POST /mrun/cache/clear` waits for a running request, then drops every branch, checkpoint and
 the live conversation and answers `200` with `{"branches_dropped": N, "bytes_freed": B}`
 (`mrun cache clear`). The next request reports cause `new`.
+
+## Sessions
+
+`GET /mrun/sessions[?since=<id>]` groups the last 2,000 finished requests into sessions: requests
+of one client (from the `User-Agent`), each within 30 minutes of the previous. Each session has
+`label`, totals (`requests`, `prompt_tokens`, `cached_tokens`, `attention`: misses worth fixing)
+and `rows`: `main`, `sub1`… (subagents), `side` (requests without tools: titles, compaction).
+`requests` holds the records after `since`, oldest first, with the fields of `finished` plus
+`session`, `row`, `client`, `ended_ms`, `attention` and `excerpt`. Counters only, in memory only.
+
+`GET /mrun/requests/{id}/excerpt` decodes, on each call, the text at the divergence of a request
+whose `excerpt` is `true`: `context` (just before it), `before` (the cached text) and `after` (the
+sent text), each up to about 200 characters. `404` when the request is gone or its prompt did not
+change. Remote mode answers `/mrun/sessions` with `"remote": true` and no sessions.
 
 ## Errors
 

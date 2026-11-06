@@ -168,11 +168,24 @@ fn unreachable(port: u16) -> CliError {
 
 /// One request with an empty body; returns the status and the JSON body (`Null` if none).
 pub fn request(port: u16, method: &str, path: &str) -> Result<(u16, Value), CliError> {
+    request_json(port, method, path, None, TIMEOUT)
+}
+
+/// [`request`] with a JSON body, waiting up to `wait` for the answer (a join waits minutes).
+pub fn request_json(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    wait: Duration,
+) -> Result<(u16, Value), CliError> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(|_| unreachable(port))?;
-    stream.set_read_timeout(Some(TIMEOUT)).ok();
+    stream.set_read_timeout(Some(wait)).ok();
+    let body = body.map(Value::to_string).unwrap_or_default();
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
     );
     stream
         .write_all(head.as_bytes())

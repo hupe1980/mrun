@@ -47,6 +47,8 @@ struct Snapshot {
     /// A rented GPU's spend so far, in cents (024 FR-004), and its price.
     spend_cents: Option<u64>,
     cost_per_hr: Option<String>,
+    /// In a pool (026): the Macs it runs on as host, `Some(0)` as a member.
+    pool_macs: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,10 +79,16 @@ impl Snapshot {
         }
     }
 
-    /// The text beside the glyph: what a rented GPU cost so far, nothing while local.
+    /// The text beside the glyph: what a rented GPU cost so far, a pool's Macs, nothing while
+    /// local.
     fn title(&self) -> Option<String> {
-        self.spend_cents
-            .map(|c| format!("${}.{:02}", c / 100, c % 100))
+        if let Some(c) = self.spend_cents {
+            return Some(format!("${}.{:02}", c / 100, c % 100));
+        }
+        match self.pool_macs? {
+            0 => Some("Pool".into()),
+            n => Some(format!("{n} Macs")),
+        }
     }
 
     fn state_line(&self) -> String {
@@ -204,6 +212,20 @@ async fn poll(host: Host, proxy: tao::event_loop::EventLoopProxy<UserEvent>) {
                 + b["scratch"].as_u64().unwrap_or(0)
                 + c["buffer_bytes"].as_u64().unwrap_or(0)
                 + c["checkpoint_bytes"].as_u64().unwrap_or(0);
+            let pool = &status["pool"];
+            snap.pool_macs = match pool["role"].as_str() {
+                Some("member") => Some(0),
+                Some("host") => {
+                    let answering = pool["members"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|m| m["state"] != "lost")
+                        .count();
+                    (answering > 0).then_some(answering + 1)
+                }
+                _ => None,
+            };
             let pod = &status["pod"];
             if pod.is_object() {
                 snap.spend_cents =
@@ -721,6 +743,20 @@ mod tests {
             ..busy(false)
         };
         assert_eq!(long.title().as_deref(), Some("$13.52"));
+    }
+
+    #[test]
+    fn the_menu_bar_shows_a_pools_macs() {
+        let host = Snapshot {
+            pool_macs: Some(3),
+            ..busy(false)
+        };
+        assert_eq!(host.title().as_deref(), Some("3 Macs"));
+        let member = Snapshot {
+            pool_macs: Some(0),
+            ..busy(false)
+        };
+        assert_eq!(member.title().as_deref(), Some("Pool"));
     }
 
     #[test]

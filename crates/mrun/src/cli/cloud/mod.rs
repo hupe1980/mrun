@@ -14,7 +14,7 @@
 //! tells `mrun launch` to wait for the relay instead of offering a local model.
 
 pub mod catalog;
-pub mod keychain;
+pub use crate::keychain;
 
 use crate::cli::server::{self, Health};
 use crate::cli::{confirm, info};

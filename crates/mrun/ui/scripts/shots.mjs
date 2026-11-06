@@ -43,12 +43,29 @@ function json(res, body) {
 
 // The second half of the run shows a rented GPU serving (024).
 let remote = false;
+// Session replay (025): the 140-request session, none, or 2,000 requests (SC-002 timing).
+let replay = "session";
+// Mac pool (026): which pool state the stub serves.
+let poolMode = "empty";
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   const path = url.pathname;
   if (path === "/app/state") return json(res, data.appState);
-  if (path === "/mrun/status") return json(res, remote ? data.podStatus : data.status);
+  if (path === "/mrun/status") {
+    if (remote) return json(res, data.podStatus);
+    // The pool serving (026): Now shows it compactly.
+    if (poolMode === "serving") return json(res, { ...data.status, pool: { ...data.poolView("serving").pool, queue: { running: null, waiting: [{ member: "anna000000000000", waiting: 1 }] } } });
+    return json(res, data.status);
+  }
+  if (path === "/mrun/sessions") {
+    const all = replay === "none" ? { kept: 2000, dropped: 0, remote: false, now_ms: 0, sessions: [], requests: [] } : data.sessions(replay === "big" ? 1940 : 140);
+    const since = Number(url.searchParams.get("since") ?? -1);
+    return json(res, { ...all, requests: all.requests.filter((r) => r.id > since) });
+  }
+  if (path.endsWith("/excerpt")) return json(res, data.excerpt);
+  if (path === "/mrun/pool") return json(res, data.poolView(poolMode));
+  if (path === "/mrun/pool/plan") return json(res, data.poolPlan);
   if (path === "/app/cloud") return json(res, data.cloud);
   if (path === "/app/actions" && req.method === "POST") return json(res, { job: data.cloudJob });
   if (path.startsWith("/app/jobs/")) return json(res, data.cloudJob);
@@ -165,6 +182,72 @@ try {
     await shot("10-palette");
     await page.keyboard.press("Escape");
     await page.evaluate(() => document.querySelector("button[aria-label='Close settings']")?.click());
+    await go("Sessions");
+    await page.waitForSelector("[role=option]", { timeout: 5000 });
+    await shot("13-sessions-follow");
+    await page.evaluate(() => {
+      const option = [...document.querySelectorAll("[role=option]")].find((o) => o.getAttribute("aria-label")?.includes("Worth fixing"));
+      option?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      option?.scrollIntoView({ inline: "center", block: "nearest" });
+    });
+    await page.waitForSelector("aside ins", { timeout: 5000 });
+    await shot("14-sessions");
+    replay = "none";
+    await go("Now");
+    await go("Sessions");
+    await pause(1200);
+    await shot("15-sessions-empty");
+    if (scheme === "light") {
+      // SC-002: 2,000 requests render and scroll without stutter.
+      replay = "big";
+      await go("Now");
+      const started = Date.now();
+      await go("Sessions");
+      await page.waitForFunction(() => document.querySelectorAll("[role=option]").length >= 2000, { timeout: 10000 });
+      const shown = Date.now() - started;
+      const frames = await page.evaluate(async () => {
+        const sky = document.querySelector(".skyline");
+        const times = [];
+        let last = performance.now();
+        for (let i = 0; i < 60; i++) {
+          sky.scrollLeft = (sky.scrollWidth * i) / 60;
+          await new Promise((r) => requestAnimationFrame(r));
+          const now = performance.now();
+          times.push(now - last);
+          last = now;
+        }
+        return times.sort((a, b) => a - b)[Math.floor(times.length * 0.95)];
+      });
+      console.log(`2,000 requests: shown in ${shown} ms, 95th percentile frame while scrolling ${frames.toFixed(1)} ms`);
+    }
+    replay = "session";
+    // Mac pool (026).
+    poolMode = "empty";
+    await go("Pool");
+    await pause(1200);
+    await shot("16-pool-empty");
+    poolMode = "join";
+    await pause(1800);
+    await shot("17-pool-join");
+    await page.keyboard.press("Escape");
+    poolMode = "open";
+    await pause(1700);
+    await page.select("select[aria-label=Model]", "qwen3.6");
+    await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Plan")?.click());
+    await page.waitForSelector("[aria-labelledby=plan-title]", { timeout: 5000 });
+    await shot("18-pool-plan");
+    await page.keyboard.press("Escape");
+    poolMode = "serving";
+    await pause(1700);
+    await shot("19-pool-serving");
+    await go("Now");
+    await pause(1500);
+    await shot("21-now-pool");
+    await go("Pool");
+    poolMode = "lost";
+    await pause(1700);
+    await shot("20-pool-lost");
+    poolMode = "empty";
     remote = true;
     await go("Now");
     await pause(1500);

@@ -315,6 +315,7 @@ fn router(state: RelayState) -> Router {
         .route("/v1/models", get(models))
         .route("/v1/models/{id}", get(model))
         .route("/mrun/status", get(relay_status))
+        .route("/mrun/sessions", get(sessions))
         .route("/v1/messages", post(api))
         .route("/v1/messages/count_tokens", post(api))
         .route("/v1/chat/completions", post(api))
@@ -347,6 +348,15 @@ async fn guard(State(state): State<RelayState>, request: Request, next: Next) ->
 
 async fn hello() -> StatusCode {
     StatusCode::OK
+}
+
+/// Session replay covers models on this Mac (025): the relay has no miss reports to replay.
+async fn sessions() -> Response {
+    axum::Json(
+        json!({"schema_version": 1, "kept": 0, "dropped": 0, "remote": true,
+        "sessions": [], "requests": []}),
+    )
+    .into_response()
 }
 
 async fn health(State(state): State<RelayState>) -> Response {

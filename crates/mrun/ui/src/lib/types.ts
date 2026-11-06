@@ -39,6 +39,49 @@ export interface Finished extends Miss {
   stop: string | null;
 }
 
+/** A finished request as session replay keeps it (025, `/mrun/sessions`). */
+export interface ReplayRecord extends Finished {
+  session: string;
+  row: string;
+  client: string;
+  /** Milliseconds since the server started, when the request ended. */
+  ended_ms: number;
+  attention: boolean;
+  excerpt: boolean;
+}
+
+export type RowKind = "main" | "subagent" | "side" | "conversation";
+
+export interface Session {
+  id: string;
+  client: string;
+  label: string;
+  first_ms: number;
+  last_ms: number;
+  requests: number;
+  prompt_tokens: number;
+  cached_tokens: number;
+  attention: number;
+  rows: { id: string; kind: RowKind; requests: number }[];
+}
+
+export interface Sessions {
+  kept: number;
+  dropped: number;
+  remote: boolean;
+  sessions: Session[];
+  requests: ReplayRecord[];
+}
+
+/** The text around a divergence, decoded on request (`/mrun/requests/{id}/excerpt`). */
+export interface Excerpt {
+  id: number;
+  message: { index: number; role: string } | null;
+  context: string;
+  before: string;
+  after: string;
+}
+
 export interface Status {
   version: string;
   model: { id: string; identity: string; family: string; syntax: string } | null;
@@ -65,10 +108,101 @@ export interface Status {
   lanes: { configured: number; busy: number };
   /** Remote mode (013): the pod the relay serves from. */
   pod?: Pod | null;
+  /** This Mac's pool (026). */
+  pool?: PoolView["pool"];
 }
 
 /** What the server is doing, as one word the whole UI agrees on. */
 export type ServerState = "ready" | "reading" | "generating" | "loading" | "stopped" | "failed";
+
+/** A Mac in a pool, as the host sees it (026). */
+export interface PoolMember {
+  mac_id: string;
+  name: string;
+  chip: string;
+  memory_bytes: number;
+  power: "adapter" | "battery" | string;
+  address: string;
+  /** `joined`, `downloading`, `loading`, `connecting`, `serving`, `failed` or `lost`. */
+  state: string;
+}
+
+export interface PoolWaiting {
+  mac_id: string;
+  name: string;
+  chip: string;
+  memory_bytes: number;
+  power: string;
+  code: string;
+  waiting_s: number;
+}
+
+/** `GET /mrun/pool` (026). */
+export interface PoolView {
+  this: { mac_id: string | null; name: string; chip: string; memory_bytes: number };
+  pool:
+    | {
+        role: "host";
+        name: string;
+        model: string | null;
+        degraded: string | null;
+        /** While the pool waits for a lost Mac: whom, and the largest pulled model that fits the rest. */
+        recovery?: { wait: string | null; smaller: string | null } | null;
+        /** Serving again on the Macs answering now. */
+        replanning?: boolean;
+        /** The model's traffic between the Macs is not encrypted (the host's choice). */
+        unencrypted?: boolean;
+        address: string | null;
+        members: PoolMember[];
+        waiting: PoolWaiting[];
+        plan?: PoolPlan | null;
+        /** Who runs now, and how many requests wait per sender (`null`: this Mac). */
+        queue?: { running: { member: string | null } | null; waiting: { member: string | null; waiting: number }[] };
+      }
+    | {
+        role: "member";
+        name: string;
+        host: { mac_id: string; name: string };
+        address: string;
+        unencrypted?: boolean;
+        /** This Mac's place in the pool's queue (counts only). */
+        place?: { running: boolean; yours_running: boolean; yours_waiting: number; others_waiting: number } | null;
+      }
+    | null;
+  joining: { pool: string; host: string; code: string; unencrypted?: boolean } | null;
+  /** The pool this Mac was in and may rejoin without a code. */
+  rejoin?: { host: string; mac_id: string } | null;
+  nearby?: { name: string; host: string; host_id: string; members: number; model: string | null; addresses: string[] }[];
+}
+
+export interface PoolStage {
+  mac_id: string;
+  name: string;
+  first: number;
+  end: number;
+  weights_bytes: number;
+  state_bytes: number;
+  scratch_bytes: number;
+  budget: number;
+  fits: boolean;
+  short_bytes: number;
+  ms_per_token: number;
+  /** What this Mac downloads first (its layers' files). */
+  download_bytes?: number;
+  link?: { kind: string; rtt_ms_p50: number; rtt_ms_p90: number; mbps: number } | null;
+}
+
+/** `GET /mrun/pool/plan` (026 data model). */
+export interface PoolPlan {
+  model: string;
+  fits: boolean;
+  stages: PoolStage[];
+  context_tokens: number;
+  speed: { low: number; high: number };
+  pace: { kind: "stage" | "link"; mac_id: string; name: string; share: number } | null;
+  numerics_match: boolean;
+  refusal: string | null;
+}
 
 /** The relay's pod (013, `/mrun/status` `pod`). */
 export interface Pod {
@@ -193,6 +327,8 @@ export interface ModelEntry {
   preview: boolean;
   serving: boolean;
   family?: string;
+  /** A part (026): only layers `[first, end)`, for pool stages. */
+  part?: [number, number];
 }
 
 export interface AgentEntry {

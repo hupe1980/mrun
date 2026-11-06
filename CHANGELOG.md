@@ -6,6 +6,24 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
+### Added
+
+- Sessions in the window: each coding-agent session as a skyline of its requests (main
+  conversation, subagents, side requests), live, with every miss's cause and the text that
+  changed. `mrun ps --sessions`, `GET /mrun/sessions` and `GET /mrun/requests/{id}/excerpt`.
+- Mac pool (`mrun pool`, Pool in the window): Macs on one network run one model none of them
+  fits alone, each a range of layers, with the same replies and reuse as one Mac.
+  - Joining with a code both Macs show; a plan per Mac before anything loads.
+  - Encrypted traffic between Macs; a host may choose unencrypted for a trusted link.
+  - A lost Mac is named within 5 s and the pool serves again on the rest; Rejoin needs no code.
+  - A member downloads only its layers.
+
+### Changed
+
+- nuvec 0.7.0.
+
 ## [0.1.1] - 2026-11-05
 
 ### Fixed
@@ -63,6 +81,7 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hupe1980/mrun/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/hupe1980/mrun/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/hupe1980/mrun/releases/tag/v0.1.0

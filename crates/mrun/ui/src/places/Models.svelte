@@ -12,9 +12,25 @@
   import { jobs } from "../lib/jobs.svelte";
   import { live } from "../lib/live.svelte";
   import { contextMenu } from "../lib/native.svelte";
-  import type { CloudModel, ModelEntry, Offer, Plan } from "../lib/types";
+  import { fitsPool, planFor } from "../lib/pool";
+  import type { CloudModel, ModelEntry, Offer, Plan, PoolView } from "../lib/types";
 
-  let { onError, onstarted = () => {} }: { onError: (message: string) => void; onstarted?: () => void } = $props();
+  let {
+    onError,
+    onstarted = () => {},
+    onpool = () => {},
+  }: { onError: (message: string) => void; onstarted?: () => void; onpool?: () => void } = $props();
+
+  // A pool this Mac hosts (026): models too big for this Mac may fit its Macs together.
+  let poolView = $state<PoolView | null>(null);
+  const hosting = $derived(poolView?.pool?.role === "host" && poolView.pool.members.length ? poolView.pool : null);
+  const poolMemories = $derived(hosting ? [poolView!.this.memory_bytes, ...hosting.members.filter((m) => m.state !== "lost").map((m) => m.memory_bytes)] : []);
+  const forPool = (m: ModelEntry) => Boolean(hosting && m.pulled && !m.part && m.fit === "wont_fit" && fitsPool(m.size, poolMemories));
+
+  function planOnPool(m: ModelEntry) {
+    planFor(m.alias ?? m.name);
+    onpool();
+  }
 
   // The server's own word on what it serves wins over a listing a moment old (019 FR-008).
   const served = $derived(live.state === "stopped" ? null : (live.status?.model?.id ?? null));
@@ -94,6 +110,10 @@
 
   // On a rented GPU (024 US1): the catalog and the user's own models, priced live.
   onMount(() => {
+    host
+      .pool()
+      .then((v) => (poolView = v))
+      .catch(() => {});
     void live.refreshCloud();
     const timer = setInterval(() => void live.refreshCloud(), 60_000);
     return () => clearInterval(timer);
@@ -176,11 +196,23 @@
               {#if m === best}<span class="tag best">Best for this Mac</span>{/if}
               {#if m.preview}<span class="tag">Preview</span>{/if}
             </div>
-            <div class="sub">{m.alias ? `${m.repo} · ` : ""}{bytes(m.size)}{m.pulled ? " · Downloaded" : ""}</div>
-            <div class="verdict {verdictClass(m)}">
-              <Symbol name={m.fit === "fits" ? "check" : m.fit === "wont_fit" ? "xmark" : "warning"} size={12} weight={2} />
-              <span>{m.verdict}</span>
-            </div>
+            <div class="sub">{m.alias ? `${m.repo} · ` : ""}{bytes(m.size)}{m.part ? "" : m.pulled ? " · Downloaded" : ""}</div>
+            {#if m.part}
+              <div class="verdict unknown">
+                <Symbol name="pool" size={12} />
+                <span>Layers {m.part[0] + 1}–{m.part[1]} · for pools</span>
+              </div>
+            {:else if forPool(m)}
+              <div class="verdict fits">
+                <Symbol name="pool" size={12} />
+                <span>Fits the pool · {poolMemories.length} Macs</span>
+              </div>
+            {:else}
+              <div class="verdict {verdictClass(m)}">
+                <Symbol name={m.fit === "fits" ? "check" : m.fit === "wont_fit" ? "xmark" : "warning"} size={12} weight={2} />
+                <span>{m.verdict}</span>
+              </div>
+            {/if}
             {#if pull?.state === "running"}<PullProgress job={pull} />{/if}
           </div>
           <div class="actions">
@@ -192,6 +224,10 @@
               </button>
             {:else if m.serving}
               <span class="current"><Symbol name="check" size={13} weight={2} /> In Use</span>
+            {:else if m.part}
+              <button class="btn" onclick={() => act("pull", m)}><Symbol name="download" size={13} /> Download the Rest</button>
+            {:else if forPool(m)}
+              <button class="btn primary" onclick={() => planOnPool(m)}>Plan on the Pool</button>
             {:else if m.fit === "wont_fit"}
               {#if best}<button class="btn plain" onclick={() => best && act(best.pulled ? "use" : "pull", best)}>Use {best.alias ?? best.name} Instead</button>{/if}
             {:else}

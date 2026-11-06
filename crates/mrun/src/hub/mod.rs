@@ -365,6 +365,9 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantization: Option<Quantization>,
     pub files: Vec<ManifestFile>,
+    /// A part (026): only the files of layers `[first, end)` (0-based), for a pool stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<[usize; 2]>,
 }
 
 impl Manifest {
@@ -967,6 +970,7 @@ pub mod test_support {
             identity: "0".repeat(64),
             quantization: None,
             files: entries,
+            part: None,
         };
         manifest.save(paths).unwrap();
         manifest
@@ -1329,6 +1333,7 @@ mod tests {
                 mtime_ns: 1,
                 pad: 0,
             }],
+            part: None,
         }
     }
 

@@ -345,6 +345,105 @@ pub fn zeros(shape: &[i32], dtype: Dtype) -> Result<Array> {
     ok(ops::zeros(shape, dtype.raw()?))
 }
 
+/// The ring between the engines of a Mac pool (026): this process is one rank and talks to its
+/// neighbours only, over nuvec's TCP ring with a pre-shared key (authenticated always, encrypted
+/// unless the pool's host chose otherwise).
+#[derive(Clone)]
+pub struct Pipe {
+    group: nv::distributed::Group,
+}
+
+impl std::fmt::Debug for Pipe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Pipe(rank {} of {})", self.rank(), self.size())
+    }
+}
+
+impl Pipe {
+    /// Connects rank `rank` of the ring over `nodes` (one address list per rank, in stage
+    /// order), sealing every frame when `encrypt` (every rank must agree). Every transfer fails
+    /// after `timeout` without progress from its peer, and a peer gone without closing (asleep,
+    /// unplugged) within about 15 s (nuvec's keepalive).
+    pub fn connect(
+        nodes: &[Vec<String>],
+        rank: usize,
+        key: &[u8],
+        encrypt: bool,
+        timeout: std::time::Duration,
+    ) -> Result<Self> {
+        let options = nv::distributed::Options::default()
+            .timeout(timeout)
+            .key(key)
+            .encrypt(encrypt);
+        Ok(Self {
+            group: nv::distributed::init_with(nodes, rank, &options)?,
+        })
+    }
+
+    pub fn rank(&self) -> usize {
+        self.group.rank()
+    }
+
+    pub fn size(&self) -> usize {
+        self.group.size()
+    }
+
+    /// Whether this rank's next neighbour is rank 0 (the last stage).
+    pub fn last(&self) -> bool {
+        self.rank() + 1 == self.size()
+    }
+
+    fn next(&self) -> usize {
+        (self.rank() + 1) % self.size()
+    }
+
+    fn prev(&self) -> usize {
+        (self.rank() + self.size() - 1) % self.size()
+    }
+
+    /// `x`, sent to the next rank when evaluated.
+    pub fn send(&self, x: &Array) -> Result<Array> {
+        ok(nv::distributed::send(&x.0, self.next(), Some(&self.group)))
+    }
+
+    /// An array of `shape` and `dtype` from the previous rank, when evaluated.
+    pub fn recv(&self, shape: &[i32], dtype: Dtype) -> Result<Array> {
+        ok(nv::distributed::recv(
+            shape,
+            dtype.raw()?,
+            self.prev(),
+            Some(&self.group),
+        ))
+    }
+
+    /// [`Pipe::recv`] of `x`'s shape and dtype, after `x` (a send) is done.
+    pub fn recv_like(&self, x: &Array) -> Result<Array> {
+        ok(nv::distributed::recv_like(
+            &x.0,
+            self.prev(),
+            Some(&self.group),
+        ))
+    }
+
+    /// Sends `words` to the next rank now.
+    pub fn send_words(&self, words: &[u32]) -> Result<()> {
+        self.send(&Array::from_u32(words, &[words.len() as i32]))?
+            .eval()
+    }
+
+    /// Receives `n` words from the previous rank now.
+    pub fn recv_words(&self, n: usize) -> Result<Vec<u32>> {
+        let words = self.recv(&[n as i32], Dtype::Uint32)?;
+        words.eval()?;
+        words.to_vec_u32()
+    }
+
+    /// Closes the ring: transfers waiting on it fail.
+    pub fn close(&self) {
+        self.group.close();
+    }
+}
+
 pub fn concatenate(arrays: &[&Array], axis: i32) -> Result<Array> {
     ok(ops::concatenate(&raw(arrays), axis))
 }

@@ -9,7 +9,7 @@ itself (Qwen3, Qwen3-MoE, Qwen3.5 and Qwen3.5-MoE families on Apple Silicon).
 | Feature | What it adds |
 |---|---|
 | (none, the default here) | The contract, identity, budget and registry only. Builds anywhere in seconds; `mrun --no-default-features` and the Linux CI job use it. |
-| `engine` | The engine on [nuvec](https://crates.io/crates/nuvec) 0.6.1, a pure-Rust port of MLX. Off by default here; `mrun` turns it on. |
+| `engine` | The engine on [nuvec](https://crates.io/crates/nuvec) 0.7.0, a pure-Rust port of MLX. Off by default here; `mrun` turns it on. |
 | `test-support` | Tiny random-weight checkpoints for tests (with a backend). |
 
 ## Building with `engine`

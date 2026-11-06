@@ -141,7 +141,18 @@ impl Host {
 }
 
 /// The routes the page proxies to the server (contract: proxied routes).
-const PROXIED: [&str; 4] = ["/health", "/mrun/status", "/metrics", "/v1/models"];
+const PROXIED: [&str; 7] = [
+    "/health",
+    "/mrun/status",
+    "/mrun/sessions",
+    "/mrun/pool",
+    "/mrun/pool/plan",
+    "/metrics",
+    "/v1/models",
+];
+
+/// The client class the window's own requests carry (025: its chats are labelled "Chat").
+const USER_AGENT: &str = concat!("mrun-ui/", env!("CARGO_PKG_VERSION"));
 
 pub fn router(host: Host) -> Router {
     Router::new()
@@ -169,6 +180,10 @@ pub fn router(host: Host) -> Router {
         .route("/app/quit", post(quit))
         .route("/health", get(proxy))
         .route("/mrun/status", get(proxy))
+        .route("/mrun/sessions", get(proxy))
+        .route("/mrun/pool", get(proxy))
+        .route("/mrun/pool/plan", get(proxy))
+        .route("/mrun/requests/{id}/excerpt", get(proxy))
         .route("/metrics", get(proxy))
         .route("/v1/models", get(proxy))
         .route("/v1/models/{id}", get(proxy))
@@ -199,8 +214,10 @@ async fn guard(State(host): State<Host>, request: Request, next: Next) -> Respon
         );
     }
     let path = request.uri().path();
-    let protected =
-        path.starts_with("/app/") || path.starts_with("/v1/") || PROXIED.contains(&path);
+    let protected = path.starts_with("/app/")
+        || path.starts_with("/v1/")
+        || path.starts_with("/mrun/")
+        || PROXIED.contains(&path);
     if protected && !authorized(request.headers(), &host.token) {
         return error(StatusCode::UNAUTHORIZED, "unauthorized");
     }
@@ -298,7 +315,11 @@ async fn proxy(
     let Ok(body) = axum::body::to_bytes(body, crate::api::MAX_BODY_BYTES).await else {
         return error(StatusCode::PAYLOAD_TOO_LARGE, "request too large");
     };
-    let mut upstream = host.client.request(method, &url).body(body);
+    let mut upstream = host
+        .client
+        .request(method, &url)
+        .header(header::USER_AGENT, USER_AGENT)
+        .body(body);
     for name in [header::CONTENT_TYPE, header::ACCEPT] {
         if let Some(value) = headers.get(&name) {
             upstream = upstream.header(name, value);

@@ -7,13 +7,14 @@
 //! unmet `NeedsMemory`, a reservation overrun) ends that request and keeps the cache; only a
 //! backend failure resets the state.
 
-use crate::cache::miss::MissReport;
+use crate::cache::miss::{Excerpt, MissReport};
 use crate::cache::{PrefixStore, Prepared};
 use crate::chat::prompt::RenderedPrompt;
 use crate::chat::stop::{Fed, StopMatcher};
 use crate::chat::tokenizer::StreamDecoder;
 use crate::runtime::pressure::PressureGauge;
 use mrun_engine::{CancelToken, Checkpoint, Engine, EngineError, Sampling, TokenMask};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Decode tokens between memory-pressure checks.
@@ -113,6 +114,9 @@ pub struct GenerateRequest {
     pub hook: Option<Box<dyn DecodeHook>>,
     /// Tool-call delimiters of the model's syntax, for the loop guard.
     pub call_fence: Option<CallFence>,
+    /// Who waits for it (026: a pool member's id; `None` for this Mac): waiting requests are
+    /// served in turns between them.
+    pub turn: Option<String>,
 }
 
 impl GenerateRequest {
@@ -126,6 +130,7 @@ impl GenerateRequest {
             cancel: CancelToken::new(),
             hook: None,
             call_fence: None,
+            turn: None,
         }
     }
 }
@@ -225,6 +230,7 @@ pub enum Event {
         cached: u32,
         max_tokens: u32,
         miss: Option<MissReport>,
+        excerpt: Option<Arc<Excerpt>>,
     },
     Progress {
         done: u32,
@@ -454,6 +460,7 @@ fn run<E: Engine>(
         chunk_ends,
         checkpoints,
         miss,
+        excerpt,
     } = store.prepare(engine, prompt, total)?;
     turn.prefilled = resume;
     turn.stats.cached_tokens = resume;
@@ -463,6 +470,7 @@ fn run<E: Engine>(
         cached: resume,
         max_tokens: limit,
         miss: Some(miss),
+        excerpt,
     }) {
         return Ok(FinishReason::Cancelled);
     }

@@ -8,7 +8,7 @@ use super::LoadError;
 use super::activations;
 use crate::load::{Embedding, Linear, Quantization, RmsNorm, Weights, invalid};
 use crate::state::LayerKv;
-use crate::tensor::{self, Array, fast};
+use crate::tensor::{self, Array, Dtype, fast};
 
 /// A required number from a config object.
 pub fn num(config: &Value, key: &str) -> Result<f64, LoadError> {
@@ -270,6 +270,21 @@ impl Head {
 }
 
 /// Fails on tensors no layer took (after the family dropped what it ignores).
+/// The head of a part that has it; a stage of a pool without it cannot embed or give logits.
+pub fn head(head: &Option<Head>) -> tensor::Result<&Head> {
+    head.as_ref()
+        .ok_or_else(|| tensor::Error("this part of the model has no embeddings or head".into()))
+}
+
+/// The dtype of a part's weights: the head's norm, else its first layer's (a part without either
+/// loads nothing and is refused).
+pub fn part_dtype(head: Option<&Head>, first: Option<&RmsNorm>) -> Result<Dtype, LoadError> {
+    head.map(|h| &h.norm)
+        .or(first)
+        .map(|norm| norm.weight.dtype())
+        .ok_or_else(|| invalid("layers", "the part holds no layers"))
+}
+
 pub fn ensure_consumed(weights: &Weights) -> Result<(), LoadError> {
     match weights.remaining().first() {
         Some(name) => Err(invalid("weights", format!("unexpected tensor {name}"))),
