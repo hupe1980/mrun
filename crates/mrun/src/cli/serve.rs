@@ -72,6 +72,9 @@ pub struct ServeArgs {
     /// cloud up` starts it). The pod token comes from `MRUN_RELAY_TOKEN`.
     #[arg(long, value_name = "AGENT_URL")]
     pub relay: Option<String>,
+    /// Port other Macs of a pool reach this one at (026); listens only while a pool runs.
+    #[arg(long, env = "MRUN_POOL_PORT", default_value_t = crate::pool::DEFAULT_PORT)]
+    pub pool_port: u16,
     /// The relayed pod's id (status only).
     #[arg(long, hide = true, requires = "relay")]
     pub relay_pod: Option<String>,
@@ -128,6 +131,10 @@ pub struct ServerState {
     pub recorder: Option<Arc<Recorder>>,
     /// The idle-sleep assertion's state, for `/mrun/status`.
     pub power: Arc<std::sync::Mutex<PowerState>>,
+    /// This Mac's side of Mac pools (026).
+    pub pool: Arc<crate::pool::Pool>,
+    /// Replaces the served model (026: a pool's model).
+    pub ready: Arc<watch::Sender<Readiness>>,
 }
 
 impl ServerState {
@@ -189,6 +196,17 @@ pub async fn start_with(
     factory: EngineFactory,
     timing: Timing,
 ) -> std::io::Result<RunningServer> {
+    let pool = crate::pool::PoolConfig::system(args.pool_port);
+    start_with_pool(args, factory, timing, pool).await
+}
+
+/// [`start_with`] with this Mac's pool settings (tests run several Macs in one process).
+pub async fn start_with_pool(
+    args: ServeArgs,
+    factory: EngineFactory,
+    timing: Timing,
+    pool: crate::pool::PoolConfig,
+) -> std::io::Result<RunningServer> {
     let recorder = match &args.record {
         Some(dir) => Some(Arc::new(Recorder::create(dir)?)),
         None => None,
@@ -197,6 +215,8 @@ pub async fn start_with(
     let addr = listener.local_addr()?;
     let args = Arc::new(args);
     let (ready_tx, readiness) = watch::channel(Readiness::Loading);
+    let ready_tx = Arc::new(ready_tx);
+    let ready = ready_tx.clone();
 
     let load_args = args.clone();
     tokio::task::spawn_blocking(move || {
@@ -218,9 +238,18 @@ pub async fn start_with(
         tracker: Arc::new(Tracker::default()),
         recorder,
         power: Arc::new(std::sync::Mutex::new(PowerState::default())),
+        pool: crate::pool::Pool::new(pool),
+        ready,
     };
+    state.pool.attach_server(
+        addr.port(),
+        state.tracker.clone(),
+        state.ready.clone(),
+        state.args.clone(),
+    );
     tokio::spawn(keep_awake(
         readiness.clone(),
+        state.pool.clone(),
         state.power.clone(),
         crate::runtime::power::platform_assertion(),
     ));
@@ -250,6 +279,7 @@ pub async fn start_with(
 /// Holds the idle-sleep assertion while requests are queued or running (008 FR-009).
 async fn keep_awake(
     readiness: watch::Receiver<Readiness>,
+    pool: Arc<crate::pool::Pool>,
     power: Arc<std::sync::Mutex<PowerState>>,
     mut assertion: Box<dyn crate::runtime::power::Assertion>,
 ) {
@@ -263,6 +293,8 @@ async fn keep_awake(
             }
             _ => false,
         };
+        // A Mac lending its memory to a pool stays awake while the pool serves (026 FR-011).
+        let busy = busy || pool.lending();
         let action = power
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -327,31 +359,45 @@ fn model_name(args: &ServeArgs) -> Result<String, CliError> {
 /// The engine factory of this build: the nuvec engine with feature `engine`, otherwise none.
 #[cfg(feature = "engine")]
 pub fn default_factory() -> EngineFactory {
-    Box::new(|args: &ServeArgs| {
-        let name = model_name(args)?;
-        let model = crate::cli::model::open(&name)?;
-        crate::cli::model::preflight(&model)?;
-        let overrides = crate::cli::model::overrides(args.budget_gib);
-        let handle = EngineHandle::spawn_with(
-            crate::cli::model::engine_factory(&model, overrides),
-            model.tokenizer.clone(),
-            crate::runtime::handle::DEFAULT_STALL_TIMEOUT,
-            cache_policy(args),
-        )?;
-        let grammar = GrammarEnv::new(&model.tokenizer, &handle.info().eos_tokens)
-            .ok()
-            .map(Arc::new);
-        Ok(Loaded {
-            model_id: name,
-            syntax: model.syntax(),
-            supports_thinking: model.supports_thinking(),
-            defaults: model.defaults,
-            grammar,
-            handle,
-            tokenizer: model.tokenizer,
-            template: model.template,
-        })
+    Box::new(|args: &ServeArgs| load_named(args, &model_name(args)?))
+}
+
+/// Loads the model `name` with this server's settings (026: a Mac's own model again after a
+/// pool).
+#[cfg(feature = "engine")]
+pub fn load_named(args: &ServeArgs, name: &str) -> Result<Loaded, CliError> {
+    let name = name.to_string();
+    let model = crate::cli::model::open(&name)?;
+    crate::cli::model::preflight(&model)?;
+    let overrides = crate::cli::model::overrides(args.budget_gib);
+    let handle = EngineHandle::spawn_with(
+        crate::cli::model::engine_factory(&model, overrides),
+        model.tokenizer.clone(),
+        crate::runtime::handle::DEFAULT_STALL_TIMEOUT,
+        cache_policy(args),
+    )?;
+    let grammar = GrammarEnv::new(&model.tokenizer, &handle.info().eos_tokens)
+        .ok()
+        .map(Arc::new);
+    Ok(Loaded {
+        model_id: name,
+        syntax: model.syntax(),
+        supports_thinking: model.supports_thinking(),
+        defaults: model.defaults,
+        grammar,
+        handle,
+        tokenizer: model.tokenizer,
+        template: model.template,
     })
+}
+
+/// Loads the model `name`: this build has no engine.
+#[cfg(not(feature = "engine"))]
+pub fn load_named(_args: &ServeArgs, _name: &str) -> Result<Loaded, CliError> {
+    Err(CliError::new(
+        Code::Internal,
+        "this build of mrun has no inference engine",
+    ))
 }
 
 /// The engine factory of this build: the nuvec engine with feature `engine`, otherwise none.

@@ -60,6 +60,17 @@ pub fn random_hex(bytes: usize) -> std::io::Result<String> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// The bytes of lowercase or uppercase hex `text`; `None` for anything else.
+pub fn from_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
 /// `30m`, `2h`, `90s`, `1h30m` or plain seconds.
 pub fn parse_duration(text: &str) -> Result<std::time::Duration, String> {
     let text = text.trim();

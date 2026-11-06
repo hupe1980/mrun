@@ -61,12 +61,34 @@ fn model_error(name: &str, error: impl std::fmt::Display) -> CliError {
     CliError::new(Code::Internal, format!("cannot open {name}: {error}"))
 }
 
-/// Resolves `name` and reads the model's family, tokenizer, template and identity.
+/// Resolves `name` and reads the model's family, tokenizer, template and identity. A part (026:
+/// a pool stage's layers only) does not open as a model.
 pub fn open(name: &str) -> Result<OpenModel, CliError> {
+    open_with(name, false)
+}
+
+/// [`open`] for a pool stage, which may be a part.
+pub fn open_stage(name: &str) -> Result<OpenModel, CliError> {
+    open_with(name, true)
+}
+
+fn open_with(name: &str, stage: bool) -> Result<OpenModel, CliError> {
     let ctx = Ctx::from_env();
     let local = hub::resolve(&ctx.paths, name)?;
     let dir = local.dir;
     let manifest = local.manifest;
+    if let Some([first, end]) = manifest.as_ref().and_then(|m| m.part)
+        && !stage
+    {
+        return Err(CliError::new(
+            Code::ModelNotFound,
+            format!(
+                "{name} is here only as layers {}–{end}, for pools",
+                first + 1
+            ),
+        )
+        .hint(format!("'mrun pull {name}' completes it")));
+    }
     let config: Value = std::fs::read_to_string(dir.join("config.json"))
         .map_err(|e| model_error(name, e))
         .and_then(|text| serde_json::from_str(&text).map_err(|e| model_error(name, e)))?;
@@ -194,6 +216,7 @@ pub fn engine_factory(
         fallback_device: hub::device_memory(),
         cpu: false,
         calibration: mrun_engine::calibration::default_path(),
+        part: None,
     };
     move || {
         use mrun_engine::NuvecLoadError;

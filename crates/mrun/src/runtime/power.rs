@@ -144,3 +144,36 @@ mod tests {
         assert_eq!(state.observe(false, at(500), wall), None);
     }
 }
+
+/// `adapter` or `battery`: where this Mac draws power from now (`pmset -g batt`); `adapter`
+/// when it cannot tell (a desktop Mac, Linux).
+pub fn power_source() -> &'static str {
+    let out = std::process::Command::new("/usr/bin/pmset")
+        .args(["-g", "batt"])
+        .output();
+    match out {
+        Ok(out) => source_of(&String::from_utf8_lossy(&out.stdout)),
+        Err(_) => "adapter",
+    }
+}
+
+fn source_of(pmset: &str) -> &'static str {
+    if pmset.contains("'Battery Power'") {
+        "battery"
+    } else {
+        "adapter"
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    #[test]
+    fn the_power_source_comes_from_pmset() {
+        assert_eq!(
+            super::source_of("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t82%"),
+            "battery"
+        );
+        assert_eq!(super::source_of("Now drawing from 'AC Power'\n"), "adapter");
+        assert_eq!(super::source_of(""), "adapter");
+    }
+}

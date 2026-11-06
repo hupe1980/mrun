@@ -21,7 +21,7 @@ pub mod schedule;
 use crate::chat::prompt::{RenderedPrompt, Role};
 use crate::chat::splice::{HeldPath, Ledger, Record};
 use crate::runtime::pressure::Pressure;
-use miss::{Found, MissReport};
+use miss::{Excerpt, Found, MissReport};
 use mrun_engine::{Checkpoint, CheckpointId, Engine, EngineError, Segment, SegmentId};
 use schedule::Schedule;
 use std::collections::{HashMap, VecDeque};
@@ -84,6 +84,8 @@ pub struct Prepared {
     /// Positions where a checkpoint is captured after the chunk ending there (hybrids).
     pub checkpoints: Vec<u32>,
     pub miss: MissReport,
+    /// The tokens around a divergence from the closest stored path (025).
+    pub excerpt: Option<Arc<Excerpt>>,
 }
 
 /// The mark a checkpoint was captured at (D053).
@@ -1008,6 +1010,22 @@ impl PrefixStore {
             return Ok(self.prepared(engine, prompt, 0, miss));
         }
         let plan = self.lookup(&prompt.tokens);
+        // The stored path's tokens exist nowhere else once the switch moves state: keep them now.
+        let excerpt = plan.diverges.then(|| {
+            let stored = match plan.chain.last() {
+                Some(id) => self
+                    .branches
+                    .iter()
+                    .find(|b| b.segment.id.0 == *id)
+                    .map(|b| &b.tokens[..]),
+                None => Some(&self.trunk[..]),
+            };
+            Arc::new(Excerpt::at(
+                stored.unwrap_or(&[]),
+                &prompt.tokens,
+                plan.matched,
+            ))
+        });
         let matched = plan.matched.min(len.saturating_sub(1));
         let (evicted, dropped_shared) = self.scan_dropped(&prompt.tokens, plan.matched);
 
@@ -1066,7 +1084,9 @@ impl PrefixStore {
             ring_wrapped: self.ring_wrapped,
         };
         let miss = miss::classify(prompt, found);
-        Ok(self.prepared(engine, prompt, resume, miss))
+        let mut prepared = self.prepared(engine, prompt, resume, miss);
+        prepared.excerpt = excerpt;
+        Ok(prepared)
     }
 
     fn prepared(
@@ -1109,6 +1129,7 @@ impl PrefixStore {
             chunk_ends,
             checkpoints,
             miss,
+            excerpt: None,
         }
     }
 

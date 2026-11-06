@@ -118,6 +118,13 @@ pub enum Command {
         after_help = "Examples:\n  mrun cloud gpus\n  mrun cloud models\n  mrun cloud up --model Qwen/Qwen3.6-35B-A3B-FP8 --gpu L40S\n  mrun cloud status\n  mrun cloud down"
     )]
     Cloud(CloudCommand),
+    /// Pool this Mac with others on the local network to run a model none of them fits alone
+    /// (opt-in: prompts are processed on the pool's Macs).
+    #[command(
+        subcommand,
+        after_help = "Examples:\n  mrun pool start\n  mrun pool ls\n  mrun pool join \"Ben's pool\"\n  mrun pool admit\n  mrun pool leave"
+    )]
+    Pool(crate::cli::pool::PoolCommand),
     /// The config file: where it is, every setting in force with its source, and its schema.
     #[command(
         subcommand,

@@ -18,7 +18,7 @@ the Anthropic Messages, OpenAI Chat Completions and OpenAI Responses APIs on `12
 
 ## Status
 
-**0.1**, the first release: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
+**0.2**: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
 (M4 Pro, 48 GB); smaller Macs are simulated there with `--budget-gib`.
 
 - **Models**: `qwen3.6` (Qwen3.6-35B-A3B 4-bit), the default wherever it leaves at least 64K
@@ -28,8 +28,8 @@ the Anthropic Messages, OpenAI Chat Completions and OpenAI Responses APIs on `12
   cancellation latency are on [Benchmarks](https://hupe1980.github.io/mrun/docs/benchmarks/).
   The client gate (Claude Code, Codex and OpenCode on scripted tasks) is on
   [Clients](https://hupe1980.github.io/mrun/docs/clients/#client-gate).
-- **Not yet measured**: a full comparison against llama.cpp, Ollama, oMLX and mlx-lm, and
-  cancellation on M1. Results from other Macs are welcome:
+- **Not yet measured**: a full comparison against llama.cpp, Ollama, oMLX and mlx-lm,
+  cancellation on M1, and a pool on two real Macs (tested across processes on one Mac). Results from other Macs are welcome:
   [Hardware reports](CONTRIBUTING.md#hardware-reports).
 
 ## What mrun claims
@@ -63,7 +63,7 @@ mrun pull qwen3.6            # or qwen3.5, where qwen3.6 leaves less than 64K to
 mrun run                     # chat in the terminal
 mrun serve --detach          # serve on http://127.0.0.1:8484
 mrun launch claude-code      # or: codex, opencode
-mrun ui                      # the window: status, chat, models, agents
+mrun ui                      # the window: status, chat, sessions, pool, models, agents
 ```
 
 To build from source instead (Rust and Xcode's Metal toolchain): `cargo install mrun`, or see
@@ -75,10 +75,11 @@ machine, the server and the clients.
 
 ## The window
 
-`mrun ui` opens a native window and a menu bar item (`--browser` opens it in a browser): what the
-server is doing, a chat that takes files and shows each reply's reuse, models with a fit verdict
-for this Mac (also any repo by name), one-click agent setup, and code for your own apps. Every action is an `mrun` command, and Copy as Command shows it.
-See [The mrun window](https://hupe1980.github.io/mrun/docs/ui/). Click a screenshot to enlarge it.
+`mrun ui` opens a native window and a menu bar item (`--browser`: in a browser): what the server
+is doing, each agent session with every miss and the text that changed, the Mac pool, a chat
+that takes files, models with a fit verdict (any repo by name), one-click agent setup and code
+for your own apps. Every action is an `mrun` command; Copy as Command shows it. See
+[The mrun window](https://hupe1980.github.io/mrun/docs/ui/).
 
 <table>
   <tr>
@@ -90,6 +91,14 @@ See [The mrun window](https://hupe1980.github.io/mrun/docs/ui/). Click a screens
     <td><a href="site/static/screenshots/chat-thinking-dark.png"><img src="site/static/screenshots/chat-thinking-dark.png" alt="Dark mode: a reply while the model thinks, with seconds and tokens"></a></td>
   </tr>
 </table>
+
+## Mac pool (opt-in)
+
+Macs on one network, colleagues' included, run a model none of them fits alone: `mrun pool start`
+on one, `mrun pool join` on the others, compare a six-digit code, then `mrun pool serve <model>`.
+Each Mac runs a range of layers; replies and reuse are as on one Mac, and agents keep using their
+own `127.0.0.1:8484`. The host reads the prompts; traffic between the Macs is encrypted. See
+[Mac pool](https://hupe1980.github.io/mrun/docs/pool/).
 
 ## Remote GPU (RunPod, opt-in)
 

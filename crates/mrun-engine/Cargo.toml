@@ -19,9 +19,9 @@ engine = ["dep:nuvec", "dep:nuvec-kernels"]
 test-support = []
 
 [dependencies]
-nuvec = { version = "=0.6.1", optional = true }
+nuvec = { version = "=0.7.0", optional = true }
 # nuvec's kernel mode (`MODE`: precompiled or runtime), not re-exported by `nuvec`.
-nuvec-kernels = { version = "=0.6.1", optional = true }
+nuvec-kernels = { version = "=0.7.0", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

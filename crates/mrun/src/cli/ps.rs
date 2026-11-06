@@ -22,6 +22,9 @@ pub struct PsArgs {
     /// Keep polling: redraw on a terminal, one JSON line per second otherwise (or with --json).
     #[arg(long, short = 'w')]
     pub watch: bool,
+    /// The sessions of coding agents and chats, with their rows and reuse (session replay).
+    #[arg(long, conflicts_with = "watch")]
+    pub sessions: bool,
     /// Port of the server.
     #[arg(long, env = "MRUN_PORT", default_value_t = server::default_port())]
     pub port: u16,
@@ -31,13 +34,20 @@ pub fn run(args: PsArgs) -> u8 {
     if args.watch {
         return watch_command(&args);
     }
-    match server::request(args.port, "GET", "/mrun/status") {
+    let path = if args.sessions {
+        "/mrun/sessions"
+    } else {
+        "/mrun/status"
+    };
+    match server::request(args.port, "GET", path) {
         Ok((_, status)) => {
             if args.json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&status).unwrap_or_default()
                 );
+            } else if args.sessions {
+                print!("{}", render_sessions(&status));
             } else {
                 print!("{}", render(&status));
             }
@@ -45,6 +55,71 @@ pub fn run(args: PsArgs) -> u8 {
         }
         Err(error) => error.report(),
     }
+}
+
+/// `--sessions`: a line per session, newest first, then one per row (025 contract).
+pub fn render_sessions(body: &Value) -> String {
+    if body["remote"] == true {
+        return "session replay covers models on this Mac\n".into();
+    }
+    let sessions = body["sessions"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if sessions.is_empty() {
+        return "no sessions yet\n".into();
+    }
+    let n = |v: &Value| v.as_u64().unwrap_or(0);
+    let share = |cached: u64, total: u64| {
+        (100 * cached)
+            .checked_div(total)
+            .map_or(0, |p| p.min(if cached < total { 99 } else { 100 }))
+    };
+    let count = |v: &Value| match n(v) {
+        1 => "    1 request ".to_string(),
+        k => format!("{k:>5} requests"),
+    };
+    let now = n(&body["now_ms"]);
+    let mut out = String::new();
+    for s in sessions {
+        let ago = now.saturating_sub(n(&s["last_ms"])) / 60_000;
+        out.push_str(&format!(
+            "{:<13} {:<3} {}  {:>3} % reused  {} worth fixing  {}\n",
+            s["label"].as_str().unwrap_or("?"),
+            s["id"].as_str().unwrap_or("?"),
+            count(&s["requests"]),
+            share(n(&s["cached_tokens"]), n(&s["prompt_tokens"])),
+            n(&s["attention"]),
+            if ago == 0 {
+                "just now".to_string()
+            } else {
+                format!("{ago} min ago")
+            },
+        ));
+        for row in s["rows"].as_array().map(Vec::as_slice).unwrap_or_default() {
+            let id = row["id"].as_str().unwrap_or("?");
+            let records: Vec<&Value> = body["requests"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .filter(|r| r["session"] == s["id"] && r["row"] == id)
+                .collect();
+            let sum = |key: &str| records.iter().map(|r| n(&r[key])).sum::<u64>();
+            let name = match row["kind"].as_str() {
+                Some("main") => "main".to_string(),
+                Some("side") => "side".to_string(),
+                Some("subagent") => format!("subagent {}", id.trim_start_matches("sub")),
+                _ => format!("conversation {}", id.trim_start_matches('c')),
+            };
+            out.push_str(&format!(
+                "  {name:<15} {}  {:>3} %\n",
+                count(&row["requests"]),
+                share(sum("cached"), sum("prompt_tokens")),
+            ));
+        }
+    }
+    out
 }
 
 /// The poll interval of `--watch`.
@@ -376,6 +451,30 @@ pub fn render(status: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sessions_print_a_line_per_session_and_row() {
+        let record = |row: &str, cached: u64| json!({"session": "s1", "row": row, "prompt_tokens": 1000, "cached": cached});
+        let body = json!({
+            "now_ms": 300_000, "remote": false,
+            "sessions": [{"id": "s1", "label": "Claude Code", "requests": 3, "prompt_tokens": 3000,
+                "cached_tokens": 2880, "attention": 2, "last_ms": 240_000,
+                "rows": [{"id": "main", "kind": "main", "requests": 2},
+                         {"id": "sub1", "kind": "subagent", "requests": 1}]}],
+            "requests": [record("main", 990), record("main", 1000), record("sub1", 890)],
+        });
+        assert_eq!(
+            render_sessions(&body),
+            "Claude Code   s1      3 requests   96 % reused  2 worth fixing  1 min ago\n\
+             \x20 main                2 requests   99 %\n\
+             \x20 subagent 1          1 request    89 %\n"
+        );
+        assert_eq!(
+            render_sessions(&json!({"sessions": []})),
+            "no sessions yet\n"
+        );
+        assert!(render_sessions(&json!({"remote": true})).contains("on this Mac"));
+    }
 
     #[test]
     fn a_pod_that_stopped_answering_shows_the_cost_until_then() {

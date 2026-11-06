@@ -5,9 +5,9 @@ sort_by = "weight"
 template = "section.html"
 +++
 
-mrun is a local inference server for coding agents on Apple Silicon. It is in development and not
-released yet (2026-10-16). Start with [Getting started](@/docs/getting-started.md), then connect
-your agent in [Clients](@/docs/clients.md).
+mrun is a local inference server for coding agents on Apple Silicon. Start with
+[Getting started](@/docs/getting-started.md), then connect your agent in
+[Clients](@/docs/clients.md).
 
-Models too big for your Mac can run on a rented GPU with the opt-in
-[Remote GPU](@/docs/cloud.md) mode.
+A model too big for your Mac can run across your Macs in a [Mac pool](@/docs/pool.md) or on a
+rented GPU with [Remote GPU](@/docs/cloud.md). Both are opt-in.

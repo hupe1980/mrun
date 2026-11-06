@@ -82,8 +82,9 @@ never time out while they wait.
 ## Does mrun send any data anywhere?
 
 No. It listens on loopback only, has no telemetry and does not log prompts. After `mrun pull` it
-works offline. Tools run inside your agent. The exception is [`mrun cloud`](@/docs/cloud.md),
-which is opt-in and sends prompts to a rented RunPod GPU.
+works offline. Tools run inside your agent. Two opt-in exceptions: a
+[Mac pool](@/docs/pool.md) sends a member's prompts to the host Mac, and
+[`mrun cloud`](@/docs/cloud.md) sends prompts to a rented RunPod GPU.
 
 ## How good is a local model compared to a frontier API?
 

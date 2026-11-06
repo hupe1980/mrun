@@ -249,6 +249,8 @@ async fn commands_without_a_server() {
         .to_string();
     for args in [
         strings(&["ps", "--port", &port]),
+        strings(&["ps", "--sessions", "--port", &port]),
+        strings(&["pool", "ls", "--port", &port]),
         // A named model: the default depends on the machine's memory (none fits a small runner).
         strings(&[
             "launch",
@@ -725,4 +727,40 @@ async fn run_refuses_a_template_without_the_family_syntax() {
     assert!(stderr.contains("qwen3_moe"), "{stderr}");
     assert!(stderr.contains("qwen_xml"), "{stderr}");
     assert!(stderr.contains("<function=mrun_probe>"), "{stderr}");
+}
+
+/// 026 T029: a part (a pool stage's layers only) is listed, but does not run as a model.
+#[tokio::test]
+async fn a_part_is_not_a_model_to_run() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().to_str().unwrap().to_string();
+    let paths = mrun::hub::Paths::from_vars(&|key: &str| match key {
+        "HOME" | "MRUN_HOME" => Some(root.clone()),
+        _ => None,
+    });
+    let mut manifest = mrun::hub::test_support::cached_model(
+        &paths,
+        None,
+        "org/tiny",
+        &"a".repeat(40),
+        &[("config.json", b"{}"), ("model.safetensors", b"weights")],
+    );
+    manifest.part = Some([24, 48]);
+    manifest.save(&paths).unwrap();
+    let output = mrun(
+        home.path(),
+        &strings(&["run", "org/tiny", "--prompt", "hi"]),
+    )
+    .await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("E031"), "{stderr}");
+    assert!(stderr.contains("layers 25–48, for pools"), "{stderr}");
+    assert!(stderr.contains("mrun pull org/tiny"), "{stderr}");
+    let listed = mrun(home.path(), &strings(&["ls"])).await;
+    assert!(
+        String::from_utf8_lossy(&listed.stdout).contains("layers 25–48 · for pools"),
+        "{}",
+        String::from_utf8_lossy(&listed.stdout)
+    );
 }

@@ -15,6 +15,7 @@ use crate::api::model::{
     ApiError, ApiKind, ChatRequest, ErrorKind, Finish, GenEvent, Message, ReasoningCtl, ToolChoice,
     ToolDef, Usage, Warning,
 };
+use crate::api::sessions::{Fingerprint, Finished};
 use crate::api::status::{Entry, Phase, Stage, Tracker};
 use crate::cache::miss::MissReport;
 use crate::chat::constrain;
@@ -152,11 +153,18 @@ pub async fn start(
         ledger: loaded.handle.ledger().clone(),
         tools: request.tools.clone(),
     });
+    let replay = Finished {
+        member: request.member.clone(),
+        client: request.client.clone(),
+        fingerprint: Fingerprint::of(&rendered.prompt, !request.tools.is_empty()),
+        excerpt: None,
+    };
     let mut generate = GenerateRequest::new(rendered.prompt, requested_max);
     generate.sampling = sampling;
     generate.stop = request.stop.clone();
     generate.hook = hook(&loaded, &request, rendered.reasoning_open).boxed();
     generate.call_fence = call_fence(&loaded);
+    generate.turn = request.member.clone();
     let generation = loaded.handle.generate(generate).map_err(|e| match e {
         SubmitError::QueueFull(full) => {
             ApiError::new(ErrorKind::QueueFull, "the request queue is full")
@@ -169,6 +177,7 @@ pub async fn start(
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     tracker.insert(Entry {
         ticket: Some(generation.ticket.clone()),
+        member: request.member.clone(),
         ..Entry::queued(id, request.api, prompt_tokens)
     });
     let relay = Relay {
@@ -186,6 +195,7 @@ pub async fn start(
         id,
         generating: false,
         miss: None,
+        replay: Some(replay),
         spliced: prepared.spliced.tokens,
         record,
         generated: Vec::new(),
@@ -390,6 +400,8 @@ struct Relay {
     id: u64,
     generating: bool,
     miss: Option<MissReport>,
+    /// What session replay keeps of the request (025).
+    replay: Option<Finished>,
     spliced: u32,
     record: Option<Recording>,
     /// Generated ids, for the ledger.
@@ -408,7 +420,8 @@ impl Relay {
             Outcome::Cancelled => "stopped",
             Outcome::Failed | Outcome::Rejected => "error",
         };
-        self.tracker.finish(self.id, self.miss.as_ref(), stop);
+        self.tracker
+            .finish(self.id, self.miss.as_ref(), stop, self.replay.take());
         self.tracker.metrics.record_outcome(self.api, outcome);
     }
 
@@ -458,9 +471,13 @@ impl Relay {
                     cached,
                     max_tokens,
                     miss,
+                    excerpt,
                 } => {
                     started = true;
                     self.miss = miss;
+                    if let Some(replay) = &mut self.replay {
+                        replay.excerpt = excerpt;
+                    }
                     self.tracker.update(self.id, |entry| {
                         entry.phase = Phase::Prefill;
                         entry.prompt_tokens = prompt;

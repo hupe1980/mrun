@@ -36,10 +36,10 @@ use crate::engine::{
 use crate::identity::{self, IdentityError};
 use crate::ledger::Ledger;
 use crate::load::{self, Weights};
-use crate::models::{self, FamilyConfig, LoadError, Model};
+use crate::models::{self, FamilyConfig, LoadError, Model, Part};
 use crate::sample;
 use crate::state::{self, KvTail, LayerKv, LayerState, Recurrent, RecurrentState, SeqState};
-use crate::tensor::{self, Array};
+use crate::tensor::{self, Array, Pipe};
 
 /// The buffer cache limit; counted inside scratch.
 pub const CACHE_LIMIT: u64 = 256 << 20;
@@ -61,6 +61,8 @@ pub struct LoadOptions {
     /// Where the `chunk_len` calibration is persisted ([`calibration::default_path`] in mrun);
     /// `None` calibrates without storing. CPU engines are not calibrated.
     pub calibration: Option<PathBuf>,
+    /// The layers to load (026: one Mac's part of a pool); `None` loads all of them.
+    pub part: Option<Part>,
 }
 
 /// Where an injected failure strikes (test hook for FR-028/SC-012, [`NuvecEngine::fail_next`]).
@@ -130,6 +132,10 @@ pub struct NuvecEngine {
     ids: Vec<u32>,
     /// An injected failure (test hook).
     fail: Option<FailPoint>,
+    /// The layers this engine runs (all, or its part of a pool).
+    part: Part,
+    /// The ring to the pool's other parts (026); `None` alone.
+    pipe: Option<Pipe>,
 }
 
 impl std::fmt::Debug for NuvecEngine {
@@ -184,9 +190,23 @@ impl NuvecEngine {
             },
             _ => options.fallback_device.ok_or(NuvecLoadError::NoDevice)?,
         };
+        let layers = info.layer_kinds.len();
+        let part = options.part.unwrap_or(Part::whole(layers));
+        if part.first >= part.end || part.end > layers {
+            return Err(LoadError::InvalidConfig {
+                key: "layers".into(),
+                reason: format!(
+                    "{}..{} is not a range of the {layers} layers",
+                    part.first, part.end
+                ),
+            }
+            .into());
+        }
+        let keep = |name: &str| !load::unused_tensor(name) && part.keeps(name);
+        let weights_bytes = load::weights_bytes_of(dir, keep);
         let plan = budget::plan(device, options.overrides)?;
         // Refuse early, before reading gigabytes, when the files alone cannot fit.
-        budget::check_fits(&plan, load::weights_bytes(dir), 0, &info)?;
+        budget::check_fits(&plan, weights_bytes, 0, &info)?;
         tensor::memory::set_cache_limit(CACHE_LIMIT);
 
         let text_config = config
@@ -197,7 +217,8 @@ impl NuvecEngine {
             family.family.name,
             &config,
             text_config,
-            Weights::load(dir, |name| !load::unused_tensor(name))?,
+            Weights::load(dir, keep)?,
+            part,
         )?;
         if model.layer_kinds() != info.layer_kinds.as_slice() {
             return Err(LoadError::InvalidConfig {
@@ -206,11 +227,10 @@ impl NuvecEngine {
             }
             .into());
         }
-        // The state's real dtype decides its size (a config's `torch_dtype` may disagree).
-        let attention = info
-            .layer_kinds
-            .iter()
-            .filter(|k| **k == LayerKind::FullAttention)
+        // The state's real dtype decides its size (a config's `torch_dtype` may disagree); a part
+        // holds the state of its own layers only.
+        let attention = part_kinds(&info.layer_kinds, part)
+            .filter(|k| *k == LayerKind::FullAttention)
             .count() as u64;
         info.kv_bytes_per_token = attention
             * 2
@@ -218,15 +238,13 @@ impl NuvecEngine {
             * u64::from(info.head_dim)
             * model.state_dtype().size();
         info.recurrent_bytes = model.recurrent_bytes();
-        let linear: Vec<bool> = info
-            .layer_kinds
-            .iter()
-            .map(|k| *k == LayerKind::Linear)
+        let linear: Vec<bool> = part_kinds(&info.layer_kinds, part)
+            .map(|k| k == LayerKind::Linear)
             .collect();
         let seq = SeqState::new(&linear, info.kv_heads, info.head_dim, model.state_dtype());
         // Refuse before the warm-up reads the weights when the analytic scratch cannot fit.
-        let initial = analytic_scratch(model.as_ref(), &info, INITIAL_STATE_TOKENS as u32);
-        budget::check_fits(&plan, load::weights_bytes(dir), initial, &info)?;
+        let initial = analytic_scratch(model.as_ref(), &info, part, INITIAL_STATE_TOKENS as u32);
+        budget::check_fits(&plan, weights_bytes, initial, &info)?;
         let mut engine = Self {
             ledger: Ledger::new(&info, plan),
             info,
@@ -236,10 +254,13 @@ impl NuvecEngine {
             draws: 0,
             ids: Vec::new(),
             fail: None,
+            part,
+            pipe: None,
         };
         let (weights, peak) = engine.warm_up()?;
         let scratch = |depth: u32| {
-            let analytic = analytic_scratch(engine.model.as_ref(), &engine.info, depth);
+            let analytic =
+                analytic_scratch(engine.model.as_ref(), &engine.info, engine.part, depth);
             ((peak + analytic) as f64 * SCRATCH_MARGIN) as u64
         };
         let budget = budget::with_state_capacity(plan, weights, &scratch, &engine.info)?;
@@ -412,8 +433,9 @@ impl NuvecEngine {
     /// and one linear layer (depth-independent), the slower of the two per chunk length.
     fn calibrate(&self) -> tensor::Result<TimeLen> {
         let kinds = &self.info.layer_kinds;
-        let attention = kinds.iter().position(|k| *k == LayerKind::FullAttention);
-        let linear = kinds.iter().position(|k| *k == LayerKind::Linear);
+        let first = |kind: LayerKind| (self.part.first..self.part.end).find(|&i| kinds[i] == kind);
+        let attention = first(LayerKind::FullAttention);
+        let linear = first(LayerKind::Linear);
         let mut linear_ms: HashMap<u32, f64> = HashMap::new();
         let depths = calibration::depths(self.ledger.budget.kv_capacity_tokens);
         let debug = std::env::var_os("MRUN_CALIBRATION_DEBUG").is_some();
@@ -452,7 +474,14 @@ impl NuvecEngine {
     /// timed runs after an untimed one that compiles the kernels (D059), on zeroed state.
     fn time_layer(&self, i: usize, len: u32, depth: u32) -> tensor::Result<f64> {
         let ids = Array::from_u32(&vec![0; len as usize], &[1, len as i32]);
-        let x = self.model.embed(&ids)?;
+        let x = if self.part.head {
+            self.model.embed(&ids)?
+        } else {
+            tensor::zeros(
+                &[1, len as i32, self.model.hidden()],
+                self.model.state_dtype(),
+            )?
+        };
         x.eval()?;
         let mut best = f64::MAX;
         for run in 0..4 {
@@ -569,12 +598,79 @@ impl NuvecEngine {
     /// Runs `ids` (`[1, 1]`, possibly lazy) through the model at `len()` and returns the
     /// logits; the caller counts the position once the step is committed.
     fn feed(&mut self, ids: &Array) -> Result<Array, EngineError> {
-        let mut x = self.model.embed(ids).map_err(backend)?;
+        let mut x = self.input(ids)?;
         let offset = self.ledger.len() as i32;
-        for (i, layer) in self.seq.layers.iter_mut().enumerate() {
-            x = self.model.layer(i, &x, layer, offset).map_err(backend)?;
+        for (k, layer) in self.seq.layers.iter_mut().enumerate() {
+            x = self
+                .model
+                .layer(self.part.first + k, &x, layer, offset)
+                .map_err(backend)?;
         }
-        self.model.logits(&x).map_err(backend)
+        // A step's hidden state goes round the ring: back to the head for the logits.
+        match (&self.pipe, self.part.head) {
+            (None, _) if !self.part.head => Ok(x),
+            (None, _) => self.model.logits(&x),
+            // `recv_like` takes the send for its shape only, not as a dependency: the send is
+            // evaluated first, or it would never run.
+            (Some(pipe), true) => pipe
+                .send(&x)
+                .and_then(|sent| sent.eval().map(|()| sent))
+                .and_then(|sent| pipe.recv_like(&sent))
+                .and_then(|back| self.model.logits(&back)),
+            (Some(pipe), false) => pipe.send(&x),
+        }
+        .map_err(backend)
+    }
+
+    /// The input of this part's first layer: the embedded `ids`, or (a part without the head)
+    /// the hidden state from the previous part, or zeros before a ring is attached (warm-up).
+    fn input(&self, ids: &Array) -> Result<Array, EngineError> {
+        if self.part.head {
+            return self.model.embed(ids).map_err(backend);
+        }
+        let shape = [1, ids.dim(1), self.model.hidden()];
+        match &self.pipe {
+            Some(pipe) => pipe.recv(&shape, self.model.state_dtype()),
+            None => tensor::zeros(&shape, self.model.state_dtype()),
+        }
+        .map_err(backend)
+    }
+
+    /// The layers this engine runs.
+    pub fn part(&self) -> Part {
+        self.part
+    }
+
+    /// Attaches (or detaches) the ring to the pool's other parts (026). Decode is not pipelined
+    /// while a ring is attached: every step crosses every part.
+    pub fn set_pipe(&mut self, pipe: Option<Pipe>) {
+        self.pipe = pipe;
+    }
+
+    pub fn pipe(&self) -> Option<&Pipe> {
+        self.pipe.as_ref()
+    }
+
+    /// Whether `n` positions can be appended now, without appending them (026: a pool's host
+    /// checks before its stages start receiving).
+    pub fn check_append(&self, n: u32) -> Result<(), EngineError> {
+        self.ledger.plan_append(n).map(|_| ())
+    }
+
+    /// How many positions' worth of state this engine's budget holds.
+    pub fn state_tokens(&self) -> u64 {
+        self.ledger.budget.state_capacity_bytes / self.info.kv_bytes_per_token.max(1)
+    }
+
+    /// Lowers the state budget to `tokens` positions' worth (026: a pool's host never plans
+    /// state one of its stages cannot hold, so the stages' moves succeed whenever the host's do).
+    pub fn cap_state_tokens(&mut self, tokens: u64) {
+        let budget = &mut self.ledger.budget;
+        let bytes = tokens.saturating_mul(self.info.kv_bytes_per_token.max(1));
+        budget.state_capacity_bytes = budget.state_capacity_bytes.min(bytes);
+        budget.kv_capacity_tokens = budget
+            .kv_capacity_tokens
+            .min(u32::try_from(tokens).unwrap_or(u32::MAX));
     }
 
     /// After a position was committed: as mlx-lm, return decode's freed buffers every 256.
@@ -616,13 +712,14 @@ impl NuvecEngine {
         captured: &mut Vec<RecurrentState>,
     ) -> Result<bool, EngineError> {
         let ids = Array::from_u32(tokens, &[1, tokens.len() as i32]);
-        let mut x = self.model.embed(&ids).map_err(backend)?;
+        let mut x = self.input(&ids)?;
         let offset = self.ledger.len() as i32;
         let mut previous: Option<Array> = None;
         captured.clear();
         captured.resize_with(splits.len(), Vec::new);
-        for i in 0..self.seq.layers.len() {
-            let layer = &mut self.seq.layers[i];
+        for k in 0..self.seq.layers.len() {
+            let i = self.part.first + k;
+            let layer = &mut self.seq.layers[k];
             let mut at_splits = Vec::new();
             x = if splits.is_empty() {
                 self.model.layer(i, &x, layer, offset)
@@ -651,6 +748,10 @@ impl NuvecEngine {
                 }
             }
         }
+        // A prefill chunk's hidden state goes on to the next part; the last part's is not needed.
+        if let Some(pipe) = self.pipe.as_ref().filter(|p| !p.last()) {
+            x = pipe.send(&x).map_err(backend)?;
+        }
         x.eval().map_err(backend)?;
         Ok(true)
     }
@@ -659,7 +760,7 @@ impl NuvecEngine {
 /// Scratch beyond the warm-up peak (FR-017) for sequences up to `depth` positions: the family's
 /// largest chunk term over the chunk schedule up to `depth`, one attention layer at `depth` (the
 /// transient of growth and moves), one recurrent state (rollback copy) and the cache limit.
-fn analytic_scratch(model: &dyn Model, info: &ModelInfo, depth: u32) -> u64 {
+fn analytic_scratch(model: &dyn Model, info: &ModelInfo, part: Part, depth: u32) -> u64 {
     let depth = depth.min(info.max_position);
     let mut at = 0u32;
     let mut chunk = 0;
@@ -668,13 +769,16 @@ fn analytic_scratch(model: &dyn Model, info: &ModelInfo, depth: u32) -> u64 {
         chunk = chunk.max(model.chunk_scratch(len, at));
         at = at.saturating_add(len);
     }
-    let attention = info
-        .layer_kinds
-        .iter()
-        .filter(|k| **k == LayerKind::FullAttention)
+    let attention = part_kinds(&info.layer_kinds, part)
+        .filter(|k| *k == LayerKind::FullAttention)
         .count() as u64;
     let layer = (info.kv_bytes_per_token / attention.max(1)) * u64::from(depth);
     chunk + layer + info.recurrent_bytes + CACHE_LIMIT
+}
+
+/// The kinds of `part`'s layers.
+fn part_kinds(kinds: &[LayerKind], part: Part) -> impl Iterator<Item = LayerKind> + '_ {
+    kinds[part.first..part.end].iter().copied()
 }
 
 impl Engine for NuvecEngine {
@@ -737,12 +841,18 @@ impl Engine for NuvecEngine {
         let capacity = self.grow(growth)?;
         self.step = None;
         let before = self.hybrid().then(|| self.seq.recurrent());
+        // With a ring attached the step finishes here: what is sent next on the ring must not
+        // overtake the step's own transfers.
+        let ring = self.pipe.is_some();
         let fed = self
             .feed(&Array::from_u32(&[last], &[1, 1]))
             .and_then(|logits| {
-                tensor::async_eval(&[&logits])
-                    .map_err(backend)
-                    .map(|()| logits)
+                if ring {
+                    logits.eval().map_err(backend)
+                } else {
+                    tensor::async_eval(&[&logits]).map_err(backend)
+                }
+                .map(|()| logits)
             })
             .and_then(|logits| {
                 if self.strikes(FailPoint::Forward) {
@@ -800,7 +910,7 @@ impl Engine for NuvecEngine {
         // Pipeline: feed the sampled token while it is still lazy, when the allocation has room.
         // Nothing is recorded until the token is read back; a failure restores the state.
         let before = self.hybrid().then(|| self.seq.recurrent());
-        let next = if self.ledger.has_room() {
+        let next = if self.ledger.has_room() && self.pipe.is_none() {
             let fed = tensor::reshape(&token, &[1, 1])
                 .map_err(backend)
                 .and_then(|ids| self.feed(&ids))

@@ -141,6 +141,11 @@ pub async fn serve<A: Api>(
             .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok()),
     );
+    request.member = headers
+        .get(crate::pool::MEMBER_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|id| id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_string);
     let loaded = match accepting(&state) {
         Ok(loaded) => loaded,
         Err(e) => return rejected(&e),

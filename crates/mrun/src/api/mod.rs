@@ -11,6 +11,7 @@ pub mod record;
 pub mod relay;
 pub mod responses;
 pub mod run;
+pub mod sessions;
 pub mod sse;
 pub mod status;
 
@@ -43,17 +44,48 @@ pub fn router(state: ServerState) -> Router {
         .route("/metrics", get(metrics::metrics))
         .route("/mrun/status", get(status::status))
         .route("/mrun/cache/clear", post(status::clear_cache))
+        .route("/mrun/sessions", get(sessions::sessions))
+        .route("/mrun/pool", get(crate::pool::routes::status))
+        .route("/mrun/pool/start", post(crate::pool::routes::start))
+        .route("/mrun/pool/join", post(crate::pool::routes::join))
+        .route(
+            "/mrun/pool/join/confirm",
+            post(crate::pool::routes::confirm),
+        )
+        .route("/mrun/pool/admit", post(crate::pool::routes::admit))
+        .route("/mrun/pool/leave", post(crate::pool::routes::leave))
+        .route("/mrun/pool/remove", post(crate::pool::routes::remove))
+        .route("/mrun/pool/rejoin", post(crate::pool::routes::rejoin))
+        .merge(pool_serving())
+        .route("/mrun/requests/{id}/excerpt", get(sessions::excerpt))
         .route("/v1/messages/count_tokens", post(messages::count_tokens))
         .route(
             "/v1/responses",
             post(handler::serve::<responses::Responses>),
         )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(middleware::from_fn_with_state(state.clone(), pool_relay))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             loopback_guard,
         ))
         .with_state(state)
+}
+
+#[cfg(feature = "engine")]
+fn pool_serving() -> Router<ServerState> {
+    Router::new()
+        .route("/mrun/pool/plan", get(crate::pool::serve::routes::plan))
+        .route("/mrun/pool/serve", post(crate::pool::serve::routes::serve))
+        .route(
+            "/mrun/pool/replan",
+            post(crate::pool::serve::routes::replan),
+        )
+}
+
+#[cfg(not(feature = "engine"))]
+fn pool_serving() -> Router<ServerState> {
+    Router::new()
 }
 
 async fn health(State(state): State<ServerState>) -> Response {
@@ -79,6 +111,39 @@ async fn health(State(state): State<ServerState>) -> Response {
 
 async fn hello() -> StatusCode {
     StatusCode::OK
+}
+
+/// A pool member's agents reach the pool's model: while this Mac lends its memory to a pool, its
+/// API calls (and its own sessions) go to the host (026 FR-005).
+async fn pool_relay(State(state): State<ServerState>, request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_string();
+    let sessions = path == "/mrun/sessions" || path.starts_with("/mrun/requests/");
+    if !crate::pool::relay::relayed(&path) && !sessions {
+        return next.run(request).await;
+    }
+    let Some((client, host)) = state.pool.relay_target() else {
+        return next.run(request).await;
+    };
+    let (parts, body) = request.into_parts();
+    let target = if path == "/mrun/sessions" {
+        "/pool/v1/sessions".to_string()
+    } else if let Some(rest) = path.strip_prefix("/mrun/requests/") {
+        format!("/pool/v1/excerpt/{}", rest.trim_end_matches("/excerpt"))
+    } else {
+        parts
+            .uri
+            .path_and_query()
+            .map_or(path.clone(), |p| p.as_str().to_string())
+    };
+    crate::pool::relay::forward(
+        &client,
+        parts.method,
+        format!("https://{host}{target}"),
+        &parts.headers,
+        None,
+        axum::body::Body::new(body),
+    )
+    .await
 }
 
 /// Accepts only loopback `Host` values with the server port and no foreign browser `Origin`

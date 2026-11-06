@@ -2,7 +2,7 @@
 // per-start token, which arrives in the URL fragment (never sent to a server) and lives in this
 // tab's sessionStorage (contracts/ui-host.md §Security).
 
-import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, Job, Miss, ModelEntry, Offer, Plan, Prefs, Status } from "./types";
+import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, Excerpt, Job, Miss, ModelEntry, Offer, Plan, PoolPlan, PoolView, Prefs, Sessions, Status } from "./types";
 
 const KEY = "mrun.token";
 
@@ -73,6 +73,12 @@ export async function countTokens(body: Record<string, unknown>): Promise<number
 
 export const host = {
   status: () => call<Status>("/mrun/status"),
+  /** Session replay (025): every kept session, and the records after `since`. */
+  sessions: (since?: number) => call<Sessions>(since === undefined ? "/mrun/sessions" : `/mrun/sessions?since=${since}`),
+  excerpt: (id: number) => call<Excerpt>(`/mrun/requests/${id}/excerpt`),
+  /** Mac pool (026): this Mac's pool, waiting joins and (browsing) the pools nearby. */
+  pool: (browse = false) => call<PoolView>(browse ? "/mrun/pool?browse=true" : "/mrun/pool"),
+  poolPlan: (model: string) => call<PoolPlan>(`/mrun/pool/plan?model=${encodeURIComponent(model)}`),
   state: () => call<AppState>("/app/state"),
   models: (fresh = false) => listing<ModelEntry[]>("/app/models", fresh),
   agents: (fresh = false) => listing<AgentEntry[]>("/app/agents", fresh),

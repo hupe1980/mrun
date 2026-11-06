@@ -31,7 +31,7 @@
         <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
         <a class="button ghost" href="{{ config.extra.repo }}" rel="noopener">Star on GitHub</a>
       </div>
-      <p class="status-pill"><span class="dot" aria-hidden="true"></span>0.1 · first release · <code>brew install hupe1980/tap/mrun</code></p>
+      <p class="status-pill"><span class="dot" aria-hidden="true"></span>0.2 · <code>brew install hupe1980/tap/mrun</code></p>
     </div>
     <figure class="terminal" aria-label="Example terminal session">
       <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -74,7 +74,7 @@
       </article>
       <article class="card">
         <h3>Private by default</h3>
-        <p>Loopback only, no telemetry, no prompt logging, offline after <code>mrun pull</code>. Tools run in your agent, never in the server.</p>
+        <p>Loopback only, no telemetry, no prompt logging, offline after <code>mrun pull</code>. A model too big for your Mac can run across your Macs or on a rented GPU: opt-in, and the window says where prompts go.</p>
       </article>
     </div>
   </div>
@@ -83,7 +83,7 @@
 <section class="section alt">
   <div class="wrap">
     <h2 class="section-title">See what the cache does</h2>
-    <p class="section-lead"><code>mrun ui</code> opens a window and a menu bar item: the memory budget, every request's reuse and why any part was recomputed, a chat with the local model, models that fit your Mac, and one-click agent setup.</p>
+    <p class="section-lead"><code>mrun ui</code> opens a window and a menu bar item: the memory budget, every request's reuse and why any part was recomputed, each agent session's requests, a chat with the local model, models that fit your Mac or your pool, and one-click agent setup.</p>
     {%- set shots = [
       ["now.png", "Now: the memory budget, a prompt being read, and the reuse of recent requests"],
       ["chat.png", "Chat: each reply's reuse, time to first token and speed"],

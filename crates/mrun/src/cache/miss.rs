@@ -84,6 +84,38 @@ pub struct MissReport {
     pub cause: Option<Cause>,
 }
 
+/// Token ids around a divergence (025): what the closest stored path held from it, what the
+/// prompt has from it, and the prompt just before it. Kept in memory with the request's history
+/// record and decoded only when `/mrun/requests/{id}/excerpt` asks.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Excerpt {
+    pub context: Vec<u32>,
+    pub before: Vec<u32>,
+    pub after: Vec<u32>,
+}
+
+/// Tokens an excerpt keeps from the divergence on, each side.
+pub const EXCERPT_AFTER: usize = 48;
+/// Prompt tokens an excerpt keeps before the divergence.
+pub const EXCERPT_CONTEXT: usize = 32;
+
+impl Excerpt {
+    /// The excerpt of `prompt` against the stored path `stored` diverging at `at`.
+    pub fn at(stored: &[u32], prompt: &[u32], at: u32) -> Self {
+        let at = at as usize;
+        let window = |tokens: &[u32]| {
+            tokens[at.min(tokens.len())..(at + EXCERPT_AFTER).min(tokens.len())].to_vec()
+        };
+        Self {
+            context: prompt
+                [at.saturating_sub(EXCERPT_CONTEXT).min(prompt.len())..at.min(prompt.len())]
+                .to_vec(),
+            before: window(stored),
+            after: window(prompt),
+        }
+    }
+}
+
 /// What lookup found, before classification.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Found {
@@ -230,6 +262,26 @@ mod tests {
         assert_eq!(r.divergence, Some(25));
         // Nothing stored at all.
         assert_eq!(classify(&p, Found::default()).cause, Some(Cause::New));
+    }
+
+    #[test]
+    fn excerpts_cut_around_the_divergence() {
+        let stored: Vec<u32> = (0..200).collect();
+        let mut prompt = stored.clone();
+        prompt[100] = 999;
+        let e = Excerpt::at(&stored, &prompt, 100);
+        assert_eq!(e.context, (68..100).collect::<Vec<_>>());
+        assert_eq!(e.before, (100..148).collect::<Vec<_>>());
+        assert_eq!(e.after[0], 999);
+        assert_eq!(e.after.len(), EXCERPT_AFTER);
+        // Near the ends: only what exists.
+        let e = Excerpt::at(&stored[..102], &prompt[..101], 10);
+        assert_eq!(
+            (e.context.len(), e.before.len(), e.after.len()),
+            (10, 48, 48)
+        );
+        let e = Excerpt::at(&stored[..5], &prompt[..3], 3);
+        assert_eq!((e.context.len(), e.before.len(), e.after.len()), (3, 2, 0));
     }
 
     #[test]

@@ -26,6 +26,16 @@ pub enum Kind {
     CloudDown,
     CloudLogin,
     CloudLogout,
+    PoolStart,
+    PoolJoin,
+    PoolConfirm,
+    PoolAdmit,
+    PoolDecline,
+    PoolLeave,
+    PoolRemove,
+    PoolServe,
+    PoolRejoin,
+    PoolReplan,
 }
 
 impl Kind {
@@ -42,6 +52,16 @@ impl Kind {
             "cloud-down" => Self::CloudDown,
             "cloud-login" => Self::CloudLogin,
             "cloud-logout" => Self::CloudLogout,
+            "pool-start" => Self::PoolStart,
+            "pool-join" => Self::PoolJoin,
+            "pool-confirm" => Self::PoolConfirm,
+            "pool-admit" => Self::PoolAdmit,
+            "pool-decline" => Self::PoolDecline,
+            "pool-leave" => Self::PoolLeave,
+            "pool-remove" => Self::PoolRemove,
+            "pool-serve" => Self::PoolServe,
+            "pool-rejoin" => Self::PoolRejoin,
+            "pool-replan" => Self::PoolReplan,
             _ => return None,
         })
     }
@@ -60,6 +80,16 @@ impl Kind {
             Self::Pull | Self::Remove | Self::Use | Self::Start | Self::Stop => "models",
             Self::Connect | Self::Disconnect => "agents",
             Self::CloudUp | Self::CloudDown | Self::CloudLogin | Self::CloudLogout => "cloud",
+            Self::PoolStart
+            | Self::PoolJoin
+            | Self::PoolConfirm
+            | Self::PoolAdmit
+            | Self::PoolDecline
+            | Self::PoolLeave
+            | Self::PoolRemove
+            | Self::PoolServe
+            | Self::PoolRejoin
+            | Self::PoolReplan => "pool",
         }
     }
 }
@@ -79,6 +109,25 @@ fn valid_model(target: &str) -> bool {
         && target
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._/@:-".contains(&b))
+}
+
+/// A pool as `mrun pool join` takes it: `address:port`, or a pool's or host's name (letters,
+/// digits, spaces and the apostrophes of "Ben's pool"), never an option.
+fn pool_target(target: &str) -> Result<String, String> {
+    let ok = (1..=80).contains(&target.chars().count())
+        && !target.starts_with(['-', ' '])
+        && target
+            .chars()
+            .all(|c| c.is_alphanumeric() || " '’._:-".contains(c));
+    ok.then(|| target.to_string())
+        .ok_or_else(|| format!("not a pool: {target:?}"))
+}
+
+/// A Mac's id (16 hex digits).
+fn mac_id(target: &str) -> Result<String, String> {
+    (target.len() == 16 && target.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| target.to_string())
+        .ok_or_else(|| format!("not a Mac id: {target:?}"))
 }
 
 /// A `cloud-up` target, `<repo>|<gpu id>|<secure|community>` (024 data model): the model, the
@@ -190,6 +239,70 @@ pub fn steps(
         // The key goes to the child's stdin, never into argv (024 FR-005).
         Kind::CloudLogin => vec![s(&["cloud", "login"])],
         Kind::CloudLogout => vec![s(&["cloud", "logout"])],
+        Kind::PoolStart => match target {
+            "" => vec![s(&["pool", "start", "--port", &port, "--json"])],
+            "unencrypted" => vec![s(&[
+                "pool",
+                "start",
+                "--unencrypted",
+                "--port",
+                &port,
+                "--json",
+            ])],
+            other => return Err(format!("not a way to start a pool: {other:?}")),
+        },
+        // Without a terminal the join prints its code and waits for `pool confirm`.
+        Kind::PoolJoin => vec![s(&[
+            "pool",
+            "join",
+            &pool_target(target)?,
+            "--port",
+            &port,
+            "--json",
+        ])],
+        Kind::PoolConfirm => {
+            let code: String = target.chars().filter(|c| !c.is_whitespace()).collect();
+            if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(format!("not a six-digit code: {target:?}"));
+            }
+            vec![s(&["pool", "confirm", &code, "--port", &port, "--json"])]
+        }
+        Kind::PoolAdmit => vec![s(&[
+            "pool",
+            "admit",
+            &mac_id(target)?,
+            "--yes",
+            "--port",
+            &port,
+            "--json",
+        ])],
+        Kind::PoolDecline => vec![s(&[
+            "pool",
+            "decline",
+            &mac_id(target)?,
+            "--port",
+            &port,
+            "--json",
+        ])],
+        Kind::PoolLeave => vec![s(&["pool", "leave", "--yes", "--port", &port, "--json"])],
+        Kind::PoolRejoin => vec![s(&["pool", "rejoin", "--port", &port, "--json"])],
+        Kind::PoolReplan => vec![s(&["pool", "replan", "--port", &port, "--json"])],
+        Kind::PoolRemove => vec![s(&[
+            "pool",
+            "remove",
+            &mac_id(target)?,
+            "--port",
+            &port,
+            "--json",
+        ])],
+        Kind::PoolServe => vec![s(&[
+            "pool",
+            "serve",
+            &model(target)?,
+            "--port",
+            &port,
+            "--json",
+        ])],
     })
 }
 
@@ -562,6 +675,48 @@ impl Jobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pool_actions_are_their_commands_and_refuse_options() {
+        let argv = |kind, target| steps(kind, target, 8484, None).map(|s| s.concat().join(" "));
+        assert_eq!(
+            argv(Kind::PoolJoin, "Ben's pool").unwrap(),
+            "pool join Ben's pool --port 8484 --json"
+        );
+        assert_eq!(
+            argv(Kind::PoolConfirm, "482 913").unwrap(),
+            "pool confirm 482913 --port 8484 --json"
+        );
+        assert_eq!(
+            argv(Kind::PoolAdmit, "0123456789abcdef").unwrap(),
+            "pool admit 0123456789abcdef --yes --port 8484 --json"
+        );
+        assert_eq!(
+            argv(Kind::PoolServe, "qwen3.6").unwrap(),
+            "pool serve qwen3.6 --port 8484 --json"
+        );
+        for (kind, bad) in [
+            (Kind::PoolJoin, "--port"),
+            (Kind::PoolJoin, "a;b"),
+            (Kind::PoolConfirm, "12345"),
+            (Kind::PoolAdmit, "--yes"),
+            (Kind::PoolRemove, "abc"),
+        ] {
+            assert!(argv(kind, bad).is_err(), "{kind:?} {bad}");
+        }
+        assert_eq!(Kind::parse("pool-leave"), Some(Kind::PoolLeave));
+        assert_eq!(
+            command_line(&steps(Kind::PoolRejoin, "", 8484, None).unwrap()),
+            "mrun pool rejoin --port 8484 --json"
+        );
+        assert_eq!(Kind::PoolReplan.listing(), "pool");
+        assert_eq!(
+            command_line(&steps(Kind::PoolStart, "unencrypted", 8484, None).unwrap()),
+            "mrun pool start --unencrypted --port 8484 --json"
+        );
+        assert!(argv(Kind::PoolStart, "--name=x").is_err());
+        assert_eq!(Kind::PoolStart.listing(), "pool");
+    }
 
     #[test]
     fn commands_are_the_clis() {

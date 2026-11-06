@@ -87,4 +87,5 @@ The M5 Neural Accelerator (NAX) kernels are compiled in but stay off until measu
   startup.
 - **Standard wire formats.** Response bodies are what each API defines; mrun's extra information
   travels in headers and SSE comments that clients ignore.
-- **Local and private.** Loopback only, no telemetry, no prompt logging.
+- **Local and private.** Loopback only unless you opt in to a pool or a rented GPU; no telemetry,
+  no prompt logging.

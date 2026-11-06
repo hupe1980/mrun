@@ -47,6 +47,9 @@
   --reused: #34c759;
   --computed: rgba(120, 120, 128, 0.32);
   --attention: #a35200;  --attention-fill: rgba(255, 149, 0, 0.7);
+  /* Mac pool (026): one colour per Mac on the ring, the host first. */
+  --pool-1: #007aff; --pool-2: #af52de; --pool-3: #30b0c7; --pool-4: #ff9500;
+  --pool-5: #ff2d55; --pool-6: #5856d6; --pool-7: #34c759; --pool-8: #a2845e;
 
   --glass: rgba(246, 246, 248, 0.72);
   --glass-edge: rgba(255, 255, 255, 0.6);
@@ -95,6 +98,8 @@
     --reused: #30d158;
     --computed: rgba(120, 120, 128, 0.5);
     --attention: #ffb340;  --attention-fill: rgba(255, 159, 10, 0.75);
+    --pool-1: #0a84ff; --pool-2: #bf5af2; --pool-3: #40c8e0; --pool-4: #ff9f0a;
+    --pool-5: #ff375f; --pool-6: #5e5ce6; --pool-7: #30d158; --pool-8: #ac8e68;
     --glass: rgba(36, 36, 38, 0.72);
     --glass-edge: rgba(255, 255, 255, 0.08);
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);

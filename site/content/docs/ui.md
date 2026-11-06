@@ -1,11 +1,12 @@
 +++
 title = "The mrun window"
-description = "mrun's window and menu bar item: server state, chat, models and agent setup."
+description = "mrun's window and menu bar item: server state, chat, session replay, models and agent setup."
 weight = 15
 +++
 
 `mrun ui` opens mrun's window: the memory budget, what each request is doing and how much of each
-prompt was reused. It also chats with the model, downloads models and connects your agents.
+prompt was reused. It also replays agent sessions, chats with the model, downloads models and
+connects your agents.
 
 ```sh
 mrun ui              # the window and a menu bar item
@@ -63,6 +64,32 @@ Markdown or save it to Downloads.
 The first chat asks whether to keep chats on this Mac. Kept chats live in `~/.mrun/chats`.
 Settings › General changes the answer and can delete them all.
 
+## Sessions
+
+Each coding-agent session as a skyline: one column per request, in order, its height the prompt.
+The reused part is green, the computed cap grey, or amber when it is worth fixing. The main
+conversation, each subagent and the side requests (titles, compaction) get their own rows; a pause
+of over 30 seconds shows as *4 min idle*. The thin strip under each column darkens with the wait
+for the first token.
+
+<figure class="screenshot"><a href="../../screenshots/sessions.png" title="Open full size"><img src="../../screenshots/sessions.png" alt="Sessions: a Claude Code session with its main row, subagents and side requests, and a selected miss with the text that changed" width="1100" height="720" loading="lazy" decoding="async"></a><figcaption>Sessions: a selected miss shows the cached and the sent text, with the change marked</figcaption></figure>
+
+Select a column for its numbers and cause. When the prompt changed, the inspector shows the text
+at the change twice, as cached and as sent, with only the change marked. The text is read from
+memory when you select the request; it is never stored or logged. <kbd>⌥→</kbd> jumps to the next
+miss worth fixing.
+
+The view follows the newest request; scrolling back pauses it, <kbd>Space</kbd> follows again.
+Sessions keep the last 2,000 requests in memory until the server stops. `mrun ps --sessions`
+prints the same. A recent request on Now opens here with its icon. With a rented GPU, Sessions
+stays empty: the remote server reports no causes.
+
+## Pool
+
+Macs on your network running one model together: start a pool, join one nearby with the code
+both Macs show, and plan a model across them. The pool is drawn as a ring: each Mac a tile with its
+layers and link, the model's layers the circle. See [Mac pool](@/docs/pool.md).
+
 ## Models
 
 The aliases and pulled models, each with the verdict `mrun ls` prints: *Fits*, *Tight* (less
@@ -103,7 +130,7 @@ Settings › Server shows the server's settings with their sources and opens `co
 
 | Keys | Does |
 | --- | --- |
-| <kbd>⌘1</kbd>–<kbd>⌘4</kbd> | Now, Chat, Models, Agents |
+| <kbd>⌘1</kbd>–<kbd>⌘6</kbd> | Now, Chat, Sessions, Pool, Models, Agents |
 | <kbd>⌘K</kbd> | Every action and place by name |
 | <kbd>⌘L</kbd> | Choose a model |
 | <kbd>⌘N</kbd> | New chat |
@@ -113,6 +140,9 @@ Settings › Server shows the server's settings with their sources and opens `co
 | <kbd>Esc</kbd> or <kbd>⌘.</kbd> | Stop the reply |
 | <kbd>⌥⌘I</kbd> | Chat settings |
 | <kbd>⌘,</kbd> | Settings |
+| <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> | Sessions: the previous or next request, the row above or below |
+| <kbd>⌥←</kbd> <kbd>⌥→</kbd> | Sessions: the previous or next miss worth fixing |
+| <kbd>⌘+</kbd> <kbd>⌘−</kbd> <kbd>⌘0</kbd> | Sessions: zoom in, out, fit the session |
 
 ## On the Mac
 

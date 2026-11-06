@@ -28,6 +28,10 @@ pub use engine::{
     EngineError, GROWTH, LAYER_TIME_BOUND_MS, LayerKind, MemoryBudget, ModelInfo, Numerics,
     Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, align, chunk_len, grown_capacity,
 };
+#[cfg(feature = "engine")]
+pub use models::Part;
 pub use models::SyntaxId;
 #[cfg(feature = "engine")]
 pub use nuvec_engine::{FailPoint, LoadOptions, NuvecEngine, NuvecLoadError};
+#[cfg(feature = "engine")]
+pub use tensor::Pipe;

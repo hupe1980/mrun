@@ -6,6 +6,9 @@ import CloudSheet from "../src/components/CloudSheet.svelte";
 import Agents from "../src/places/Agents.svelte";
 import Models from "../src/places/Models.svelte";
 import Now from "../src/places/Now.svelte";
+import Pool from "../src/places/Pool.svelte";
+import PlanSheet from "../src/components/PlanSheet.svelte";
+import Sessions from "../src/places/Sessions.svelte";
 import Settings from "../src/places/Settings.svelte";
 import { render, settle, violations } from "./dom";
 
@@ -266,5 +269,232 @@ describe("Cloud in the window (024)", () => {
     await settle();
     expect(target.textContent).toContain("From RUNPOD_API_KEY.");
     expect(target.textContent).not.toContain("Add…");
+  });
+});
+
+describe("Sessions (025)", () => {
+  const rec = (id: number, row: string, over: Record<string, unknown> = {}) => ({
+    id, session: "s1", row, client: "claude-cli", ended_ms: id * 1000, attention: false, excerpt: false,
+    api: "messages", prompt_tokens: 40000 + id, cached: 39800 + id, processed: 200, generated: 120,
+    ttft_ms: 300 + id, decode_tps: 41.8, stop: "end", cause: null, divergence: null, message: null, unreused: 0,
+    ...over,
+  });
+  const body = {
+    kept: 2000, dropped: 0, remote: false,
+    sessions: [{
+      id: "s1", client: "claude-cli", label: "Claude Code", first_ms: 1000, last_ms: 5000, requests: 5,
+      prompt_tokens: 200015, cached_tokens: 180000, attention: 1,
+      rows: [{ id: "main", kind: "main", requests: 3 }, { id: "sub1", kind: "subagent", requests: 1 }, { id: "side", kind: "side", requests: 1 }],
+    }],
+    requests: [
+      rec(1, "main"), rec(2, "side", { prompt_tokens: 900, cached: 0, cause: "new" }), rec(3, "sub1"),
+      rec(4, "main", { cached: 12000, cause: "diverged", message: { index: 6, role: "tool" }, attention: true, excerpt: true }),
+      rec(5, "main"),
+    ],
+  };
+  const excerpt = { id: 4, message: { index: 6, role: "tool" }, context: "build ok in 1", before: "2.4s and the tests pass", after: "1.9s and the tests pass" };
+  const serve = (sessions: unknown) =>
+    vi.stubGlobal("fetch", async (url: string) => {
+      const u = String(url);
+      const value = u.startsWith("/mrun/sessions") ? sessions : u.includes("/excerpt") ? excerpt : [];
+      return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+  it("draws the session's rows and summary, and the keys move the selection", async () => {
+    live.status = status;
+    serve(body);
+    const { target } = render(Sessions, {});
+    await settle(12);
+    const text = target.textContent ?? "";
+    expect(text).toContain("5 requests · 90 % of prompt tokens reused · 1 worth fixing");
+    expect([...target.querySelectorAll(".labels span")].map((t) => t.textContent)).toEqual(["Main", "Subagent 1", "Side requests"]);
+    const sky = target.querySelector<HTMLElement>("[role=listbox]")!;
+    expect(target.querySelectorAll("[role=option]").length).toBe(5);
+    const key = (k: string, alt = false) => {
+      sky.dispatchEvent(new KeyboardEvent("keydown", { key: k, altKey: alt, bubbles: true }));
+      flushSync();
+    };
+    key("ArrowRight", true);
+    expect(sky.getAttribute("aria-activedescendant")).toBe("col-4");
+    expect(target.querySelector("#col-4")?.getAttribute("aria-label")).toContain("Worth fixing.");
+    await settle(12);
+    // The inspector: the cause, the change marked, the hint.
+    const inspector = target.querySelector("aside")!;
+    expect(inspector.textContent).toContain("Client changed message 7 (tool)");
+    expect(inspector.querySelector("del")?.textContent).toBe("2.4");
+    expect(inspector.querySelector("ins")?.textContent).toBe("1.9");
+    expect(inspector.textContent).toContain("tool result");
+    key("ArrowLeft");
+    expect(sky.getAttribute("aria-activedescendant")).toBe("col-1");
+    key("ArrowDown");
+    expect(sky.getAttribute("aria-activedescendant")).toBe("col-3");
+    key("Escape");
+    expect(target.querySelector("aside")).toBeNull();
+    expect(await violations()).toEqual([]);
+  });
+
+  it("says when there is nothing to show, and that remote mode is not covered", async () => {
+    serve({ ...body, sessions: [], requests: [] });
+    let { target } = render(Sessions, {});
+    await settle(12);
+    expect(target.textContent).toContain("No requests yet.");
+    serve({ ...body, sessions: [], requests: [], remote: true });
+    ({ target } = render(Sessions, {}));
+    await settle(12);
+    expect(target.textContent).toContain("Session replay covers models on this Mac.");
+  });
+
+  it("opens a request Now points at", async () => {
+    serve(body);
+    let done = false;
+    const { target } = render(Sessions, { focus: 3, onfocused: () => (done = true) });
+    await settle(12);
+    expect(done).toBe(true);
+    expect(target.querySelector("[role=listbox]")?.getAttribute("aria-activedescendant")).toBe("col-3");
+    expect(target.querySelector("aside")?.textContent).toContain("Request 3");
+  });
+});
+
+describe("Pool (026)", () => {
+  const me = { mac_id: "ben0000000000000", name: "Ben's MacBook Pro", chip: "Apple M4 Max", memory_bytes: 48 * 1024 ** 3 };
+  const member = { mac_id: "anna000000000000", name: "Anna's MacBook Pro", chip: "Apple M4 Pro", memory_bytes: 48 * 1024 ** 3, power: "battery", address: "10.0.0.5:8485", state: "serving" };
+  const serve = (view: unknown) =>
+    vi.stubGlobal("fetch", async (url: string) => {
+      const value = String(url).startsWith("/mrun/pool") ? view : [];
+      return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+  it("asks a joining Mac to compare the code, saying what lending means", async () => {
+    serve({ this: me, pool: null, joining: { pool: "Ben's pool", host: "Ben's MacBook Pro", code: "482913" }, nearby: [] });
+    const { target } = render(Pool, { onError: () => {} });
+    await settle(12);
+    const sheet = document.querySelector("[role=dialog]")!;
+    expect(sheet.textContent).toContain("Join Ben's pool?");
+    expect(sheet.querySelector("#join-code")?.getAttribute("aria-label")).toBe("Code 4 8 2 9 1 3");
+    expect(sheet.textContent).toContain("Your prompts are read on Ben's MacBook Pro");
+    expect(target).toBeTruthy();
+    expect(await violations()).toEqual([]);
+  });
+
+  it("tells a joining Mac when the pool does not encrypt its model traffic; Start offers the choice", async () => {
+    serve({ this: me, pool: null, joining: { pool: "Ben's pool", host: "Ben's MacBook Pro", code: "482913", unencrypted: true }, nearby: [] });
+    render(Pool, { onError: () => {} });
+    await settle(12);
+    const sheet = document.querySelector("[role=dialog]")!;
+    expect(sheet.textContent).toContain("Ben's pool does not encrypt those numbers between the Macs; prompts and replies stay encrypted.");
+    document.body.innerHTML = "";
+    serve({ this: me, pool: null, joining: null, nearby: [] });
+    const { target } = render(Pool, { onError: () => {} });
+    await settle(12);
+    const box = target.querySelector<HTMLInputElement>(".encrypt input")!;
+    expect(box.checked).toBe(true);
+    box.click();
+    flushSync();
+    expect(target.querySelector(".encrypt")?.textContent).toContain("Prompts and replies stay encrypted, and members are told.");
+    expect(await violations()).toEqual([]);
+  });
+
+  it("shows the host the Mac waiting with the same code, and the ring of members", async () => {
+    serve({
+      this: me, joining: null,
+      pool: { role: "host", name: "Ben's pool", model: null, degraded: null, address: null, plan: null,
+        members: [member],
+        waiting: [{ mac_id: "dana000000000000", name: "Dana's MacBook Air", chip: "Apple M3", memory_bytes: 24 * 1024 ** 3, power: "adapter", code: "105577", waiting_s: 3 }] },
+    });
+    render(Pool, { onError: () => {} });
+    await settle(12);
+    const sheet = document.querySelector("[role=dialog]")!;
+    expect(sheet.textContent).toContain("Dana's MacBook Air wants to join");
+    expect(sheet.querySelector("#join-code")?.textContent).toBe("105577");
+    const tiles = [...document.querySelectorAll(".tile")].map((t) => t.getAttribute("aria-label"));
+    expect(tiles[1]).toContain("Anna's MacBook Pro, Apple M4 Pro");
+    expect(tiles[1]).toContain("on battery");
+    expect(await violations()).toEqual([]);
+  });
+
+  it("waits for a lost Mac with one way forward: the largest model that fits the rest", async () => {
+    serve({
+      this: me, joining: null,
+      pool: { role: "host", name: "Ben's pool", model: "qwen3-235b", degraded: "Anna's MacBook Pro stopped answering", address: null,
+        recovery: { wait: "Anna's MacBook Pro", smaller: "qwen3.6" }, replanning: false, plan: null,
+        members: [{ ...member, state: "lost" }], waiting: [] },
+    });
+    render(Pool, { onError: () => {} });
+    await settle(12);
+    const banner = document.querySelector("[role=alert]")!;
+    expect(banner.textContent).toContain("Anna's MacBook Pro stopped answering.");
+    expect(banner.textContent).toContain("serves again when Anna's Mac is back");
+    const buttons = [...banner.querySelectorAll("button")];
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(["Run qwen3.6 instead"]);
+    expect(buttons[0]!.classList.contains("primary")).toBe(true);
+    expect(document.querySelector(".tile.lost")?.textContent).toContain("Stopped answering");
+    expect(await violations()).toEqual([]);
+  });
+
+  it("offers Re-plan for a Mac that is back, and Rejoin to a member out of its pool", async () => {
+    const stages = [{ mac_id: me.mac_id, name: me.name, first: 0, end: 94 }];
+    serve({
+      this: me, joining: null,
+      pool: { role: "host", name: "Ben's pool", model: "qwen3-235b", degraded: null, address: null, replanning: false,
+        plan: { stages }, members: [{ ...member, state: "joined" }], waiting: [] },
+    });
+    render(Pool, { onError: () => {} });
+    await settle(12);
+    const back = document.querySelector(".banner.calm")!;
+    expect(back.textContent).toContain("Anna's MacBook Pro is back.");
+    expect(back.querySelector("button")?.textContent?.trim()).toBe("Re-plan");
+    document.body.innerHTML = "";
+
+    serve({ this: { ...me, name: "Anna's MacBook Pro" }, pool: null, joining: null, nearby: [], rejoin: { host: "Ben's MacBook Pro", mac_id: me.mac_id } });
+    render(Pool, { onError: () => {} });
+    await settle(12);
+    const rejoin = document.querySelector(".banner.calm")!;
+    expect(rejoin.textContent).toContain("This Mac was in Ben's pool.");
+    expect(rejoin.querySelector("button")?.textContent?.trim()).toBe("Rejoin");
+  });
+
+  it("Models marks what the pool holds and a part; Now shows the pool compactly", async () => {
+    const pooled = {
+      this: me, joining: null,
+      pool: { role: "host", name: "Ben's pool", model: null, degraded: null, address: null, plan: null, members: [member], waiting: [] },
+    };
+    serve(pooled);
+    live.models = [
+      { name: "big", alias: null, repo: "org/big", revision: "a", size: 60e9, pulled: true, fit: "wont_fit", verdict: "Does not fit the budget of 36.0 GB.", max_context: 0, recommended: false, preview: false, serving: false },
+      { name: "huge", alias: null, repo: "org/huge", revision: "a", size: 30e9, pulled: true, fit: "wont_fit", verdict: "", max_context: 0, recommended: false, preview: false, serving: false, part: [24, 48] },
+    ];
+    let toPool = false;
+    const { target } = render(Models, { onError: () => {}, onpool: () => (toPool = true) });
+    await settle(12);
+    const text = target.textContent ?? "";
+    expect(text).toContain("Fits the pool · 2 Macs");
+    expect(text).toContain("Layers 25–48 · for pools");
+    const plan = [...target.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Plan on the Pool")!;
+    plan.click();
+    expect(toPool).toBe(true);
+    document.body.innerHTML = "";
+
+    live.status = { ...status, pool: { ...pooled.pool, role: "host", queue: { running: null, waiting: [{ member: member.mac_id, waiting: 2 }] } } as Status["pool"] };
+    const now = render(Now, { onAction: () => {} });
+    flushSync();
+    const card = now.target.querySelector("[aria-label=Pool]")!;
+    expect(card.textContent).toContain("Ben's pool on 2 Macs · you host");
+    expect(card.textContent).toContain("2 waiting in turns");
+    live.status = status;
+  });
+
+  it("a plan that does not fit says why and cannot start", async () => {
+    const plan = { model: "qwen3-235b", fits: false, context_tokens: 0, speed: { low: 0, high: 0 }, pace: null, numerics_match: true,
+      refusal: "qwen3-235b does not fit: Ben's MacBook Pro needs 12.0 GB more",
+      stages: [
+        { mac_id: me.mac_id, name: me.name, first: 0, end: 50, weights_bytes: 60e9, state_bytes: 1e9, scratch_bytes: 1e9, budget: 40e9, fits: false, short_bytes: 12e9, ms_per_token: 30 },
+        { mac_id: member.mac_id, name: member.name, first: 50, end: 94, weights_bytes: 30e9, state_bytes: 1e9, scratch_bytes: 1e9, budget: 40e9, fits: true, short_bytes: 0, ms_per_token: 20 },
+      ] };
+    render(PlanSheet, { plan, members: [member], hostName: me.name, onstart: () => {}, onclose: () => {} });
+    flushSync();
+    const sheet = document.querySelector("[role=dialog]")!;
+    expect(sheet.textContent).toContain("needs 12.0 GB more");
+    expect([...sheet.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Start")?.hasAttribute("disabled")).toBe(true);
+    expect(sheet.textContent).toContain("layers 51–94");
   });
 });

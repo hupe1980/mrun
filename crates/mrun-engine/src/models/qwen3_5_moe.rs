@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use super::common::{self, Attention, AttentionConfig, Head, Mlp, int};
 use super::moe::{Ffn, MoeConfig, SparseMoe};
-use super::{LoadError, Model, activations, gated_delta};
+use super::{LoadError, Model, Part, activations, gated_delta};
 use crate::engine::LayerKind;
 use crate::load::{Linear, Quantization, RmsNorm, Weights, invalid};
 use crate::state::{LayerState, Recurrent};
@@ -258,7 +258,9 @@ enum FfnConfig {
 
 #[derive(Debug)]
 pub struct Qwen3_5Moe {
-    head: Head,
+    head: Option<Head>,
+    /// The first layer of this part (026).
+    first: usize,
     layers: Vec<Layer>,
     kinds: Vec<LayerKind>,
     dtype: Dtype,
@@ -327,7 +329,12 @@ fn sanitize(weights: &mut Weights, layers: usize) -> Result<(), LoadError> {
 
 impl Qwen3_5Moe {
     /// `config` is the text config (`text_config`, or the root of an unwrapped config).
-    pub fn load(root: &Value, config: &Value, mut weights: Weights) -> Result<Self, LoadError> {
+    pub fn load(
+        root: &Value,
+        config: &Value,
+        mut weights: Weights,
+        part: Part,
+    ) -> Result<Self, LoadError> {
         // Per-path quantization lives at the root of a wrapped config.
         let quant = Quantization::from_config(root)?;
         let layers = int(config, "num_hidden_layers")? as usize;
@@ -409,23 +416,34 @@ impl Qwen3_5Moe {
 
         sanitize(&mut weights, layers)?;
         let tied = config["tie_word_embeddings"].as_bool().unwrap_or(false);
-        let head = Head::load(
-            &mut weights,
-            "language_model.model",
-            "language_model.lm_head",
-            &quant,
-            hidden,
-            eps,
-            tied,
-        )?;
+        let head = part
+            .head
+            .then(|| {
+                Head::load(
+                    &mut weights,
+                    "language_model.model",
+                    "language_model.lm_head",
+                    &quant,
+                    hidden,
+                    eps,
+                    tied,
+                )
+            })
+            .transpose()?;
         let mut stack = Vec::with_capacity(layers);
-        let mut kinds = Vec::with_capacity(layers);
-        for i in 0..layers {
+        let kinds: Vec<LayerKind> = (0..layers)
+            .map(|i| {
+                if (i + 1) % interval != 0 {
+                    LayerKind::Linear
+                } else {
+                    LayerKind::FullAttention
+                }
+            })
+            .collect();
+        for i in (0..layers).filter(|&i| part.contains(i)) {
             let p = format!("language_model.model.layers.{i}");
             let norm = |w: &mut Weights, name: &str| RmsNorm::load(w, &format!("{p}.{name}"), eps);
-            let linear = (i + 1) % interval != 0;
-            let mixer = if linear {
-                kinds.push(LayerKind::Linear);
+            let mixer = if kinds[i] == LayerKind::Linear {
                 Mixer::Linear(GatedDeltaNet::load(
                     &mut weights,
                     &format!("{p}.linear_attn"),
@@ -434,7 +452,6 @@ impl Qwen3_5Moe {
                     delta,
                 )?)
             } else {
-                kinds.push(LayerKind::FullAttention);
                 Mixer::Attention(Attention::load(
                     &mut weights,
                     &format!("{p}.self_attn"),
@@ -466,8 +483,9 @@ impl Qwen3_5Moe {
         }
         common::ensure_consumed(&weights)?;
         Ok(Self {
-            dtype: head.norm.weight.dtype(),
+            dtype: common::part_dtype(head.as_ref(), stack.first().map(|l| &l.input_layernorm))?,
             head,
+            first: part.first,
             layers: stack,
             kinds,
             hidden: hidden as u64,
@@ -495,7 +513,7 @@ impl Model for Qwen3_5Moe {
     }
 
     fn embed(&self, ids: &Array) -> tensor::Result<Array> {
-        self.head.embed.forward(ids)
+        common::head(&self.head)?.embed.forward(ids)
     }
 
     fn layer(
@@ -505,7 +523,7 @@ impl Model for Qwen3_5Moe {
         state: &mut LayerState,
         offset: i32,
     ) -> tensor::Result<Array> {
-        let layer = &self.layers[i];
+        let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
         let r = match &layer.mixer {
             Mixer::Linear(gdn) => gdn.forward(&h, state.recurrent()?)?,
@@ -517,7 +535,11 @@ impl Model for Qwen3_5Moe {
     }
 
     fn logits(&self, x: &Array) -> tensor::Result<Array> {
-        self.head.logits(x)
+        common::head(&self.head)?.logits(x)
+    }
+
+    fn hidden(&self) -> i32 {
+        self.hidden as i32
     }
 
     fn layer_split(
@@ -529,7 +551,7 @@ impl Model for Qwen3_5Moe {
         splits: &[i32],
         captured: &mut Vec<Recurrent>,
     ) -> tensor::Result<Array> {
-        let layer = &self.layers[i];
+        let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
         let r = match &layer.mixer {
             Mixer::Linear(gdn) => gdn.forward_split(&h, state.recurrent()?, splits, captured)?,
