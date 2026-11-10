@@ -57,6 +57,7 @@ mrun run [OPTIONS] [MODEL]
 | `--stop <STOP>` | — | Stop sequence (up to 4, each at most 256 bytes) |
 | `--think` | off | Let models that support it think before answering |
 | `--budget-gib <GIB>` | Metal's recommended working set | A lower memory budget (`MRUN_BUDGET_GIB`); a value above the automatic one is refused |
+| `--speculation <auto\|off>` | `auto` | Speculative decoding, as for `serve` |
 | `--info` | off | Print the memory budget breakdown after loading and exit |
 
 In an interactive session, `/clear` starts a new conversation, `/info` prints the memory budget
@@ -73,6 +74,7 @@ and `/exit` (or `/quit`, `/bye`) quits. Turns reuse the prefix cache.
 | `--queue-wait-s <S>` | `MRUN_QUEUE_WAIT_S` | 240 | Seconds a non-streaming request may wait; one whose estimated wait is longer is refused at once. Streaming requests never time out in the queue. At least 1 |
 | `--budget-gib <GIB>` | `MRUN_BUDGET_GIB` | Metal's recommended working set | A lower memory budget; a value above the automatic one is refused (see [Memory](@/docs/memory.md#tuning)) |
 | `--no-cache` | `MRUN_NO_CACHE` | off | Disable prefix reuse across requests |
+| `--speculation <auto\|off>` | `MRUN_SPECULATION` | `auto` | Speculative decoding: drafts from the prompt, keeps only what plain decoding would produce, while it is faster ([How it works](@/docs/how-it-works.md#speculative-decoding)) |
 | `--reject-tool-images` | `MRUN_REJECT_TOOL_IMAGES` | off | Refuse images inside tool results instead of omitting them |
 | `--record <DIR>` | — | off | Record requests and responses as JSON lines into this directory |
 | `--detach` | `MRUN_DETACH` | off | Run in the background (stop it with `mrun stop`) |

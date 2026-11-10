@@ -101,6 +101,7 @@ mod tests {
             cached: 4,
             output: 3,
             reasoning: 1,
+            speculation: None,
         }
     }
 

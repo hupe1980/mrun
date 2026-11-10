@@ -72,6 +72,10 @@ pub struct ServeArgs {
     /// cloud up` starts it). The pod token comes from `MRUN_RELAY_TOKEN`.
     #[arg(long, value_name = "AGENT_URL")]
     pub relay: Option<String>,
+    /// Speculative decoding (006): `auto` drafts from the prompt and keeps only what plain
+    /// decoding would produce, while that is faster; `off` decodes one token per pass.
+    #[arg(long, env = "MRUN_SPECULATION", value_enum, default_value_t = Speculation::Auto)]
+    pub speculation: Speculation,
     /// Port other Macs of a pool reach this one at (026); listens only while a pool runs.
     #[arg(long, env = "MRUN_POOL_PORT", default_value_t = crate::pool::DEFAULT_PORT)]
     pub pool_port: u16,
@@ -87,6 +91,29 @@ pub struct ServeArgs {
     /// When the relayed pod was created (Unix seconds; status only: uptime and spend).
     #[arg(long, hide = true, requires = "relay")]
     pub relay_since: Option<u64>,
+}
+
+/// `--speculation` of `serve` and `run` (006).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum Speculation {
+    /// Draft and verify while it is measured faster.
+    #[default]
+    Auto,
+    /// One token per pass.
+    Off,
+}
+
+impl Speculation {
+    pub fn on(self) -> bool {
+        self == Self::Auto
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Off => "off",
+        }
+    }
 }
 
 /// A loaded model, shared by every request.
@@ -376,6 +403,7 @@ pub fn load_named(args: &ServeArgs, name: &str) -> Result<Loaded, CliError> {
         crate::runtime::handle::DEFAULT_STALL_TIMEOUT,
         cache_policy(args),
     )?;
+    handle.set_speculation(args.speculation.on());
     let grammar = GrammarEnv::new(&model.tokenizer, &handle.info().eos_tokens)
         .ok()
         .map(Arc::new);

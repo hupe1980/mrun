@@ -505,6 +505,8 @@ pub enum EngineError {
     InvalidRange { start: u32, end: u32, len: u32 },
     #[error("the token mask allows no token")]
     EmptyMask,
+    #[error("a draft of {draft} tokens is longer than the {max} a verify takes")]
+    DraftTooLong { draft: u32, max: u32 },
     #[error("a token mask over {mask} tokens is wider than the model's {vocab} logits")]
     MaskTooWide { mask: u32, vocab: u32 },
     #[error("unknown segment {0:?}")]
@@ -519,6 +521,27 @@ pub enum EngineError {
     /// call but `drop_*`, `reset` and `reset_all` fails with this until `reset_all`.
     #[error("engine state lost in a failed move ({0}); reset_all required")]
     Poisoned(String),
+}
+
+/// [`Engine::verify`] by serial decoding: `forward` and `sample` per position, stopping at the
+/// first sample that differs from the draft.
+pub fn verify_serially<E: Engine + ?Sized>(
+    engine: &mut E,
+    last: u32,
+    draft: &[u32],
+    sampling: &Sampling,
+) -> Result<Vec<u32>, EngineError> {
+    let mut committed = Vec::with_capacity(draft.len() + 1);
+    let mut token = last;
+    for expected in draft.iter().map(Some).chain([None]) {
+        let step = engine.forward(token)?;
+        token = engine.sample(step, sampling, None)?;
+        committed.push(token);
+        if expected != Some(&token) {
+            break;
+        }
+    }
+    Ok(committed)
 }
 
 /// Primitive operations on the single live sequence plus stored checkpoints and segments
@@ -566,6 +589,30 @@ pub trait Engine {
         sampling: &Sampling,
         mask: Option<&TokenMask>,
     ) -> Result<u32, EngineError>;
+    /// Draft tokens [`Engine::verify`] takes at most; 0: this engine has no verify pass (006).
+    fn max_draft(&self) -> u32 {
+        0
+    }
+    /// Feeds `last` and keeps the longest prefix of `draft` that plain decoding would sample
+    /// (same filters, no mask, same random draws), then the sample after it; returns those
+    /// tokens. The state equals serial decoding's, the last sample pending as after `sample`.
+    /// Until the next call `trim` may cut to any position of the verify (`max_draft() > 0`).
+    /// The default is serial decoding itself: the reference verify passes are tested against.
+    fn verify(
+        &mut self,
+        last: u32,
+        draft: &[u32],
+        sampling: &Sampling,
+    ) -> Result<Vec<u32>, EngineError> {
+        let max = self.max_draft();
+        if max > 0 && draft.len() > max as usize {
+            return Err(EngineError::DraftTooLong {
+                draft: draft.len() as u32,
+                max,
+            });
+        }
+        verify_serially(self, last, draft, sampling)
+    }
     /// Top-`n` log-probabilities of `step`, most likely first.
     fn top_logprobs(&mut self, step: &Step, n: usize) -> Result<Vec<(u32, f32)>, EngineError>;
 

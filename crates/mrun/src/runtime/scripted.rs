@@ -13,7 +13,7 @@ use mrun_engine::budget::{self, BudgetError, DeviceMemory, Overrides, RESERVED_C
 use mrun_engine::ledger::Ledger;
 use mrun_engine::{
     CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind, MemoryBudget, ModelInfo,
-    Numerics, Sampling, Segment, SegmentId, Step, TokenMask,
+    Numerics, Sampling, Segment, SegmentId, Step, TokenMask, verify_serially,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -153,6 +153,9 @@ pub struct ScriptedEngine {
     pub chunks: Vec<(u32, u32)>,
     /// Highest `allocated()` seen (memory-bound tests).
     pub peak_allocated: u64,
+    /// Draft tokens a verify takes (006); 0, the default, keeps the runtime from drafting. Its
+    /// verify is serial decoding with the trim window of a verify pass.
+    pub max_draft: u32,
 }
 
 impl ScriptedEngine {
@@ -241,6 +244,7 @@ impl ScriptedEngine {
             processed: Vec::new(),
             chunks: Vec::new(),
             peak_allocated: 0,
+            max_draft: 0,
         }
     }
 
@@ -460,12 +464,42 @@ impl Engine for ScriptedEngine {
             .collect())
     }
 
+    fn max_draft(&self) -> u32 {
+        self.max_draft
+    }
+
+    fn verify(
+        &mut self,
+        last: u32,
+        draft: &[u32],
+        sampling: &Sampling,
+    ) -> Result<Vec<u32>, EngineError> {
+        if self.max_draft > 0 && draft.len() > self.max_draft as usize {
+            return Err(EngineError::DraftTooLong {
+                draft: draft.len() as u32,
+                max: self.max_draft,
+            });
+        }
+        // `last` goes at the pending step's position, or at the end.
+        let start = self.ledger.len() - u32::from(self.ledger.pending().is_some());
+        let committed = verify_serially(self, last, draft, sampling)?;
+        if self.max_draft > 0 {
+            self.ledger.open_window(start);
+        }
+        Ok(committed)
+    }
+
     fn trim(&mut self, len: u32) -> Result<(), EngineError> {
+        let windowed = self.ledger.window().is_some();
         let cut = self.ledger.trim(len)?;
         if cut.rolled_back.is_some()
             && let Some(consumed) = &mut self.recurrent
         {
             consumed.pop();
+        }
+        // Inside a verify's window the state after `len` positions is known.
+        if windowed && let Some(consumed) = &mut self.recurrent {
+            consumed.truncate(len as usize);
         }
         if cut.cut_step {
             self.current = None;

@@ -108,4 +108,18 @@ describe("chat message stats (FR-008)", () => {
     expect(target.querySelector(".reasoning")).toBeNull();
     expect(await violations()).toEqual([]);
   });
+
+  it("adds tokens per pass when the reply was drafted (006)", async () => {
+    const { target } = render(Message, {
+      message: {
+        role: "assistant",
+        text: "Done.",
+        stats: { prompt_tokens: 900, cached_tokens: 0, ttft_ms: 310, decode_tps: 61.2, stop: "end", speculation: { drafted: 120, accepted: 96, passes: 40 } },
+      },
+    });
+    const stats = target.querySelector(".stats")?.textContent?.replace(/\s+/g, " ").trim();
+    expect(stats).toBe("0 of 900 reused · 0.31 s to first token · 61.2 tok/s · 3.4 tokens per pass · finished");
+    expect(target.querySelector(".stats [title]")?.getAttribute("title")).toBe("96 of 120 drafted tokens kept");
+    expect(await violations()).toEqual([]);
+  });
 });

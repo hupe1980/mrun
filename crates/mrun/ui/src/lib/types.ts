@@ -4,6 +4,13 @@
 export type Cause = "disabled" | "evicted" | "diverged" | "new" | "gap";
 export type Phase = "queued" | "prefill" | "generating";
 
+/** Speculative decoding's counts (006): draft tokens verified and kept, and verify passes. */
+export interface Speculation {
+  drafted: number;
+  accepted: number;
+  passes: number;
+}
+
 export interface Request {
   id: number;
   api: string;
@@ -16,6 +23,7 @@ export interface Request {
   unreused: number | null;
   generated: number;
   decode_tps: number | null;
+  speculation?: Speculation | null;
   age_ms: number;
 }
 
@@ -37,6 +45,7 @@ export interface Finished extends Miss {
   ttft_ms: number | null;
   decode_tps: number | null;
   stop: string | null;
+  speculation?: Speculation | null;
 }
 
 /** A finished request as session replay keeps it (025, `/mrun/sessions`). */
@@ -110,6 +119,8 @@ export interface Status {
   pod?: Pod | null;
   /** This Mac's pool (026). */
   pool?: PoolView["pool"];
+  /** Speculative decoding (006): the mode and totals since the server started. */
+  speculation?: { mode: "auto" | "off" } & Speculation;
 }
 
 /** What the server is doing, as one word the whole UI agrees on. */
@@ -378,6 +389,7 @@ export interface Stats {
   decode_tps: number | null;
   stop: "end" | "length" | "stopped" | "error";
   miss?: Miss;
+  speculation?: Speculation;
 }
 
 /** A file in a user message (020 data model): sent whole, as a fenced block. */

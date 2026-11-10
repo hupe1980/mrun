@@ -1,6 +1,6 @@
 // Numbers and causes in words: the page says what the CLI says, without jargon.
 
-import type { Cause, Chat, Gpu, Miss, Request, ServerState, Status } from "./types";
+import type { Cause, Chat, Gpu, Miss, Request, ServerState, Speculation, Status } from "./types";
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -119,10 +119,25 @@ export function phaseLine(r: Request): string {
     case "prefill":
       return `Reading prompt · ${tokens(r.progress)} of ${tokens(r.prompt_tokens)} tokens`;
     case "generating":
-      return r.decode_tps
-        ? `Generating · ${r.decode_tps.toFixed(1)} tok/s · ${tokens(r.generated)} tokens`
-        : `Generating · ${tokens(r.generated)} tokens`;
+      return [
+        "Generating",
+        r.decode_tps ? `${r.decode_tps.toFixed(1)} tok/s` : null,
+        `${tokens(r.generated)} tokens`,
+        r.speculation?.passes ? perPass(r.speculation) : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
   }
+}
+
+/** Tokens per forward pass with speculative decoding (006): "2.9 tokens per pass". */
+export function perPass(s: Speculation): string {
+  return `${((s.accepted + s.passes) / s.passes).toFixed(1)} tokens per pass`;
+}
+
+/** What speculative decoding kept: "412 of 530 drafted tokens kept". */
+export function keptWords(s: Speculation): string {
+  return `${tokens(s.accepted)} of ${tokens(s.drafted)} drafted tokens kept`;
 }
 
 export function stopWord(stop: string): string {

@@ -70,6 +70,8 @@ pub struct Entry {
     pub ticket: Option<Ticket>,
     /// The pool member that sent it (026); `None` from this Mac.
     pub member: Option<String>,
+    /// Speculative decoding (006): drafted, accepted, verify passes; `None` until a verify.
+    pub speculation: Option<[u32; 3]>,
 }
 
 impl Entry {
@@ -89,7 +91,15 @@ impl Entry {
             queued_at: Instant::now(),
             ticket: None,
             member: None,
+            speculation: None,
         }
+    }
+
+    /// `speculation` of a running or finished record.
+    fn speculation_json(&self) -> Value {
+        self.speculation.map_or(Value::Null, |[drafted, accepted, passes]| {
+            json!({"drafted": drafted, "accepted": accepted, "passes": passes})
+        })
     }
 
     /// Output tokens per second after the first one; `None` before the second.
@@ -112,7 +122,7 @@ impl Entry {
             "unreused": self.unreused,
             "generated": self.generated,
             "decode_tps": self.decode_tps(now),
-            "speculation": Value::Null,
+            "speculation": self.speculation_json(),
             "age_ms": now.duration_since(self.queued_at).as_millis() as u64,
         })
     }
@@ -254,6 +264,7 @@ impl Tracker {
             .map(|t| t.duration_since(entry.queued_at).as_millis() as u64)
             .into();
         record["decode_tps"] = entry.decode_tps(now).into();
+        record["speculation"] = entry.speculation_json();
         record["stop"] = stop.into();
         if let Some(replay) = replay {
             let ended_ms = self.uptime_ms();
@@ -543,6 +554,14 @@ pub async fn status(State(state): State<ServerState>) -> Response {
             "kv_bytes_per_token": info.kv_bytes_per_token,
         });
         body["queued"] = loaded.handle.queue().waiting().into();
+        let total = |c: &std::sync::atomic::AtomicU64| c.load(std::sync::atomic::Ordering::Relaxed);
+        let metrics = &state.tracker.metrics;
+        body["speculation"] = json!({
+            "mode": if loaded.handle.speculation() { "auto" } else { "off" },
+            "drafted": total(&metrics.drafted),
+            "accepted": total(&metrics.accepted),
+            "passes": total(&metrics.passes),
+        });
         if let Some(stats) = loaded.handle.cache_stats() {
             body["cache"] = json!({
                 "live_tokens": stats.live_tokens,

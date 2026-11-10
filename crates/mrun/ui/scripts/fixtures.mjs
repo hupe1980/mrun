@@ -29,10 +29,11 @@ export const status = {
     finished(7, { prompt_tokens: 900, cached: 0, processed: 900, cause: "new" }),
     finished(8, { prompt_tokens: 14380, cached: 14212, processed: 168, cause: "diverged", message: { index: 3, role: "user" } }),
     finished(9, { prompt_tokens: 22480, cached: 20500, processed: 1980, cause: "diverged", message: { index: 6, role: "tool" } }),
-    finished(10, { prompt_tokens: 24100, cached: 24060, processed: 40, cause: null }),
+    finished(10, { prompt_tokens: 24100, cached: 24060, processed: 40, cause: null, speculation: { drafted: 168, accepted: 131, passes: 52 } }),
     finished(11, { prompt_tokens: 26000, cached: 0, processed: 26000, cause: "evicted" }),
   ],
   lanes: { configured: 1, busy: 1 },
+  speculation: { mode: "auto", drafted: 4120, accepted: 3190, passes: 1450 },
 };
 
 const model = (m) => ({

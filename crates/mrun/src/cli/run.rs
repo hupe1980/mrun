@@ -8,6 +8,7 @@ use crate::chat::render::{RenderContext, render};
 use crate::chat::splice::{self, Reply, ReplyParts};
 use crate::chat::stop::StopMatcher;
 use crate::cli::model::{self, OpenModel};
+use crate::cli::serve::Speculation;
 use crate::errors::{CliError, Exit};
 use crate::hub::human_bytes;
 use crate::runtime::generate::{Event, FinishReason, Finished, GenerateRequest};
@@ -56,6 +57,10 @@ pub struct RunArgs {
     /// at most physical memory − 2 GiB]; it cannot raise it.
     #[arg(long, env = "MRUN_BUDGET_GIB", value_parser = crate::cli::model::parse_budget_gib)]
     pub budget_gib: Option<u64>,
+    /// Speculative decoding (006): `auto` drafts from the prompt and keeps only what plain
+    /// decoding would produce, while that is faster; `off` decodes one token per pass.
+    #[arg(long, env = "MRUN_SPECULATION", value_enum, default_value_t = Speculation::Auto)]
+    pub speculation: Speculation,
     /// Print the memory budget breakdown after loading and exit.
     #[arg(long)]
     pub info: bool,
@@ -159,11 +164,13 @@ pub fn run(args: RunArgs) -> u8 {
 fn spawn(model: &OpenModel, args: &RunArgs) -> Result<EngineHandle, String> {
     let overrides = model::overrides(args.budget_gib);
     crate::cli::info(&format!("loading {} …", model.name));
-    EngineHandle::spawn(
+    let handle = EngineHandle::spawn(
         model::engine_factory(model, overrides),
         model.tokenizer.clone(),
         crate::runtime::handle::DEFAULT_STALL_TIMEOUT,
-    )
+    )?;
+    handle.set_speculation(args.speculation.on());
+    Ok(handle)
 }
 
 #[cfg(not(feature = "engine"))]

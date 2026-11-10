@@ -147,6 +147,10 @@ impl Model for Qwen3 {
         common::head(&self.head)?.logits(x)
     }
 
+    fn logits_rows(&self, x: &Array) -> tensor::Result<Array> {
+        common::head(&self.head)?.rows(x)
+    }
+
     fn hidden(&self) -> i32 {
         self.hidden as i32
     }

@@ -30,6 +30,18 @@ request can start, at every measured depth.
 plan, bit for bit, for Qwen3-8B (21 cases) and Qwen3.5-9B (10 cases). Qwen3.6-35B-A3B is not
 covered.
 
+**Speculative decoding** (`--speculation auto` against `off`, median of 3, greedy, 2026-11-10):
+
+| Model | Reply | Plain | Speculative | Drafted tokens kept |
+| --- | --- | --- | --- | --- |
+| Qwen3.5-9B 4-bit | Code rewritten with one rename (99 tokens) | 46.0 tok/s | 82.4 tok/s (1.79×) | 80 of 89 |
+| Qwen3.5-9B 4-bit | A short story (256 tokens) | 47.4 tok/s | 47.3 tok/s (1.00×) | 1 of 4, then off |
+| Qwen3.6-35B-A3B 4-bit | Code rewritten with one rename (99 tokens) | 89.0 tok/s | 127.0 tok/s (1.43×) | 80 of 89 |
+| Qwen3.6-35B-A3B 4-bit | A short story (256 tokens) | 89.7 tok/s | 88.0 tok/s (0.98×) | 0 of 4, then off |
+
+The tokens are identical with and without it, greedy and seeded. The MoE model gains less: a
+verify pass reads the experts every drafted token routes to.
+
 **Small Macs (simulated).** `qwen3.5` fits 84,333 tokens of context at a 16 GB Mac's working set
 and 235,385 at a 24 GB Mac's ([Memory](@/docs/memory.md#smaller-macs)).
 

@@ -2,7 +2,7 @@
 // per-start token, which arrives in the URL fragment (never sent to a server) and lives in this
 // tab's sessionStorage (contracts/ui-host.md §Security).
 
-import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, Excerpt, Job, Miss, ModelEntry, Offer, Plan, PoolPlan, PoolView, Prefs, Sessions, Status } from "./types";
+import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, Excerpt, Job, Miss, ModelEntry, Offer, Plan, PoolPlan, PoolView, Prefs, Sessions, Speculation, Status } from "./types";
 
 const KEY = "mrun.token";
 
@@ -118,6 +118,7 @@ export type StreamEvent =
   | { type: "usage"; input: number; cached: number; output: number }
   | { type: "output"; tokens: number }
   | { type: "stop"; reason: string }
+  | { type: "speculation"; speculation: Speculation }
   | { type: "error"; message: string };
 
 /**
@@ -180,6 +181,7 @@ export function* parseFrame(frame: string): Generator<StreamEvent> {
             },
           };
         }
+        if (meta.speculation) yield { type: "speculation", speculation: meta.speculation };
       } catch {
         /* a comment that is not mrun's JSON */
       }

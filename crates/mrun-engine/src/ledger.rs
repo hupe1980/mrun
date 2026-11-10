@@ -103,6 +103,9 @@ pub struct Ledger<P, S, C> {
     checkpoints: HashMap<CheckpointId, Stored<Checkpoint, C>>,
     next_id: u64,
     poisoned: Option<String>,
+    /// After a verify (006): the position it started at. Hybrids may then trim to any position
+    /// from it on (the engine holds the state after each); the next state change closes it.
+    window: Option<u32>,
 }
 
 impl<P, S, C> Ledger<P, S, C> {
@@ -123,6 +126,7 @@ impl<P, S, C> Ledger<P, S, C> {
             segments: HashMap::new(),
             checkpoints: HashMap::new(),
             next_id: 0,
+            window: None,
             poisoned: None,
         }
     }
@@ -265,7 +269,24 @@ impl<P, S, C> Ledger<P, S, C> {
 
     /// Positions appended to the live state.
     pub fn advance(&mut self, n: u32) {
+        self.window = None;
         self.len += n;
+    }
+
+    /// Opens the trim window of a verify that started at `start` (after its positions and
+    /// pending step are recorded).
+    pub fn open_window(&mut self, start: u32) {
+        self.window = Some(start);
+    }
+
+    /// Closes the trim window (the engine dropped the states it needs).
+    pub fn close_window(&mut self) {
+        self.window = None;
+    }
+
+    /// The start of the open trim window, if any.
+    pub fn window(&self) -> Option<u32> {
+        self.window
     }
 
     /// Whether a pipelined step fits the allocation.
@@ -276,13 +297,18 @@ impl<P, S, C> Ledger<P, S, C> {
     /// Records a fed pipelined step.
     pub fn push_pending(&mut self, pending: P) {
         debug_assert!(self.pending.is_none());
+        self.window = None;
         self.len += 1;
         self.pending = Some(pending);
     }
 
     /// Takes the pending step when `reuse` accepts it: its position is kept (confirmed).
     pub fn reuse_pending(&mut self, reuse: impl FnOnce(&P) -> bool) -> Option<P> {
-        self.pending.take_if(|p| reuse(p))
+        let reused = self.pending.take_if(|p| reuse(p));
+        if reused.is_some() {
+            self.window = None;
+        }
+        reused
     }
 
     /// Drops a pending step, un-counting its position; the engine restores what it fed.
@@ -313,7 +339,8 @@ impl<P, S, C> Ledger<P, S, C> {
                 shrink: None,
             });
         }
-        if self.hybrid() && self.recurrent_live && len != 0 && len != confirmed {
+        let windowed = self.window.is_some_and(|start| len >= start);
+        if self.hybrid() && self.recurrent_live && len != 0 && len != confirmed && !windowed {
             return Err(EngineError::NotTrimmable { len, active });
         }
         let rolled_back = self.roll_back();
@@ -409,6 +436,7 @@ impl<P, S, C> Ledger<P, S, C> {
     /// Records a restore to `position` (after the engine rolled back a pending step).
     pub fn commit_restore(&mut self, position: u32) {
         debug_assert!(self.pending.is_none());
+        self.window = None;
         self.len = position;
         self.recurrent_live = true;
     }
@@ -446,6 +474,7 @@ impl<P, S, C> Ledger<P, S, C> {
     /// tail).
     pub fn commit_detach(&mut self, plan: DetachPlan, data: S) -> Segment {
         debug_assert!(self.pending.is_none());
+        self.window = None;
         let segment = Segment {
             id: SegmentId(self.id()),
             start: plan.start,
@@ -504,6 +533,7 @@ impl<P, S, C> Ledger<P, S, C> {
     /// segment in).
     pub fn commit_attach(&mut self, plan: AttachPlan) {
         debug_assert!(self.pending.is_none());
+        self.window = None;
         self.len = plan.segment.end;
         self.capacity = plan.capacity;
         self.recurrent_live = true;
@@ -524,6 +554,7 @@ impl<P, S, C> Ledger<P, S, C> {
 
     /// Empties the live state; segments and checkpoints stay, and so does a poisoned state.
     pub fn reset(&mut self) {
+        self.window = None;
         self.len = 0;
         self.capacity = 0;
         self.pending = None;
@@ -718,5 +749,33 @@ mod tests {
             l.plan_restore(checkpoint.id),
             Err(EngineError::UnknownCheckpoint(_))
         ));
+    }
+
+    #[test]
+    fn a_verify_window_allows_exact_trims_until_the_next_change() {
+        let mut l = ledger(true, 1_000);
+        append(&mut l, 10);
+        // A verify from 10: `last` and two kept drafts, then a pending sample.
+        l.advance(3);
+        l.push_pending(7);
+        l.open_window(10);
+        assert_eq!(l.window(), Some(10));
+        // Outside the window a hybrid still refuses.
+        assert_eq!(
+            l.trim(9).map(|_| ()),
+            Err(EngineError::NotTrimmable { len: 9, active: 14 })
+        );
+        // Inside it any position is allowed, the pending step rolled back; the window stays.
+        let cut = l.trim(11).unwrap();
+        assert_eq!(cut.rolled_back, Some(7));
+        assert_eq!((l.len(), l.window()), (11, Some(10)));
+        l.trim(10).unwrap();
+        // The next change closes it.
+        l.advance(1);
+        assert_eq!(l.window(), None);
+        assert!(l.trim(10).is_err());
+        l.open_window(10);
+        l.reset();
+        assert_eq!(l.window(), None);
     }
 }

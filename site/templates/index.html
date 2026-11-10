@@ -31,7 +31,7 @@
         <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
         <a class="button ghost" href="{{ config.extra.repo }}" rel="noopener">Star on GitHub</a>
       </div>
-      <p class="status-pill"><span class="dot" aria-hidden="true"></span>0.2 · <code>brew install hupe1980/tap/mrun</code></p>
+      <p class="status-pill"><span class="dot" aria-hidden="true"></span>0.3 · <code>brew install hupe1980/tap/mrun</code></p>
     </div>
     <figure class="terminal" aria-label="Example terminal session">
       <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -112,6 +112,7 @@
         <li><strong>mrun renders and tokenizes it</strong> with the model's own chat template.</li>
         <li><strong>The prefix cache finds the longest identical token prefix</strong> and moves its state back in — or simply continues the live conversation.</li>
         <li><strong>Only the new tokens are processed</strong> on the Apple GPU, with nuvec's Metal kernels, in chunks that can be interrupted.</li>
+        <li><strong>Replies that copy decode faster</strong>: tokens drafted from the prompt are checked several at a time and kept only where the model would have written them.</li>
         <li><strong>Tokens stream back</strong> with exact usage numbers and a cache report.</li>
       </ol>
       <a class="link-arrow" href="{{ get_url(path='@/docs/how-it-works.md') }}">Read the design overview</a>

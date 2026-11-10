@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseFrame } from "../src/lib/api";
-import { bytes, cause, fittingGpus, needGb, percent, perHour, phaseLine, reuseSentence, spend, stopWord, stopsIn, tokens, tone, uptime } from "../src/lib/format";
+import { bytes, cause, fittingGpus, keptWords, needGb, percent, perHour, perPass, phaseLine, reuseSentence, spend, stopWord, stopsIn, tokens, tone, uptime } from "../src/lib/format";
 
 describe("tones (019 FR-005, SC-003)", () => {
   it("amber only for what nobody intended", () => {
@@ -70,6 +70,26 @@ describe("the chat stream", () => {
     const stop = [...parseFrame('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}')];
     expect(stop).toEqual([{ type: "output", tokens: 12 }, { type: "stop", reason: "end_turn" }]);
     expect([...parseFrame(": keepalive")]).toEqual([]);
+  });
+
+  it("reads speculation from the closing comment (006)", () => {
+    const end = [...parseFrame(': mrun {"warnings":["tool-args-invalid"],"speculation":{"drafted":120,"accepted":96,"passes":40}}')];
+    expect(end).toEqual([{ type: "speculation", speculation: { drafted: 120, accepted: 96, passes: 40 } }]);
+  });
+});
+
+describe("speculative decoding (006)", () => {
+  const s = { drafted: 530, accepted: 412, passes: 200 };
+
+  it("says tokens per pass and what was kept", () => {
+    expect(perPass(s)).toBe("3.1 tokens per pass");
+    expect(keptWords(s)).toBe("412 of 530 drafted tokens kept");
+  });
+
+  it("adds tokens per pass to a generating request", () => {
+    const r = { id: 1, api: "messages", lane: 0, phase: "generating" as const, prompt_tokens: 900, cached: 0, progress: 900, cause: null, unreused: null, generated: 120, decode_tps: 61.2, age_ms: 1 };
+    expect(phaseLine(r)).toBe("Generating · 61.2 tok/s · 120 tokens");
+    expect(phaseLine({ ...r, speculation: s })).toBe("Generating · 61.2 tok/s · 120 tokens · 3.1 tokens per pass");
   });
 });
 

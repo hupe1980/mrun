@@ -73,8 +73,24 @@ mod graph {
             let _ = (splits, captured);
             self.layer(i, x, state, offset)
         }
+        /// [`Model::layer`] for a verify pass (006 FR-001): every row computed as the decode step
+        /// at its position computes it, the state after each position but the last pushed to
+        /// `captured` (linear layers; attention layers push nothing).
+        fn layer_verify(
+            &self,
+            i: usize,
+            x: &Array,
+            state: &mut LayerState,
+            offset: i32,
+            captured: &mut Vec<crate::state::Recurrent>,
+        ) -> tensor::Result<Array> {
+            let splits: Vec<i32> = (1..x.dim(1)).collect();
+            self.layer_split(i, x, state, offset, &splits, captured)
+        }
         /// Hidden states `[1, L, hidden]` → logits of the last position `[1, vocab]`.
         fn logits(&self, x: &Array) -> tensor::Result<Array>;
+        /// Hidden states `[1, L, hidden]` → logits of every position `[L, vocab]`.
+        fn logits_rows(&self, x: &Array) -> tensor::Result<Array>;
         /// Width of the hidden state between layers.
         fn hidden(&self) -> i32;
         /// Analytic scratch of one chunk of `len` tokens at `depth` (activations, MoE routing,

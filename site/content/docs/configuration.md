@@ -27,6 +27,7 @@ model = "qwen3.6"        # serve, launch
 [serve]
 queue = 4
 no-cache = false
+speculation = "auto"
 
 [launch]
 model = "qwen3.5"        # overrides the shared model for launch only
@@ -135,6 +136,7 @@ mrun config schema > ~/.mrun/config.schema.json
 | `MRUN_QUEUE_WAIT_S` | `serve --queue-wait-s` | 240 (non-streaming requests only); at least 1 |
 | `MRUN_BUDGET_GIB` | `--budget-gib` (`serve`, `run`, `ls`) | Metal's recommended working set; can only be lowered |
 | `MRUN_NO_CACHE` | `serve --no-cache` | off |
+| `MRUN_SPECULATION` | `--speculation` (`serve`, `run`) | `auto` |
 | `MRUN_REJECT_TOOL_IMAGES` | `serve --reject-tool-images` | off |
 | `MRUN_DETACH` | `serve --detach` | off |
 | `MRUN_UI_PORT` | `ui --port` | 8485 (the window's own loopback port; the next free one when taken) |

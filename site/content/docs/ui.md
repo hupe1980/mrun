@@ -31,13 +31,15 @@ A line that says what mrun is doing, for example *qwen3.6 is ready*. Under it:
   - **Amber**, worth fixing: *dropped from memory earlier*, *the cache is off*, or *client changed
     message 7 (tool)*, where an agent re-sent an earlier message differently.
 
-  The share of all prompt tokens reused appears at the top once a few requests have finished.
+  The share of all prompt tokens reused appears at the top once a few requests have finished,
+  and under it the tokens per pass of [speculative decoding](@/docs/how-it-works.md#speculative-decoding)
+  once it has drafted; a request that drafted shows its own.
 
 ## Chat
 
 Chat with the served model through the same API your agents use. <kbd>Esc</kbd> stops a reply
-and keeps what arrived. Under each reply a line shows the reuse, time to first token, decode speed
-and stop reason; choosing it opens the reply's ribbon. While the model thinks, the reply shows
+and keeps what arrived. Under each reply a line shows the reuse, time to first token, decode speed,
+tokens per pass when it was drafted, and stop reason; choosing it opens the reply's ribbon. While the model thinks, the reply shows
 *Thinking · 23 s · 1,104 tokens* and the newest line of its thoughts; afterwards *Thought for
 41 s*, which expands.
 

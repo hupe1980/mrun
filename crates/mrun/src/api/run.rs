@@ -503,6 +503,15 @@ impl Relay {
                     });
                     continue;
                 }
+                Event::Verified { drafted, accepted } => {
+                    self.tracker.update(self.id, |entry| {
+                        let [d, a, p] = entry.speculation.get_or_insert_default();
+                        *d += drafted;
+                        *a += accepted;
+                        *p += 1;
+                    });
+                    continue;
+                }
                 Event::Token { id, text, held } => {
                     let first = !self.generating;
                     self.generating = true;
@@ -544,6 +553,11 @@ impl Relay {
             cached: stats.cached_tokens,
             output: stats.generated_tokens,
             reasoning: self.reasoning_tokens.min(stats.generated_tokens),
+            speculation: (stats.passes > 0).then_some([
+                stats.drafted,
+                stats.accepted,
+                stats.passes,
+            ]),
         };
         let mut out = ParseOut::default();
         let mut eos = None;

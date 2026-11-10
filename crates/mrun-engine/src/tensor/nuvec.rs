@@ -253,6 +253,17 @@ impl Array {
     }
 }
 
+/// Rows up to which a product gives each row the bits of its one-row product under
+/// [`with_row_exact`] (nuvec's bound; verify passes stay within it).
+pub const ROW_INDEPENDENT_ROWS: usize = nv::ROW_INDEPENDENT_ROWS;
+
+/// Runs `f` with row-exact products: built and evaluated in it, a product of at most
+/// [`ROW_INDEPENDENT_ROWS`] rows gives each row its one-row bits (dense, quantized and gathered),
+/// so a verify row equals the decode step at its position.
+pub fn with_row_exact<R>(f: impl FnOnce() -> R) -> R {
+    nv::with_row_exact(f)
+}
+
 /// Evaluates `arrays` (blocking).
 pub fn eval(arrays: &[&Array]) -> Result<()> {
     Ok(nv::eval(&raw(arrays))?)

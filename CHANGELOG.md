@@ -6,6 +6,20 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-10
+
+### Added
+
+- Speculative decoding: mrun drafts the next tokens from the prompt and the reply so far and
+  checks up to 7 at once, keeping only what plain decoding would produce (bit-identical, greedy
+  or seeded). It drafts only while measured faster on the request: 1.43× on a copy-heavy reply
+  with `qwen3.6`, unchanged on prose. `--speculation auto|off`; tokens per pass in `mrun ps`,
+  `/mrun/status`, `/metrics`, Now and each chat reply.
+
+### Changed
+
+- nuvec 0.8.0.
+
 ## [0.2.0] - 2026-11-06
 
 ### Added
@@ -81,7 +95,8 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/hupe1980/mrun/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hupe1980/mrun/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/hupe1980/mrun/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/hupe1980/mrun/releases/tag/v0.1.0

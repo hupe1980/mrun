@@ -591,6 +591,7 @@ mod tests {
                     cached: 2,
                     output: 4,
                     reasoning: 0,
+                    speculation: None,
                 },
             },
             GenEvent::TextDelta("late".into()),
@@ -686,6 +687,7 @@ mod tests {
                     cached: 0,
                     output: 2,
                     reasoning: 1,
+                    speculation: None,
                 },
             },
         ] {

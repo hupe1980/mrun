@@ -329,8 +329,9 @@ async fn actions_run_exactly_the_command_they_show() {
             .await
             .unwrap();
         let id = started["job"]["id"].as_str().unwrap().to_string();
+        // Up to 10 s: under load the job's process can take seconds to start.
         let mut job = serde_json::Value::Null;
-        for _ in 0..50 {
+        for _ in 0..200 {
             job = get_with(port, &format!("/app/jobs/{id}"), Some(TOKEN))
                 .send()
                 .await
@@ -343,6 +344,7 @@ async fn actions_run_exactly_the_command_they_show() {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        assert_ne!(job["state"], "running", "{kind}: the job never finished");
         let ran = std::fs::read_to_string(dir.path().join("argv.log")).unwrap();
         let last = ran.lines().last().unwrap().to_string();
         let argv: Vec<String> = shown["argv"][0]

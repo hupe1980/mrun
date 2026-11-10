@@ -4,7 +4,7 @@
   // its progress while it runs and collapses to "Thought for N s" (FR-009; 019 FR-001). Copy,
   // Edit and Regenerate appear on hover and focus and in the context menu (019 FR-002, FR-003).
   import { copyText } from "../lib/clipboard";
-  import { seconds, stopWord, tokens } from "../lib/format";
+  import { keptWords, perPass, seconds, stopWord, tokens } from "../lib/format";
   import { contextMenu, type MenuItem } from "../lib/native.svelte";
   import type { Message } from "../lib/types";
   import Markdown from "./Markdown.svelte";
@@ -173,6 +173,7 @@
           <span>{tokens(st.cached_tokens)} of {tokens(st.prompt_tokens)} reused</span>
           {#if st.ttft_ms !== null}<span>· {seconds(st.ttft_ms)} to first token</span>{/if}
           {#if st.decode_tps}<span>· {st.decode_tps.toFixed(1)} tok/s</span>{/if}
+          {#if st.speculation?.passes}<span title={keptWords(st.speculation)}>· {perPass(st.speculation)}</span>{/if}
           <span>· {stopWord(st.stop)}</span>
         </button>
         {@render actions()}

@@ -20,9 +20,9 @@ local servers. What mrun claims:
 - A memory budget that holds.
 - An [independent benchmark](@/docs/benchmarks.md) that reports every cell, including losses.
 
-mrun has no speculative decoding, no parallel lanes and no on-disk cache that survives a restart.
-Servers with speculative decoding decode faster on Qwen3.6, and servers with lanes answer
-parallel requests sooner.
+mrun has no parallel lanes and no on-disk cache that survives a restart: servers with lanes
+answer parallel requests sooner. Its speculative decoding drafts from the prompt only, with no
+draft model.
 
 ## Why not just use mlx-lm's server?
 
@@ -37,6 +37,14 @@ No. Reuse requires identical token ids and model identity, and a request served 
 gets bit-identical output to recomputing its prompt from empty state. `--no-cache` can differ in
 the low bits, because a reply computed token by token rounds differently from the same reply read
 back as a prompt ([details](@/docs/prefix-cache.md#exactness)).
+
+## Does speculative decoding change the output?
+
+No. mrun drafts the next tokens from earlier text in the prompt and the reply (a file the reply
+rewrites, an `Edit`'s old text), checks up to 7 at once on the GPU, and keeps a drafted token only
+where plain decoding would have produced it, sampled with the same random draw. Replies are
+identical with `--speculation off`; it only saves passes. It drafts only while that is measured
+faster on the request, so a reply that copies nothing decodes as before.
 
 ## Which models are supported?
 

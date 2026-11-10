@@ -97,6 +97,10 @@ pub struct Metrics {
     generated: [AtomicU64; 3],
     spliced: AtomicU64,
     unreused: AtomicU64,
+    /// Speculative decoding (006): draft tokens verified, kept, and verify passes.
+    pub drafted: AtomicU64,
+    pub accepted: AtomicU64,
+    pub passes: AtomicU64,
     /// By position in [`Cause::ALL`] (003's list, FR-013), all present from the first scrape
     /// so `rate()` works.
     misses: [AtomicU64; Cause::ALL.len()],
@@ -114,6 +118,9 @@ impl Default for Metrics {
             generated: Default::default(),
             spliced: AtomicU64::new(0),
             unreused: AtomicU64::new(0),
+            drafted: AtomicU64::new(0),
+            accepted: AtomicU64::new(0),
+            passes: AtomicU64::new(0),
             misses: Default::default(),
             ttft: Mutex::new(Histogram::new(TTFT_BUCKETS)),
             prefill: Mutex::new(Histogram::new(PREFILL_BUCKETS)),
@@ -143,6 +150,12 @@ impl Metrics {
         self.generated[i].fetch_add(u64::from(usage.output), Ordering::Relaxed);
         self.spliced
             .fetch_add(u64::from(spliced), Ordering::Relaxed);
+        self.drafted
+            .fetch_add(u64::from(stats.drafted), Ordering::Relaxed);
+        self.accepted
+            .fetch_add(u64::from(stats.accepted), Ordering::Relaxed);
+        self.passes
+            .fetch_add(u64::from(stats.passes), Ordering::Relaxed);
         if let Some(miss) = miss {
             self.unreused
                 .fetch_add(u64::from(miss.unreused), Ordering::Relaxed);
@@ -292,6 +305,25 @@ pub fn render(state: &ServerState) -> String {
         metrics.spliced.load(Ordering::Relaxed),
     );
     metrics.render_misses(&mut out);
+    for (name, help, value) in [
+        (
+            "mrun_speculation_drafted_tokens_total",
+            "Draft tokens verified by speculative decoding (completed responses).",
+            &metrics.drafted,
+        ),
+        (
+            "mrun_speculation_accepted_tokens_total",
+            "Draft tokens kept: each saved one forward pass.",
+            &metrics.accepted,
+        ),
+        (
+            "mrun_speculation_passes_total",
+            "Verify passes of speculative decoding.",
+            &metrics.passes,
+        ),
+    ] {
+        out.single(name, "counter", help, value.load(Ordering::Relaxed));
+    }
     out.single(
         "mrun_cache_unreused_tokens_total",
         "counter",
@@ -442,6 +474,7 @@ mod tests {
             cached: 60,
             output: 5,
             reasoning: 0,
+            speculation: None,
         };
         let miss = MissReport {
             prompt: 100,
