@@ -128,3 +128,16 @@ describe("cloud (024)", () => {
     expect(fittingGpus(gpus, "community", { need: 10 }).map((c) => [c.gpu.id, c.price])).toEqual([["A5000", 0.11]]);
   });
 });
+
+describe("context length (027)", () => {
+  it("offers powers of two up to what fits and costs fixed + tokens × per_token", async () => {
+    const { contextChoices, contextTarget, memoryAt, targetModel } = await import("../src/lib/context");
+    expect(contextChoices(100_000)).toEqual([16384, 32768, 65536]);
+    expect(contextChoices(null)).toEqual([]);
+    expect(memoryAt({ memory: { fixed: 100, per_token: 2 } }, 10)).toBe(120);
+    expect(memoryAt({ memory: null }, 10)).toBeNull();
+    expect(contextTarget("qwen3.6", 65536)).toBe("qwen3.6|65536");
+    expect(contextTarget("qwen3.6", null)).toBe("qwen3.6");
+    expect(targetModel("qwen3.6|65536")).toBe("qwen3.6");
+  });
+});

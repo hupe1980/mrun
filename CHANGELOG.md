@@ -6,6 +6,20 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-10
+
+### Added
+
+- `--context` on `serve` and `run` (`MRUN_CONTEXT`): memory by context length. The budget becomes
+  exactly what that many tokens need and the rest stays free; a context that does not fit is
+  refused before loading (E042), never shortened. `mrun ls --context` and a per-model picker in
+  Models show what each context uses.
+
+### Fixed
+
+- Settings: the Server tab opened nothing; it now lists the server's settings and where each
+  comes from.
+
 ## [0.3.0] - 2026-11-10
 
 ### Added
@@ -95,7 +109,8 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/hupe1980/mrun/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/hupe1980/mrun/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hupe1980/mrun/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/hupe1980/mrun/compare/v0.1.0...v0.1.1

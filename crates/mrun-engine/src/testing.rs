@@ -173,7 +173,10 @@ fn load_on(dir: &Path, budget: Option<u64>, cpu: bool) -> Result<NuvecEngine, Nu
                 available: None,
                 estimated: false,
             }),
-            overrides: Overrides { budget },
+            overrides: Overrides {
+                budget,
+                context: None,
+            },
             ..LoadOptions::default()
         },
     )

@@ -277,6 +277,10 @@ impl NuvecEngine {
                 analytic_scratch(engine.model.as_ref(), &engine.info, engine.part, depth);
             ((peak + analytic) as f64 * SCRATCH_MARGIN) as u64
         };
+        let plan = match options.overrides.context {
+            Some(context) => budget::for_context(plan, context, weights, &scratch, &engine.info)?,
+            None => plan,
+        };
         let budget = budget::with_state_capacity(plan, weights, &scratch, &engine.info)?;
         engine.ledger.budget = budget;
         tensor::memory::set_memory_limit(budget.budget);

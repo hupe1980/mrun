@@ -181,29 +181,36 @@ pub fn steps(
             Err(format!("not a client mrun connects: {t:?}"))
         }
     };
+    // `use` and `start` targets may carry a context (027): `model|tokens`.
+    let serve = |t: &str| -> Result<Vec<String>, String> {
+        let (name, context) = match t.split_once('|') {
+            Some((name, tokens))
+                if !tokens.is_empty() && tokens.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                (name, Some(tokens))
+            }
+            Some(_) => return Err(format!("not a model and context: {t:?}")),
+            None => (t, None),
+        };
+        let mut args = s(&["serve", "--detach", "--model", &model(name)?]);
+        if let Some(tokens) = context {
+            args.extend(s(&["--context", tokens]));
+        }
+        args.extend(s(&["--port", &port]));
+        Ok(args)
+    };
     Ok(match kind {
         Kind::Pull => vec![s(&["pull", &model(target)?, "--yes", "--json"])],
-        Kind::Use => vec![
-            s(&["stop", "--port", &port]),
-            s(&[
-                "serve",
-                "--detach",
-                "--model",
-                &model(target)?,
-                "--port",
-                &port,
-            ]),
-        ],
+        Kind::Use => vec![s(&["stop", "--port", &port]), serve(target)?],
         Kind::Start => {
             let chosen = if target.is_empty() {
-                last_model.map(str::to_string)
+                last_model
             } else {
-                Some(model(target)?)
+                Some(target)
             };
-            match chosen {
-                Some(m) if valid_model(&m) => {
-                    vec![s(&["serve", "--detach", "--model", &m, "--port", &port])]
-                }
+            match chosen.map(serve) {
+                Some(Ok(args)) => vec![args],
+                Some(Err(e)) if !target.is_empty() => return Err(e),
                 _ => vec![s(&["serve", "--detach", "--port", &port])],
             }
         }
@@ -729,6 +736,27 @@ mod tests {
             line(Kind::Use, "mlx-community/Qwen3-8B-4bit"),
             "mrun stop --port 8484 && mrun serve --detach --model mlx-community/Qwen3-8B-4bit --port 8484"
         );
+        // 027: a context travels as `model|tokens`.
+        assert_eq!(
+            line(Kind::Use, "qwen3.6|65536"),
+            "mrun stop --port 8484 && mrun serve --detach --model qwen3.6 --context 65536 --port 8484"
+        );
+        assert_eq!(
+            steps(Kind::Start, "", 8484, Some("qwen3.6|65536")).unwrap(),
+            vec![vec![
+                "serve",
+                "--detach",
+                "--model",
+                "qwen3.6",
+                "--context",
+                "65536",
+                "--port",
+                "8484"
+            ]]
+        );
+        for bad in ["qwen3.6|", "qwen3.6|64K", "qwen3.6|1;rm", "|65536"] {
+            assert!(steps(Kind::Use, bad, 8484, None).is_err(), "{bad}");
+        }
         assert_eq!(
             line(Kind::Connect, "claude-code"),
             "mrun connect claude-code --port 8484 --write --yes --json"

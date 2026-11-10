@@ -8,7 +8,8 @@
   import PullProgress from "../components/PullProgress.svelte";
   import Symbol from "../components/Symbol.svelte";
   import { host } from "../lib/api";
-  import { bytes, needGb, perHour, repoFromInput } from "../lib/format";
+  import { contextChoices, contextTarget, memoryAt } from "../lib/context";
+  import { bytes, context, needGb, perHour, repoFromInput } from "../lib/format";
   import { jobs } from "../lib/jobs.svelte";
   import { live } from "../lib/live.svelte";
   import { contextMenu } from "../lib/native.svelte";
@@ -42,14 +43,23 @@
   const best = $derived(models.find((m) => m.recommended && m.fit !== "wont_fit") ?? models.find((m) => m.fit === "fits"));
   let confirmRemove = $state<ModelEntry | null>(null);
 
-  async function act(kind: string, m: ModelEntry) {
+  // Context per model (027): 0 is Automatic, the most that fits. The model in use starts at the
+  // context it was served with, when `--context` set its budget.
+  let chosen = $state<Record<string, number>>({});
+  const servedContext = $derived(live.status?.budget?.binding === "context" ? live.status.budget.kv_capacity_tokens : 0);
+  const choice = (m: ModelEntry) => chosen[m.name] ?? (m.serving ? servedContext : 0);
+  const target = (m: ModelEntry) => contextTarget(m.name, choice(m) || null);
+  const pickable = (m: ModelEntry) =>
+    m.pulled && !m.part && !forPool(m) && m.fit !== "wont_fit" && !!m.memory && contextChoices(m.max_context).length > 0;
+
+  async function act(kind: string, m: ModelEntry, on = m.name) {
     let confirm = false;
     if (kind === "use" && live.app?.server.started_by === "other") {
       confirm = window.confirm("This server was started from a terminal. Switch it to " + m.name + " anyway?");
       if (!confirm) return;
     }
     try {
-      const job = await jobs.run(kind, m.name, confirm);
+      const job = await jobs.run(kind, on, confirm);
       if (job.state === "failed" && job.error) onError(job.error);
     } catch (e) {
       onError(String((e as Error).message));
@@ -70,9 +80,10 @@
     void contextMenu(e, items).then(async (id) => {
       if (id === "remove") confirmRemove = m;
       else if (id === "stop") await act("stop", m);
-      else if (id === "use" || id === "pull") await act(id, m);
+      else if (id === "use") await act(id, m, target(m));
+      else if (id === "pull") await act(id, m);
       else if (id === "copy") {
-        const shown = await host.command(!m.pulled ? "pull" : m.serving ? "stop" : "use", m.name);
+        const shown = await host.command(!m.pulled ? "pull" : m.serving ? "stop" : "use", m.pulled && !m.serving ? target(m) : m.name);
         await navigator.clipboard?.writeText(shown.text).catch(() => {});
       }
     });
@@ -213,6 +224,20 @@
                 <span>{m.verdict}</span>
               </div>
             {/if}
+            {#if pickable(m)}
+              {@const c = choice(m)}
+              {@const need = c ? memoryAt(m, c) : null}
+              <div class="context">
+                <select aria-label="Context for {m.alias ?? m.name}" value={c} onchange={(e) => (chosen[m.name] = Number(e.currentTarget.value))}>
+                  <option value={0}>Context: automatic, up to {context(m.max_context ?? 0)}</option>
+                  {#each contextChoices(m.max_context) as t (t)}<option value={t}>Context: {context(t)} tokens</option>{/each}
+                </select>
+                {#if need !== null && m.budget}<span class="num">uses {bytes(need)} of {bytes(m.budget)}</span>{/if}
+                {#if m.serving && c !== servedContext}
+                  <button class="btn" disabled={jobs.running("use", target(m))} onclick={() => act("use", m, target(m))}>{jobs.running("use", target(m)) ? "Restarting…" : "Apply"}</button>
+                {/if}
+              </div>
+            {/if}
             {#if pull?.state === "running"}<PullProgress job={pull} />{/if}
           </div>
           <div class="actions">
@@ -232,13 +257,13 @@
               {#if best}<button class="btn plain" onclick={() => best && act(best.pulled ? "use" : "pull", best)}>Use {best.alias ?? best.name} Instead</button>{/if}
             {:else}
               <!-- One filled button per list: the model mrun recommends (019 FR-009). -->
-              <button class="btn" class:primary={m === best} disabled={jobs.running("use", m.name)} onclick={() => act("use", m)}>
-                {jobs.running("use", m.name) ? "Switching…" : "Use"}
+              <button class="btn" class:primary={m === best} disabled={jobs.running("use", target(m))} onclick={() => act("use", m, target(m))}>
+                {jobs.running("use", target(m)) ? "Switching…" : "Use"}
               </button>
             {/if}
             <ActionMenu
               kind={m.pulled ? (m.serving ? "stop" : "use") : "pull"}
-              target={m.name}
+              target={m.pulled && !m.serving ? target(m) : m.name}
               items={m.pulled && !m.serving ? [{ label: "Remove…", danger: true, run: () => (confirmRemove = m) }] : []}
               label="More for {m.name}"
             />
@@ -482,6 +507,31 @@
     margin-top: var(--s3);
     padding-top: var(--s3);
     border-top: 0.5px solid var(--separator);
+  }
+  .context {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  /* A quiet pop-up button, as macOS draws one inline. */
+  .context select {
+    font: inherit;
+    color: var(--text-2);
+    background: var(--fill);
+    border: none;
+    border-radius: var(--r-sm);
+    padding: 3px 8px;
+  }
+  .context select:hover {
+    background: var(--fill-2);
+  }
+  .context select:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
   }
   .verdict {
     display: flex;

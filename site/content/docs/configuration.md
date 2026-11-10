@@ -135,6 +135,7 @@ mrun config schema > ~/.mrun/config.schema.json
 | `MRUN_QUEUE` | `serve --queue` | 16; at least 1 |
 | `MRUN_QUEUE_WAIT_S` | `serve --queue-wait-s` | 240 (non-streaming requests only); at least 1 |
 | `MRUN_BUDGET_GIB` | `--budget-gib` (`serve`, `run`, `ls`) | Metal's recommended working set; can only be lowered |
+| `MRUN_CONTEXT` | `--context` (`serve`, `run`) | The most that fits; `64K` or `65536` |
 | `MRUN_NO_CACHE` | `serve --no-cache` | off |
 | `MRUN_SPECULATION` | `--speculation` (`serve`, `run`) | `auto` |
 | `MRUN_REJECT_TOOL_IMAGES` | `serve --reject-tool-images` | off |

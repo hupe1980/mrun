@@ -37,13 +37,14 @@ export const status = {
 };
 
 const model = (m) => ({
-  revision: "abc", pulled: true, fit: "fits", max_context: 262144, recommended: false, preview: false, serving: false, ...m,
+  revision: "abc", pulled: true, fit: "fits", max_context: 262144, recommended: false, preview: false, serving: false,
+  memory: { fixed: 20.6 * gib, per_token: 21 * 1024 }, budget: 32 * gib, ...m,
 });
 
 export const models = [
-  model({ name: "qwen3.6", alias: "qwen3.6", repo: "mlx-community/Qwen3.6-35B-A3B-4bit", size: 19.4 * gib, recommended: true, serving: true, verdict: "Fits with 221,819 tokens." }),
-  model({ name: "qwen3.5", alias: "qwen3.5", repo: "mlx-community/Qwen3.5-9B-4bit", size: 5.57 * gib, preview: true, verdict: "Fits with 262,144 tokens." }),
-  model({ name: "mlx-community/Qwen3-8B-4bit", alias: null, repo: "mlx-community/Qwen3-8B-4bit", size: 4.3 * gib, fit: "tight", verdict: "Fits with 40,960 tokens, less than the 65,536 coding agents need." }),
+  model({ name: "qwen3.6", alias: "qwen3.6", repo: "mlx-community/Qwen3.6-35B-A3B-4bit", size: 19.4 * gib, recommended: true, serving: true, max_context: 221819, verdict: "Fits with 221,819 tokens." }),
+  model({ name: "qwen3.5", alias: "qwen3.5", repo: "mlx-community/Qwen3.5-9B-4bit", size: 5.57 * gib, preview: true, memory: { fixed: 6.4 * gib, per_token: 33 * 1024 }, verdict: "Fits with 262,144 tokens." }),
+  model({ name: "mlx-community/Qwen3-8B-4bit", alias: null, repo: "mlx-community/Qwen3-8B-4bit", size: 4.3 * gib, fit: "tight", max_context: 40960, memory: { fixed: 5.2 * gib, per_token: 144 * 1024 }, verdict: "Fits with 40,960 tokens, less than the 65,536 coding agents need." }),
   model({ name: "qwen3.8-big", alias: "qwen3.8-big", repo: "mlx-community/Qwen3.8-235B-A22B-4bit", size: 124 * gib, pulled: false, fit: "wont_fit", verdict: "Does not fit the budget of 32 GB." }),
 ];
 
@@ -243,3 +244,22 @@ export function poolView(mode) {
         members: poolMembers.map((m) => (m.mac_id.startsWith("dana") ? { ...m, state: "lost" } : m)) }), joining: null };
   }
 }
+
+/** `mrun config show --json`: a few settings from the file, the rest defaults. */
+const setting = (key, value, source = "default") => ({ key, value, source, overridden: [], needs: null });
+export const configView = {
+  path: "/Users/you/.mrun/config.toml",
+  exists: true,
+  settings: [
+    setting("port", 8484),
+    setting("model", "qwen3.6", "file:2"),
+    setting("budget-gib", null),
+    setting("serve.max-output", null),
+    setting("serve.queue", 4, "file:5"),
+    setting("serve.queue-wait-s", 240),
+    setting("serve.no-cache", null),
+    setting("serve.speculation", "auto"),
+    setting("run.max-tokens", 2048),
+  ],
+  warnings: [],
+};

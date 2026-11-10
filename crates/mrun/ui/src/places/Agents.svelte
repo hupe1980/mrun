@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { targetModel } from "../lib/context";
   // Agents, like Internet Accounts: each client, whether it is connected to this mrun, and one
   // button. Connect does exactly what `mrun connect <client> --write` does, Disconnect what
   // `--restore` does, and both show the files they changed (FR-015).
@@ -42,7 +43,7 @@
   const appNames: Record<string, string> = { zed: "Zed", crush: "Crush" };
   const port = $derived(live.app?.server?.port ?? 8484);
   const running = $derived(live.state !== "stopped");
-  const modelId = $derived(live.status?.model?.id ?? live.app?.prefs?.last_model ?? "qwen3.6");
+  const modelId = $derived(live.status?.model?.id ?? targetModel(live.app?.prefs?.last_model ?? "qwen3.6"));
   const base = $derived(`http://127.0.0.1:${port}`);
 
   onMount(() => {

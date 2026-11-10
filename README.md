@@ -18,7 +18,7 @@ the Anthropic Messages, OpenAI Chat Completions and OpenAI Responses APIs on `12
 
 ## Status
 
-**0.3**: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
+**0.4**: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
 (M4 Pro, 48 GB); smaller Macs are simulated there with `--budget-gib`.
 
 - **Models**: `qwen3.6` (Qwen3.6-35B-A3B 4-bit), the default wherever it leaves at least 64K

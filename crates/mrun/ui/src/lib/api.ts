@@ -2,7 +2,7 @@
 // per-start token, which arrives in the URL fragment (never sent to a server) and lives in this
 // tab's sessionStorage (contracts/ui-host.md §Security).
 
-import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, Excerpt, Job, Miss, ModelEntry, Offer, Plan, PoolPlan, PoolView, Prefs, Sessions, Speculation, Status } from "./types";
+import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, ConfigView, Excerpt, Job, Miss, ModelEntry, Offer, Plan, PoolPlan, PoolView, Prefs, Sessions, Speculation, Status } from "./types";
 
 const KEY = "mrun.token";
 
@@ -85,7 +85,7 @@ export const host = {
   cloud: (fresh = false) => listing<CloudListing>("/app/cloud", fresh),
   /** A repo's weights and fitting GPUs (`mrun cloud models <repo> --json`). */
   cloudModel: (repo: string) => call<Offer>(`/app/cloud/model?repo=${encodeURIComponent(repo)}`),
-  config: () => call<unknown>("/app/config"),
+  config: () => call<ConfigView>("/app/config"),
   modelInfo: (id: string) => call<Record<string, unknown>>(`/v1/models/${encodeURIComponent(id)}`),
   /** `secret` is `cloud-login`'s key: the host writes it to the command's stdin. */
   act: (kind: string, target: string, confirm = false, secret?: string) =>

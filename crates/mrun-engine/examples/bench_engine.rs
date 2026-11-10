@@ -238,6 +238,7 @@ fn run() -> Result<(), String> {
             },
             overrides: mrun_engine::budget::Overrides {
                 budget: args.budget,
+                context: None,
             },
             ..LoadOptions::default()
         },

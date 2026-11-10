@@ -56,6 +56,11 @@ pub struct ServeArgs {
     /// at most physical memory − 2 GiB]; it cannot raise it.
     #[arg(long, env = "MRUN_BUDGET_GIB", value_parser = crate::cli::model::parse_budget_gib)]
     pub budget_gib: Option<u64>,
+    /// Memory for this many tokens of context (`64K`): the budget is what they need, the rest
+    /// stays free for other apps; it cannot exceed the automatic budget.
+    #[arg(long, env = "MRUN_CONTEXT", value_parser = crate::cli::model::parse_tokens,
+        conflicts_with = "budget_gib")]
+    pub context: Option<u32>,
     /// Disable prefix reuse across requests.
     #[arg(long, env = "MRUN_NO_CACHE")]
     pub no_cache: bool,
@@ -395,8 +400,8 @@ pub fn default_factory() -> EngineFactory {
 pub fn load_named(args: &ServeArgs, name: &str) -> Result<Loaded, CliError> {
     let name = name.to_string();
     let model = crate::cli::model::open(&name)?;
-    crate::cli::model::preflight(&model)?;
-    let overrides = crate::cli::model::overrides(args.budget_gib);
+    crate::cli::model::preflight(&model, args.context)?;
+    let overrides = crate::cli::model::overrides(args.budget_gib, args.context);
     let handle = EngineHandle::spawn_with(
         crate::cli::model::engine_factory(&model, overrides),
         model.tokenizer.clone(),

@@ -758,6 +758,31 @@ pub struct Fit {
     pub fits: bool,
     /// Tokens of context that fit; 0 when the model does not fit.
     pub max_context: u32,
+    /// What any context costs (027).
+    pub memory: Cost,
+}
+
+/// The memory a model needs for `tokens` of context before loading (027): `fixed` (weights,
+/// scratch, position-bound state and its checkpoints) plus `per_token` (attention state and the
+/// scratch that grows with depth). [`budget_needed`] is [`Cost::at`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct Cost {
+    pub fixed: u64,
+    pub per_token: u64,
+}
+
+impl Cost {
+    pub fn of(weights: u64, info: &ModelInfo) -> Self {
+        let scratch = scratch_model(&info.family);
+        Self {
+            fixed: weights + scratch.fixed + budget::position_bound_reserve(info.recurrent_bytes),
+            per_token: info.kv_bytes_per_token + scratch.per_position,
+        }
+    }
+
+    pub fn at(&self, tokens: u32) -> u64 {
+        self.fixed + u64::from(tokens) * self.per_token
+    }
 }
 
 /// Fit with the default budget (the recommended working set, D048).
@@ -784,8 +809,12 @@ pub fn fit_with(device: DeviceMemory, budget: Option<u64>, weights: u64, info: &
         scratch: scratch.fixed,
         fits: false,
         max_context: 0,
+        memory: Cost::of(weights, info),
     };
-    let overrides = Overrides { budget };
+    let overrides = Overrides {
+        budget,
+        context: None,
+    };
     if let Ok(plan) = budget::plan(device, overrides) {
         fit.budget = plan.budget;
         if let Ok(full) = budget::capacity_on(device, overrides, weights, scratch, info) {
@@ -801,10 +830,7 @@ pub fn fit_with(device: DeviceMemory, budget: Option<u64>, weights: u64, info: &
 /// the position-bound state with its reserved checkpoints and the attention state (the inverse
 /// of [`fit`]).
 pub fn budget_needed(tokens: u32, weights: u64, info: &ModelInfo) -> u64 {
-    weights
-        + scratch_model(&info.family).at(tokens)
-        + budget::position_bound_reserve(info.recurrent_bytes)
-        + u64::from(tokens) * info.kv_bytes_per_token
+    Cost::of(weights, info).at(tokens)
 }
 
 /// D062: refuses (E041) before any weight is read when the model's weights, scratch and state

@@ -101,6 +101,8 @@ export interface Status {
     scratch: number;
     kv_capacity_tokens: number;
     kv_bytes_per_token: number;
+    /** What bounds it: `working set`, `physical`, `available memory`, `--budget-gib` or `context`. */
+    binding?: string;
   } | null;
   queued: number;
   cache: {
@@ -340,6 +342,10 @@ export interface ModelEntry {
   family?: string;
   /** A part (026): only layers `[first, end)`, for pool stages. */
   part?: [number, number];
+  /** What a context costs (027): `fixed + tokens × per_token` bytes. */
+  memory?: { fixed: number; per_token: number } | null;
+  /** The budget that counts against. */
+  budget?: number | null;
 }
 
 export interface AgentEntry {
@@ -425,4 +431,13 @@ export interface Chat {
   sampling: Sampling;
   thinking: boolean | null;
   messages: Message[];
+}
+
+/** `mrun config show --json` (017): every setting with its value and where it comes from. */
+export interface ConfigView {
+  path: string;
+  exists: boolean;
+  /** `source`: `default`, `file:<line>` or `env:<VAR>`. */
+  settings: { key: string; value: unknown; source: string }[];
+  warnings?: string[];
 }
