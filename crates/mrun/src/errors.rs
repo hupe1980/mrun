@@ -49,6 +49,8 @@ pub enum Code {
     DoesNotFit,
     /// E041 the model would fit, but other processes hold the memory it needs now (D062).
     MemoryShort,
+    /// E042 the requested context does not fit the budget or the model (027).
+    ContextTooLarge,
     /// E050 network or download failure.
     Network,
     /// E051 a gated model needs a Hugging Face token.
@@ -79,6 +81,7 @@ impl Code {
             Self::UnsupportedArchitecture => "E034",
             Self::DoesNotFit => "E040",
             Self::MemoryShort => "E041",
+            Self::ContextTooLarge => "E042",
             Self::Network => "E050",
             Self::Gated => "E051",
             Self::DiskFull => "E052",
@@ -98,7 +101,9 @@ impl Code {
             | Self::ModelCorrupt
             | Self::ModelAmbiguous
             | Self::UnsupportedArchitecture => Exit::Model,
-            Self::DoesNotFit | Self::MemoryShort | Self::PoolDoesNotFit => Exit::Fit,
+            Self::DoesNotFit | Self::MemoryShort | Self::ContextTooLarge | Self::PoolDoesNotFit => {
+                Exit::Fit
+            }
             Self::Network | Self::Gated | Self::DiskFull | Self::PoolMemberLost => Exit::Network,
             Self::PoolRefused | Self::PoolVersion => Exit::Usage,
         }
@@ -127,6 +132,9 @@ impl Code {
             Self::MemoryShort => {
                 "quit memory-hungry apps or VMs ('mrun doctor' lists the largest), or pick a smaller model"
             }
+            Self::ContextTooLarge => {
+                "pick a smaller --context; 'mrun ls --context <tokens>' shows what each model needs"
+            }
             Self::Network => "check the connection and rerun; downloads resume",
             Self::Gated => "accept the license on huggingface.co and set HF_TOKEN",
             Self::DiskFull => "free disk space, or point MRUN_HOME at a larger volume",
@@ -142,7 +150,7 @@ impl Code {
     }
 
     /// Every code, for the catalog snapshot.
-    pub const ALL: [Code; 18] = [
+    pub const ALL: [Code; 19] = [
         Self::Internal,
         Self::NeedsConfirmation,
         Self::InvalidArguments,
@@ -154,6 +162,7 @@ impl Code {
         Self::UnsupportedArchitecture,
         Self::DoesNotFit,
         Self::MemoryShort,
+        Self::ContextTooLarge,
         Self::Network,
         Self::Gated,
         Self::DiskFull,
@@ -266,7 +275,7 @@ mod tests {
         assert_eq!(
             catalog.join(", "),
             "E001 1, E002 2, E003 2, E010 5, E020 2, E031 3, E032 3, E033 3, E034 3, E040 4, \
-             E041 4, E050 6, E051 6, E052 6, E060 6, E061 2, E062 4, E063 2"
+             E041 4, E042 4, E050 6, E051 6, E052 6, E060 6, E061 2, E062 4, E063 2"
         );
     }
 

@@ -105,6 +105,9 @@ pub fn margin(physical: u64) -> u64 {
 pub struct Overrides {
     /// Lowers the budget to this many bytes (`--budget-gib`); it cannot raise it.
     pub budget: Option<u64>,
+    /// Sets the budget to what this many tokens of context need (`--context`, 027); it cannot
+    /// raise it either.
+    pub context: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -146,6 +149,19 @@ pub enum BudgetError {
         recurrent: u64,
         initial_state: u64,
     },
+    #[error(
+        "{context} tokens of context need {}, more than the budget of {}; up to {fits} tokens fit",
+        gib(*.needed),
+        gib(*.budget)
+    )]
+    ContextTooLarge {
+        context: u32,
+        needed: u64,
+        budget: u64,
+        fits: u32,
+    },
+    #[error("a context of {context} tokens is outside {min} to the model's {max}")]
+    ContextOutOfRange { context: u32, min: u32, max: u32 },
 }
 
 /// `bytes` as GiB with two decimals (`4.30 GiB`), as refusals print them.
@@ -286,6 +302,46 @@ pub fn with_state_capacity(
     })
 }
 
+/// Lowers `budget` to what `context` tokens need (`--context`, 027): the weights, `scratch` at that
+/// depth, the position-bound reserve and the attention state, so [`with_state_capacity`] then
+/// gives exactly `context` tokens. Refused when that is more than the budget (naming the largest
+/// context that fits) or outside [`INITIAL_STATE_TOKENS`] to the model's maximum position.
+pub fn for_context(
+    budget: MemoryBudget,
+    context: u32,
+    weights: u64,
+    scratch: &dyn Fn(u32) -> u64,
+    info: &ModelInfo,
+) -> Result<MemoryBudget, BudgetError> {
+    let min = INITIAL_STATE_TOKENS as u32;
+    if context < min || context > info.max_position {
+        return Err(BudgetError::ContextOutOfRange {
+            context,
+            min,
+            max: info.max_position,
+        });
+    }
+    let needed = weights
+        .saturating_add(scratch(context))
+        .saturating_add(position_bound_reserve(info.recurrent_bytes))
+        .saturating_add(u64::from(context) * info.kv_bytes_per_token);
+    if needed > budget.budget {
+        let fits = with_state_capacity(budget, weights, scratch, info)
+            .map_or(0, |full| full.kv_capacity_tokens);
+        return Err(BudgetError::ContextTooLarge {
+            context,
+            needed,
+            budget: budget.budget,
+            fits,
+        });
+    }
+    Ok(MemoryBudget {
+        budget: needed,
+        binding: Binding::Context,
+        ..budget
+    })
+}
+
 /// Scratch as a fixed part plus a part per position of depth: the form the hub's fit check uses
 /// for an alias it has not loaded (its measured scratch, plus one attention layer per position).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -300,8 +356,9 @@ impl LinearScratch {
     }
 }
 
-/// Token capacity of a model on `device` before loading it: the budget from `overrides`, the
-/// weights and the scratch as [`with_state_capacity`] solves them. `Err` when it does not fit.
+/// Token capacity of a model on `device` before loading it: the budget from `overrides` (a
+/// context sets it, [`for_context`]), the weights and the scratch as [`with_state_capacity`]
+/// solves them. `Err` when it does not fit.
 pub fn capacity_on(
     device: DeviceMemory,
     overrides: Overrides,
@@ -309,7 +366,12 @@ pub fn capacity_on(
     scratch: LinearScratch,
     info: &ModelInfo,
 ) -> Result<MemoryBudget, BudgetError> {
-    with_state_capacity(plan(device, overrides)?, weights, &|d| scratch.at(d), info)
+    let scratch = |d| scratch.at(d);
+    let mut budget = plan(device, overrides)?;
+    if let Some(context) = overrides.context {
+        budget = for_context(budget, context, weights, &scratch, info)?;
+    }
+    with_state_capacity(budget, weights, &scratch, info)
 }
 
 fn tokens(bytes: u64, info: &ModelInfo) -> u32 {
@@ -413,6 +475,7 @@ mod tests {
             // The override lowers it on every device and never raises it.
             let half = Overrides {
                 budget: Some(device.recommended_working_set / 2),
+                context: None,
             };
             assert_eq!(
                 super::plan(device, half).unwrap().budget,
@@ -522,6 +585,7 @@ mod tests {
                 let device = mac(128, 1.0);
                 let lower = Overrides {
                     budget: Some(gib * GIB),
+                    context: None,
                 };
                 let Ok(b) = capacity_on_fn(device, lower, *weights, scratch.as_ref(), info) else {
                     continue;
@@ -605,6 +669,7 @@ mod tests {
             m4_pro(Some(30 * GIB)),
             Overrides {
                 budget: Some(10 * GIB),
+                context: None,
             },
         )
         .unwrap();
@@ -613,7 +678,8 @@ mod tests {
             plan(
                 m4_pro(Some(30 * GIB)),
                 Overrides {
-                    budget: Some(30 * GIB)
+                    budget: Some(30 * GIB),
+                    context: None,
                 }
             ),
             Err(BudgetError::AboveAutomatic {
@@ -627,6 +693,7 @@ mod tests {
             m4_pro(Some(30 * GIB)),
             Overrides {
                 budget: Some(24 * GIB),
+                context: None,
             },
         )
         .unwrap();
@@ -663,10 +730,12 @@ mod tests {
     fn the_override_only_lowers_the_budget() {
         let lower = Overrides {
             budget: Some(20 * GIB),
+            context: None,
         };
         assert_eq!(plan(mac(48, 0.78), lower).unwrap().budget, 20 * GIB);
         let higher = Overrides {
             budget: Some(46 * GIB),
+            context: None,
         };
         assert!(matches!(
             plan(mac(48, 0.78), higher),
@@ -694,6 +763,7 @@ mod tests {
             mac(48, 1.0),
             Overrides {
                 budget: Some(40 * GIB),
+                context: None,
             },
         )
         .unwrap();
@@ -714,12 +784,78 @@ mod tests {
     }
 
     #[test]
+    fn a_context_sets_the_budget_to_what_it_needs() {
+        // 10 GiB beside 4 GiB of weights; scratch 1 GiB + 16 KiB per position, 48 KiB per token.
+        let budget = plan(
+            mac(48, 1.0),
+            Overrides {
+                budget: Some(14 * GIB),
+                context: None,
+            },
+        )
+        .unwrap();
+        let info = model(48 * KIB, 0, 262_144);
+        let scratch = LinearScratch {
+            fixed: GIB,
+            per_position: 16 * KIB,
+        };
+        let at = |d| scratch.at(d);
+        let lowered = for_context(budget, 65_536, 4 * GIB, &at, &info).unwrap();
+        assert_eq!(
+            lowered.budget,
+            4 * GIB + scratch.at(65_536) + 65_536 * 48 * KIB
+        );
+        assert_eq!(lowered.binding, Binding::Context);
+        let full = with_state_capacity(lowered, 4 * GIB, &at, &info).unwrap();
+        assert_eq!(
+            full.kv_capacity_tokens, 65_536,
+            "the capacity is the context"
+        );
+        // More than fits: refused with the largest that does (147,456, as the fixed point gives).
+        assert_eq!(
+            for_context(budget, 200_000, 4 * GIB, &at, &info),
+            Err(BudgetError::ContextTooLarge {
+                context: 200_000,
+                needed: 4 * GIB + scratch.at(200_000) + 200_000 * 48 * KIB,
+                budget: 14 * GIB,
+                fits: 147_456,
+            })
+        );
+        // Outside 4,096 to the model's maximum.
+        for context in [1_000, 300_000] {
+            assert_eq!(
+                for_context(budget, context, 4 * GIB, &at, &info),
+                Err(BudgetError::ContextOutOfRange {
+                    context,
+                    min: 4096,
+                    max: 262_144
+                })
+            );
+        }
+        // The hub's pre-load capacity agrees.
+        let device = mac(48, 1.0);
+        let planned = capacity_on(
+            device,
+            Overrides {
+                budget: Some(14 * GIB),
+                context: Some(65_536),
+            },
+            4 * GIB,
+            scratch,
+            &info,
+        )
+        .unwrap();
+        assert_eq!(planned.kv_capacity_tokens, 65_536);
+    }
+
+    #[test]
     fn position_dependent_scratch_is_taken_at_the_capacity_limited_depth() {
         // 10 GiB beside the weights; scratch 1 GiB + 16 KiB per position, state 48 KiB per token.
         let budget = plan(
             mac(48, 1.0),
             Overrides {
                 budget: Some(14 * GIB),
+                context: None,
             },
         )
         .unwrap();
@@ -743,6 +879,7 @@ mod tests {
             device,
             Overrides {
                 budget: Some(14 * GIB),
+                context: None,
             },
             4 * GIB,
             scratch,

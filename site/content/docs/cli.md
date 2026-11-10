@@ -57,6 +57,7 @@ mrun run [OPTIONS] [MODEL]
 | `--stop <STOP>` | — | Stop sequence (up to 4, each at most 256 bytes) |
 | `--think` | off | Let models that support it think before answering |
 | `--budget-gib <GIB>` | Metal's recommended working set | A lower memory budget (`MRUN_BUDGET_GIB`); a value above the automatic one is refused |
+| `--context <TOKENS>` | The most that fits | Memory for this many tokens of context, `64K` or `65536` (`MRUN_CONTEXT`); not with `--budget-gib` |
 | `--speculation <auto\|off>` | `auto` | Speculative decoding, as for `serve` |
 | `--info` | off | Print the memory budget breakdown after loading and exit |
 
@@ -73,6 +74,7 @@ and `/exit` (or `/quit`, `/bye`) quits. Turns reuse the prefix cache.
 | `--queue <N>` | `MRUN_QUEUE` | 16 | Requests that may wait while one runs. At least 1 |
 | `--queue-wait-s <S>` | `MRUN_QUEUE_WAIT_S` | 240 | Seconds a non-streaming request may wait; one whose estimated wait is longer is refused at once. Streaming requests never time out in the queue. At least 1 |
 | `--budget-gib <GIB>` | `MRUN_BUDGET_GIB` | Metal's recommended working set | A lower memory budget; a value above the automatic one is refused (see [Memory](@/docs/memory.md#tuning)) |
+| `--context <TOKENS>` | `MRUN_CONTEXT` | The most that fits | The budget this many tokens of context need, `64K` or `65536`; refused with E042 when it does not fit; not with `--budget-gib` ([Memory](@/docs/memory.md#context)) |
 | `--no-cache` | `MRUN_NO_CACHE` | off | Disable prefix reuse across requests |
 | `--speculation <auto\|off>` | `MRUN_SPECULATION` | `auto` | Speculative decoding: drafts from the prompt, keeps only what plain decoding would produce, while it is faster ([How it works](@/docs/how-it-works.md#speculative-decoding)) |
 | `--reject-tool-images` | `MRUN_REJECT_TOOL_IMAGES` | off | Refuse images inside tool results instead of omitting them |
@@ -115,7 +117,7 @@ refused with E040 before anything is pulled or started. See [Clients](@/docs/cli
 | `mrun logs` | `-f, --follow` keeps printing new lines; `-n, --lines <N>` lines from the end (50) |
 | `mrun cache clear` | — |
 | `mrun pull <MODEL>` | `MODEL` is an alias or `org/name[@revision]`. `-y, --yes` downloads even when the model does not fit. `--json` prints one JSON line per event (`plan`, `progress`, `done`, `error`; `confirm` without `--yes`). `--dry-run` prints the plan (with `--json`: one `plan` event with size, `family` and fit) and exits 0 without downloading |
-| `mrun ls` | `--json`, with each model's `fit` (`fits`, `tight`, `wont_fit`), `verdict` and `recommended`; `--budget-gib` shows the verdicts for a smaller budget; `--port <PORT>` the server whose model is marked `serving` (8484, `MRUN_PORT`) |
+| `mrun ls` | `--json`, with each model's `fit` (`fits`, `tight`, `wont_fit`), `verdict` and `recommended`; `--budget-gib` shows the verdicts for a smaller budget; `--context <TOKENS>` the memory each model needs for that context (rows carry `memory: {fixed, per_token}` and `budget`); `--port <PORT>` the server whose model is marked `serving` (8484, `MRUN_PORT`) |
 | `mrun show <MODEL>`, `mrun verify <MODEL>` | `MODEL` is an alias or `org/name[@revision]` of a pulled model |
 | `mrun rm <MODEL>` | `-y, --yes` removes without asking. Removing the model the running server serves needs its own confirmation. The Hugging Face cache is not touched |
 | `mrun bench` | `--suite`, `--trace`, `--system`, `--compare`, `--reps`, `--out`; see [Benchmarks](@/docs/benchmarks.md) |
@@ -176,6 +178,7 @@ error[E031]: model 'qwen3.7' not found
 | E034 | 3 | The architecture or quantization mode is not supported, or the chat template does not render the family's tool-call syntax |
 | E040 | 4 | The model does not fit this Mac's memory budget, no alias fits, or its context is below the client's minimum (names the budget needed) |
 | E041 | 4 | Other apps or VMs hold the memory the model needs right now; names the largest and a smaller model that fits ([Memory](@/docs/memory.md#other-apps-and-vms)) |
+| E042 | 4 | The requested `--context` does not fit the budget or the model; names the memory it needs and the largest context that fits |
 | E050 | 6 | Network or download failure |
 | E051 | 6 | A gated model needs a Hugging Face token |
 | E052 | 6 | Not enough disk space for the download |

@@ -31,7 +31,7 @@
         <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
         <a class="button ghost" href="{{ config.extra.repo }}" rel="noopener">Star on GitHub</a>
       </div>
-      <p class="status-pill"><span class="dot" aria-hidden="true"></span>0.3 · <code>brew install hupe1980/tap/mrun</code></p>
+      <p class="status-pill"><span class="dot" aria-hidden="true"></span>0.4 · <code>brew install hupe1980/tap/mrun</code></p>
     </div>
     <figure class="terminal" aria-label="Example terminal session">
       <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -62,7 +62,7 @@
       </article>
       <article class="card">
         <h3>Predictable memory</h3>
-        <p>Weights, sequence state, cache and scratch are budgeted at startup against unified memory. Requests that cannot fit are refused up front with the numbers. Under memory pressure, mrun sheds cache first.</p>
+        <p>Weights, sequence state, cache and scratch are budgeted at startup against unified memory, or set by the context you need (<code>--context 64K</code>). Requests that cannot fit are refused up front with the numbers. Under memory pressure, mrun sheds cache first.</p>
       </article>
       <article class="card">
         <h3>Fast interruption</h3>

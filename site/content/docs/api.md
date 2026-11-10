@@ -125,7 +125,8 @@ the loop guard off, for benchmarks.
 ## mrun status
 
 `GET /mrun/status` returns the model, the memory budget (`budget`, `weights`, `scratch`,
-`kv_capacity_tokens`, `kv_bytes_per_token`), the queue, the last miss report (`last`) and a `cache`
+`kv_capacity_tokens`, `kv_bytes_per_token`, `binding`: what sets it, `working set`, `physical`,
+`available memory`, `--budget-gib` or `context`), the queue, the last miss report (`last`) and a `cache`
 object:
 
 | Field | Meaning |

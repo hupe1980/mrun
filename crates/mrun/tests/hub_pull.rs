@@ -1013,9 +1013,9 @@ async fn a_part_downloads_only_its_layers_and_a_pull_completes_it() {
     let rows = pulled_rows(&ctx);
     assert_eq!(rows[0].part, Some([1, 2]));
     assert!(
-        ls::render(&rows, "qwen3.6").contains("layers 2–2 · for pools"),
+        ls::render(&rows, "qwen3.6", None).contains("layers 2–2 · for pools"),
         "{}",
-        ls::render(&rows, "qwen3.6")
+        ls::render(&rows, "qwen3.6", None)
     );
 
     // The whole model: only the missing shard comes down, and the manifest is whole.

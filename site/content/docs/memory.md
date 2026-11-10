@@ -117,8 +117,20 @@ chunk, every 256 generated tokens, and after moves and evictions.
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `--budget-gib` / `MRUN_BUDGET_GIB` | `min(working set, physical − 2 GiB, available − margin)` | A smaller budget; a value above the automatic budget is refused |
+| `--context` / `MRUN_CONTEXT` | the most that fits | The budget this many tokens need (`64K`); the rest stays free for other apps |
 
 There is no reserve or memory-fraction setting, and no way to exceed the recommended working set.
+
+### Context
+
+`mrun serve --context 64K` sets the budget to what 64K tokens need: the weights, scratch, the
+linear-attention state with its checkpoints, and the attention state for 64K tokens. The server
+then holds exactly 64K tokens of context. Attention state still grows as conversations do, so
+the setting caps memory rather than reserving it. A context that does not fit is refused before
+loading (E042), with the largest one that does; mrun never loads less than you asked for.
+
+`mrun ls --context 64K` shows what each model needs for it, and Models in the window offers the
+same choice per model with the memory it uses.
 
 ## Under pressure
 

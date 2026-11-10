@@ -44,9 +44,25 @@ impl OpenModel {
     }
 }
 
-/// Budget overrides from `--budget-gib` (bytes; D048: it lowers the budget only).
-pub fn overrides(budget: Option<u64>) -> Overrides {
-    Overrides { budget }
+/// Budget overrides from `--budget-gib` (bytes; D048: it lowers the budget only) or `--context`
+/// (tokens; 027: the budget those need).
+pub fn overrides(budget: Option<u64>, context: Option<u32>) -> Overrides {
+    Overrides { budget, context }
+}
+
+/// `--context`: tokens, with `K` for 1,024 (`65536`, `64K`, `64k`).
+pub fn parse_tokens(text: &str) -> Result<u32, String> {
+    let text = text.trim();
+    let (digits, unit) = match text.strip_suffix(['K', 'k']) {
+        Some(digits) => (digits, 1024),
+        None => (text, 1),
+    };
+    digits
+        .parse::<u32>()
+        .ok()
+        .and_then(|n| n.checked_mul(unit))
+        .filter(|&n| n > 0)
+        .ok_or_else(|| format!("'{text}' is not a number of tokens (65536 or 64K)"))
 }
 
 /// `--budget-gib`: a positive number of GiB, fractions allowed (`10.5`), in bytes.
@@ -167,11 +183,52 @@ fn safetensors_bytes(dir: &std::path::Path) -> u64 {
 
 /// D062: `serve`, `run` and `launch` refuse (E041) before loading weights when other processes
 /// hold the memory the model needs for the default floor of context.
-pub fn preflight(model: &OpenModel) -> Result<(), CliError> {
-    match hub::device_memory() {
-        Some(device) => hub::check_available(device, &model.name, model.weights, &model.info),
-        None => Ok(()),
+pub fn preflight(model: &OpenModel, context: Option<u32>) -> Result<(), CliError> {
+    let Some(device) = hub::device_memory() else {
+        return Ok(());
+    };
+    if let Some(context) = context {
+        check_context(device, &model.name, model.weights, &model.info, context)?;
     }
+    hub::check_available(device, &model.name, model.weights, &model.info)
+}
+
+/// Refuses (E042) a context outside 4,096 to the model's maximum, or one whose estimated need
+/// exceeds the budget, before any weight is read. The engine checks again with its measured
+/// scratch.
+fn check_context(
+    device: mrun_engine::budget::DeviceMemory,
+    name: &str,
+    weights: u64,
+    info: &mrun_engine::ModelInfo,
+    context: u32,
+) -> Result<(), CliError> {
+    use mrun_engine::budget::{self, INITIAL_STATE_TOKENS};
+    let max = info.max_position;
+    if context < INITIAL_STATE_TOKENS as u32 || context > max {
+        return Err(CliError::new(
+            Code::ContextTooLarge,
+            format!(
+                "a context of {context} tokens is outside {INITIAL_STATE_TOKENS} to {name}'s {max}"
+            ),
+        ));
+    }
+    let needed = hub::budget_needed(context, weights, info);
+    let Ok(plan) = budget::plan(device, Overrides::default()) else {
+        return Ok(());
+    };
+    if needed <= plan.budget {
+        return Ok(());
+    }
+    let fits = hub::fit(device, weights, info).max_context;
+    Err(CliError::new(
+        Code::ContextTooLarge,
+        format!(
+            "{context} tokens of context for {name} need {}, more than the budget of {}; up to {fits} tokens fit",
+            budget::gib(needed),
+            budget::gib(plan.budget)
+        ),
+    ))
 }
 
 /// `temperature`, `top_p`, `top_k` and `min_p` from `generation_config.json`.
@@ -225,6 +282,10 @@ pub fn engine_factory(
                 NuvecLoadError::Model(LoadError::UnsupportedArchitecture { .. }) => {
                     Code::UnsupportedArchitecture
                 }
+                NuvecLoadError::Budget(
+                    mrun_engine::budget::BudgetError::ContextTooLarge { .. }
+                    | mrun_engine::budget::BudgetError::ContextOutOfRange { .. },
+                ) => Code::ContextTooLarge,
                 NuvecLoadError::Budget(_) => Code::DoesNotFit,
                 _ => Code::Internal,
             };
@@ -234,5 +295,57 @@ pub fn engine_factory(
             };
             CliError::new(code, message).to_string()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mrun_engine::budget::DeviceMemory;
+
+    #[test]
+    fn tokens_take_k_for_1024() {
+        assert_eq!(parse_tokens("65536"), Ok(65_536));
+        assert_eq!(parse_tokens("64K"), Ok(65_536));
+        assert_eq!(parse_tokens(" 64k "), Ok(65_536));
+        for bad in ["", "0", "-5", "64M", "1.5K", "99999999K"] {
+            assert!(parse_tokens(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_context_that_does_not_fit_is_refused_with_its_numbers() {
+        let device = DeviceMemory {
+            physical: 48 * GIB,
+            recommended_working_set: 37 * GIB,
+            available: None,
+            estimated: false,
+        };
+        // 18 GiB of weights, 20 KiB per token (qwen3.6's shape), 262,144 positions.
+        let info = hub::model_info("qwen3_5_moe", 20 * 1024, 64 << 20, 262_144);
+        let weights = 18 * GIB;
+        let fits = hub::fit(device, weights, &info).max_context;
+        assert!(fits > 65_536);
+        assert_eq!(check_context(device, "m", weights, &info, 65_536), Ok(()));
+        let short = DeviceMemory {
+            physical: 24 * GIB,
+            recommended_working_set: 20 * GIB,
+            ..device
+        };
+        let error = check_context(short, "m", weights, &info, 200_000).unwrap_err();
+        assert_eq!(error.code, Code::ContextTooLarge);
+        assert!(
+            error
+                .message
+                .starts_with("200000 tokens of context for m need ")
+                && error.message.contains("tokens fit"),
+            "{}",
+            error.message
+        );
+        let error = check_context(device, "m", weights, &info, 1_000).unwrap_err();
+        assert_eq!(
+            error.message,
+            "a context of 1000 tokens is outside 4096 to m's 262144"
+        );
     }
 }

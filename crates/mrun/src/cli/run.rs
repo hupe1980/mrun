@@ -57,6 +57,10 @@ pub struct RunArgs {
     /// at most physical memory − 2 GiB]; it cannot raise it.
     #[arg(long, env = "MRUN_BUDGET_GIB", value_parser = crate::cli::model::parse_budget_gib)]
     pub budget_gib: Option<u64>,
+    /// Memory for this many tokens of context (`64K`), as for `serve`.
+    #[arg(long, env = "MRUN_CONTEXT", value_parser = crate::cli::model::parse_tokens,
+        conflicts_with = "budget_gib")]
+    pub context: Option<u32>,
     /// Speculative decoding (006): `auto` drafts from the prompt and keeps only what plain
     /// decoding would produce, while that is faster; `off` decodes one token per pass.
     #[arg(long, env = "MRUN_SPECULATION", value_enum, default_value_t = Speculation::Auto)]
@@ -141,7 +145,7 @@ pub fn run(args: RunArgs) -> u8 {
         eprintln!("error: {error}");
         return Exit::Usage as u8;
     }
-    if let Err(error) = model::preflight(&model) {
+    if let Err(error) = model::preflight(&model, args.context) {
         return error.report();
     }
     let handle = match spawn(&model, &args) {
@@ -162,7 +166,7 @@ pub fn run(args: RunArgs) -> u8 {
 
 #[cfg(feature = "engine")]
 fn spawn(model: &OpenModel, args: &RunArgs) -> Result<EngineHandle, String> {
-    let overrides = model::overrides(args.budget_gib);
+    let overrides = model::overrides(args.budget_gib, args.context);
     crate::cli::info(&format!("loading {} …", model.name));
     let handle = EngineHandle::spawn(
         model::engine_factory(model, overrides),

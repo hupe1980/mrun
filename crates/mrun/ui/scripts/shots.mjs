@@ -74,7 +74,7 @@ const server = createServer(async (req, res) => {
   if (path === "/app/models") return json(res, data.models);
   if (path === "/app/agents") return json(res, data.agents);
   if (path === "/app/chats") return json(res, []);
-  if (path === "/app/config") return json(res, { sources: {} });
+  if (path === "/app/config") return json(res, data.configView);
   if (path.startsWith("/v1/models/")) return json(res, data.modelInfo);
   if (path === "/app/plan") return json(res, data.plan);
   if (path === "/app/apps") return json(res, data.apps);
@@ -175,6 +175,8 @@ try {
     await page.keyboard.press(",");
     await page.keyboard.up("Meta");
     await shot("9-settings");
+    await page.evaluate(() => [...document.querySelectorAll("[role=tab]")].find((t) => t.textContent?.includes("Server"))?.click());
+    await shot("9-settings-server");
     await page.keyboard.press("Escape");
     await page.keyboard.down("Meta");
     await page.keyboard.press("k");

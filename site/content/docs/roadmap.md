@@ -1,6 +1,6 @@
 +++
 title = "Roadmap"
-description = "What is planned for mrun 0.4 and 0.5."
+description = "What is planned for mrun 0.5 and 0.6."
 weight = 110
 +++
 
@@ -9,7 +9,7 @@ welcome as
 [hardware reports](https://github.com/hupe1980/mrun/blob/main/CONTRIBUTING.md#hardware-reports)
 and never gate a release.
 
-## 0.4: close the gap
+## 0.5: close the gap
 
 | Item | What |
 | --- | --- |
@@ -22,7 +22,7 @@ and never gate a release.
 | `qwen3.8` | Qwen3.8-27B as the quality option on Macs with 32 GB or more |
 | Small model | Granite-4.2-8B, LFM2.5-24B-A2B and gpt-oss-20b against the `qwen3.5` preview; a loop guard for near-repeating reasoning |
 
-## 0.5: bigger Macs, more clients
+## 0.6: bigger Macs, more clients
 
 | Item | What |
 | --- | --- |

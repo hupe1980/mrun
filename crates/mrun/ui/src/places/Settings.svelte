@@ -7,18 +7,23 @@
   import { host } from "../lib/api";
   import { live } from "../lib/live.svelte";
   import { jobs } from "../lib/jobs.svelte";
+  import type { ConfigView } from "../lib/types";
 
   let { onclose }: { onclose: () => void } = $props();
 
   type Pane = "general" | "server" | "about";
   let pane = $state<Pane>("general");
-  let config = $state<any>(null);
+  let config = $state<ConfigView | null>(null);
+  let configFailed = $state(false);
   let deleted = $state<number | null>(null);
   const prefs = $derived(live.app?.prefs);
 
   onMount(async () => {
     void live.refreshCloud();
-    config = await host.config().catch(() => null);
+    config = await host.config().catch(() => {
+      configFailed = true;
+      return null;
+    });
   });
 
   // The RunPod key (024 US3): where it comes from; added and removed here, kept in the Keychain.
@@ -53,14 +58,39 @@
     deleted = (await host.deleteAllChats().catch(() => ({ deleted: 0 }))).deleted;
   }
 
-  const serverRows = $derived.by(() => {
-    const settings: any[] = config?.settings ?? config?.serve ?? [];
-    const want = ["port", "model", "budget-gib", "max-output", "queue"];
-    if (Array.isArray(settings)) return settings.filter((s: any) => want.includes(s.name ?? s.key));
-    return Object.entries(settings)
-      .filter(([k]) => want.includes(k))
-      .map(([name, v]: [string, any]) => ({ name, value: v?.value ?? v, source: v?.source ?? "" }));
-  });
+  // The settings of `mrun serve`, as `mrun config show` reports them (`serve.` keys are
+  // `[serve]` in config.toml); `null` means mrun picks the value itself.
+  const SERVER: [string, string][] = [
+    ["port", "Port"],
+    ["model", "Model"],
+    ["budget-gib", "Memory budget (GiB)"],
+    ["serve.max-output", "Output limit"],
+    ["serve.queue", "Queue"],
+    ["serve.queue-wait-s", "Queue wait (s)"],
+    ["serve.no-cache", "Prefix cache"],
+    ["serve.speculation", "Speculative decoding"],
+  ];
+  const serverRows = $derived(
+    SERVER.flatMap(([key, label]) => {
+      const s = config?.settings.find((s) => s.key === key);
+      if (!s) return [];
+      // `no-cache` unset or false: the cache is on.
+      const value = key === "serve.no-cache" ? (s.value === true ? "off" : "on") : shown(s.value);
+      return [{ key, label, value, source: sourceWords(s.source) }];
+    }),
+  );
+
+  function shown(value: unknown): string {
+    if (value === null || value === undefined) return "automatic";
+    if (typeof value === "boolean") return value ? "yes" : "no";
+    return String(value);
+  }
+
+  function sourceWords(source: string): string {
+    if (source.startsWith("file:")) return `config.toml, line ${source.slice(5)}`;
+    if (source.startsWith("env:")) return source.slice(4);
+    return source;
+  }
 </script>
 
 <div class="scrim" role="presentation" onclick={onclose}></div>
@@ -108,10 +138,10 @@
       </p>
     {:else if pane === "server"}
       <section class="form">
-        {#each serverRows as r (r.name)}
-          <div class="row"><span>{r.name}<small>{r.source || "default"}</small></span><code>{String(r.value ?? "—")}</code></div>
+        {#each serverRows as r (r.key)}
+          <div class="row"><span>{r.label}<small>{r.source}</small></span><code>{r.value}</code></div>
         {:else}
-          <p class="muted">Start the server to see its settings.</p>
+          <p class="muted">{configFailed ? "mrun could not read its settings (mrun config show)." : "Reading the settings…"}</p>
         {/each}
       </section>
       <div class="buttons">
@@ -119,7 +149,7 @@
         <button class="btn" onclick={() => host.open("log")}>Show Server Log</button>
         <button class="btn primary" disabled={!live.app?.server.running || jobs.running("use", live.status?.model?.id ?? "")} onclick={() => live.status?.model && jobs.run("use", live.status.model.id, true)}>Restart Server</button>
       </div>
-      <p class="muted small">mrun reads settings from defaults, then ~/.mrun/config.toml, then MRUN_* variables, then flags. The UI shows them; it never writes the file.</p>
+      <p class="muted small">mrun reads settings from defaults, then {config?.path ?? "~/.mrun/config.toml"}{config && !config.exists ? " (not created yet)" : ""}, then MRUN_* variables, then flags. The window shows them; it never writes the file.</p>
     {:else}
       <section class="about">
         <div class="mark" aria-hidden="true"><Symbol name="bolt" size={26} weight={1.8} /></div>

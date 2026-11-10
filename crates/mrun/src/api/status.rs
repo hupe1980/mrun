@@ -552,6 +552,7 @@ pub async fn status(State(state): State<ServerState>) -> Response {
             "scratch": budget.scratch,
             "kv_capacity_tokens": budget.kv_capacity_tokens,
             "kv_bytes_per_token": info.kv_bytes_per_token,
+            "binding": budget.binding.label(),
         });
         body["queued"] = loaded.handle.queue().waiting().into();
         let total = |c: &std::sync::atomic::AtomicU64| c.load(std::sync::atomic::Ordering::Relaxed);

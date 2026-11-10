@@ -216,6 +216,8 @@ pub enum Binding {
     Available,
     /// `--budget-gib` lowered it.
     Flag,
+    /// `--context` set it to what that many tokens need (027).
+    Context,
 }
 
 impl Binding {
@@ -225,6 +227,7 @@ impl Binding {
             Self::Physical => "physical",
             Self::Available => "available memory",
             Self::Flag => "--budget-gib",
+            Self::Context => "context",
         }
     }
 }

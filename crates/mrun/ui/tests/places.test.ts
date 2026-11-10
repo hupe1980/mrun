@@ -1,7 +1,7 @@
 import { flushSync } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { live } from "../src/lib/live.svelte";
-import type { CloudListing, ModelEntry, Status } from "../src/lib/types";
+import type { CloudListing, ConfigView, ModelEntry, Status } from "../src/lib/types";
 import CloudSheet from "../src/components/CloudSheet.svelte";
 import Agents from "../src/places/Agents.svelte";
 import Models from "../src/places/Models.svelte";
@@ -11,6 +11,8 @@ import PlanSheet from "../src/components/PlanSheet.svelte";
 import Sessions from "../src/places/Sessions.svelte";
 import Settings from "../src/places/Settings.svelte";
 import { render, settle, violations } from "./dom";
+import { memoryAt } from "../src/lib/context";
+import { bytes } from "../src/lib/format";
 
 const gib = 1024 ** 3;
 const status: Status = {
@@ -150,6 +152,52 @@ describe("Models (US3)", () => {
     expect(target.querySelector("h1")).toBeNull();
   });
 
+  it("picks a context per model and shows what it uses, as mrun ls --context (027)", async () => {
+    live.app = { ui_version: "0.1.0", server: { port: 8484, running: true, started_by: "ui" }, prefs: { keep_chats: null, menu_bar: true, open_at_login: false, server_port: 8484 }, jobs: [] };
+    live.status = { ...status, model: { ...status.model!, id: "other" } };
+    const memory = { fixed: 19 * gib, per_token: 20 * 1024 };
+    live.models = [model({ pulled: true, max_context: 217_088, memory, budget: 32 * gib })];
+    const sent: any[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/app/actions")) sent.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify(String(url).includes("/app/actions") ? { job: { id: "1", kind: "use", target: "", state: "done", progress: null, error: null } } : []), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const { target } = render(Models, { onError: () => {} });
+    const select = target.querySelector<HTMLSelectElement>("select[aria-label='Context for qwen3.6']")!;
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      "Context: automatic, up to 212K",
+      "Context: 16K tokens",
+      "Context: 32K tokens",
+      "Context: 64K tokens",
+      "Context: 128K tokens",
+    ]);
+    select.value = "65536";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+    // SC-003: the line is the cost model of the `ls --json` row, fixed + tokens × per_token.
+    expect(target.querySelector(".context")?.textContent).toContain(`uses ${bytes(memoryAt({ memory }, 65536)!)} of ${bytes(32 * gib)}`);
+    [...target.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use")!.click();
+    await settle();
+    expect(sent.at(-1)).toMatchObject({ kind: "use", target: "qwen3.6|65536" });
+    expect(await violations()).toEqual([]);
+  });
+
+  it("offers Apply for the model in use only when its context changes (027)", () => {
+    live.app = { ui_version: "0.1.0", server: { port: 8484, running: true, started_by: "ui" }, prefs: { keep_chats: null, menu_bar: true, open_at_login: false, server_port: 8484 }, jobs: [] };
+    live.status = { ...status, budget: { ...status.budget!, kv_capacity_tokens: 65536, binding: "context" } };
+    live.reachable = true;
+    live.models = [model({ pulled: true, serving: true, max_context: 217_088, memory: { fixed: 19 * gib, per_token: 20 * 1024 }, budget: 32 * gib })];
+    const { target } = render(Models, { onError: () => {} });
+    const select = target.querySelector<HTMLSelectElement>("select")!;
+    expect(select.value).toBe("65536");
+    const apply = () => [...target.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Apply");
+    expect(apply()).toBeUndefined();
+    select.value = "32768";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    flushSync();
+    expect(apply()).toBeDefined();
+  });
+
   it("shows skeleton rows before the first listing (019 FR-017)", async () => {
     live.models = null;
     const { target } = render(Models, { onError: () => {} });
@@ -194,6 +242,43 @@ describe("Settings (019 FR-013)", () => {
     const boxes = [...target.querySelectorAll<HTMLInputElement>("input[type=checkbox]")];
     expect(boxes.length).toBeGreaterThanOrEqual(3);
     expect(boxes.every((b) => b.getAttribute("role") === "switch")).toBe(true);
+    expect(await violations()).toEqual([]);
+  });
+
+  it("switches to Server and shows mrun config show's settings with their sources", async () => {
+    const setting = (key: string, value: unknown, source = "default") => ({ key, value, source });
+    const configView: ConfigView = {
+      path: "/Users/you/.mrun/config.toml",
+      exists: true,
+      settings: [
+        setting("port", 8484),
+        setting("model", "qwen3.6", "file:2"),
+        setting("budget-gib", null),
+        setting("serve.queue", 4, "file:5"),
+        setting("serve.no-cache", null),
+        setting("serve.speculation", "auto"),
+        setting("run.max-tokens", 2048),
+      ],
+    };
+    vi.stubGlobal("fetch", async (url: string) =>
+      new Response(JSON.stringify(String(url).includes("/app/config") ? configView : null), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const { target } = render(Settings, { onclose: () => {} });
+    await new Promise((r) => setTimeout(r, 0));
+    const tab = (name: string) => [...target.querySelectorAll<HTMLButtonElement>("[role=tab]")].find((t) => t.textContent?.includes(name))!;
+    tab("Server").click();
+    flushSync();
+    expect(tab("Server").getAttribute("aria-selected")).toBe("true");
+    const rows = [...target.querySelectorAll(".form .row")].map((r) => r.textContent?.replace(/\s+/g, " ").trim());
+    expect(rows).toContain("Modelconfig.toml, line 2qwen3.6");
+    expect(rows).toContain("Queueconfig.toml, line 54");
+    expect(rows).toContain("Memory budget (GiB)defaultautomatic");
+    expect(rows).toContain("Speculative decodingdefaultauto");
+    expect(rows).toContain("Prefix cachedefaulton");
+    expect(target.textContent).not.toContain("Open mrun at login");
+    tab("General").click();
+    flushSync();
+    expect(target.textContent).toContain("Open mrun at login");
     expect(await violations()).toEqual([]);
   });
 });

@@ -97,7 +97,9 @@ layers and link, the model's layers the circle. See [Mac pool](@/docs/pool.md).
 The aliases and pulled models, each with the verdict `mrun ls` prints: *Fits*, *Tight* (less
 context than coding agents need) or *Won't fit*. One model is marked **Best for this Mac**, the
 served one **In Use**. Download can be cancelled and resumes later. Use restarts the server with
-that model. A model that won't fit is never loaded.
+that model. A model that won't fit is never loaded. Each model that fits offers a context
+(automatic, or 16K up to what fits) with the memory it uses; Use serves it with that context, and
+for the model in use Apply restarts it (`mrun serve --context`).
 
 <figure class="screenshot"><a href="../../screenshots/models.png" title="Open full size"><img src="../../screenshots/models.png" alt="Models: the fit verdict for this Mac, the model in use and the best one" width="1100" height="720" loading="lazy" decoding="async"></a><figcaption>Models: the fit verdict for this Mac, the model in use and the best one</figcaption></figure>
 

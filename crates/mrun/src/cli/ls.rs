@@ -23,6 +23,10 @@ pub struct LsArgs {
     /// Fit as with this lower memory budget (GiB), as 'serve --budget-gib' would load.
     #[arg(long, env = "MRUN_BUDGET_GIB", value_parser = crate::cli::model::parse_budget_gib)]
     pub budget_gib: Option<u64>,
+    /// Show the memory each model needs for this many tokens of context (`64K`), as
+    /// 'serve --context' would load it.
+    #[arg(long, value_parser = crate::cli::model::parse_tokens, conflicts_with = "budget_gib")]
+    pub context: Option<u32>,
     /// Port of the server whose model is marked as serving.
     #[arg(long, env = "MRUN_PORT", default_value_t = crate::cli::server::default_port())]
     pub port: u16,
@@ -66,6 +70,11 @@ pub struct Row {
     /// A part (026): only layers `[first, end)` (0-based), for pool stages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub part: Option<[usize; 2]>,
+    /// What a context costs (027): `fixed + tokens × per_token` bytes; `None` when memory is
+    /// unknown.
+    pub memory: Option<hub::Cost>,
+    /// The budget those bytes count against.
+    pub budget: Option<u64>,
 }
 
 pub fn rows(ctx: &Ctx) -> Vec<Row> {
@@ -96,6 +105,8 @@ pub fn rows(ctx: &Ctx) -> Vec<Row> {
             serving: false,
             limited_by_available,
             part: None,
+            memory: fit.map(|fit| fit.memory),
+            budget: fit.map(|fit| fit.budget),
         }
     };
     let pulled = hub::manifests(&ctx.paths);
@@ -173,10 +184,36 @@ fn served_model(port: u16) -> Option<String> {
     body["data"][0]["id"].as_str().map(str::to_string)
 }
 
-/// The table, with a hint when nothing is pulled.
-pub fn render(rows: &[Row], default: &str) -> String {
+/// `65536` as `64K`; other counts as they are.
+fn tokens_word(tokens: u32) -> String {
+    if tokens.is_multiple_of(1024) {
+        format!("{}K", tokens / 1024)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// The memory a row needs for `context` tokens, or that it does not fit (027).
+fn at_context(row: &Row, context: u32) -> String {
+    match (row.memory, row.max_context) {
+        (Some(memory), Some(max)) if context <= max => hub::human_bytes(memory.at(context)),
+        (Some(_), Some(_)) => "won't fit".into(),
+        _ => "?".into(),
+    }
+}
+
+/// The table, with a hint when nothing is pulled; with `context`, the memory each model needs for
+/// it instead of the maximum context.
+pub fn render(rows: &[Row], default: &str, context: Option<u32>) -> String {
+    let at = context.map(|tokens| format!("AT {}", tokens_word(tokens)));
     let header = [
-        "ALIAS", "REPO", "FAMILY", "SIZE", "FITS", "MAX CTX", "STATUS",
+        "ALIAS",
+        "REPO",
+        "FAMILY",
+        "SIZE",
+        "FITS",
+        at.as_deref().unwrap_or("MAX CTX"),
+        "STATUS",
     ];
     let cells: Vec<[String; 7]> = rows
         .iter()
@@ -187,9 +224,13 @@ pub fn render(rows: &[Row], default: &str) -> String {
                 row.family.clone(),
                 hub::human_bytes(row.size),
                 row.fit.map_or("?", FitClass::word).to_string(),
-                row.max_context
-                    .filter(|tokens| *tokens > 0)
-                    .map_or_else(|| "-".into(), |tokens| tokens.to_string()),
+                match context {
+                    Some(tokens) => at_context(row, tokens),
+                    None => row
+                        .max_context
+                        .filter(|tokens| *tokens > 0)
+                        .map_or_else(|| "-".into(), |tokens| tokens.to_string()),
+                },
                 match (row.part, row.preview) {
                     (Some([first, end]), _) => {
                         format!("{}, layers {}–{end} · for pools", row.status, first + 1)
@@ -270,7 +311,10 @@ pub fn run(args: LsArgs) -> u8 {
             serde_json::to_string_pretty(&rows).unwrap_or_default()
         );
     } else {
-        print!("{}", render(&rows, aliases::default_alias(ctx.device).name));
+        print!(
+            "{}",
+            render(&rows, aliases::default_alias(ctx.device).name, args.context)
+        );
         if let Some(note) = memory_note(ctx.device) {
             println!("\n{note}");
         }
@@ -288,6 +332,39 @@ mod tests {
     struct Wrap {
         #[command(flatten)]
         ls: LsArgs,
+    }
+
+    #[test]
+    fn a_context_shows_what_each_model_needs() {
+        use clap::Parser;
+        assert!(Wrap::try_parse_from(["mrun", "--context", "64K", "--budget-gib", "10"]).is_err());
+        let root = tempfile::tempdir().unwrap();
+        let mut ctx = test_support::ctx(root.path(), "http://unused");
+        ctx.device = Some(DeviceMemory {
+            physical: 48 * GIB,
+            recommended_working_set: 37 * GIB,
+            available: None,
+            estimated: false,
+        });
+        let rows = rows(&ctx);
+        let row = rows.iter().find(|r| r.name == "qwen3.6").unwrap();
+        let (memory, max, budget) = (
+            row.memory.unwrap(),
+            row.max_context.unwrap(),
+            row.budget.unwrap(),
+        );
+        // The cost model is the fit's: the maximum context fits, one more step would not.
+        assert!(memory.at(max) <= budget);
+        let text = render(&rows, "qwen3.6", Some(65_536));
+        assert!(text.contains("AT 64K"), "{text}");
+        assert!(
+            text.contains(&hub::human_bytes(memory.at(65_536))),
+            "{text}"
+        );
+        assert!(render(&rows, "qwen3.6", Some(max + 1)).contains("won't fit"));
+        let json = serde_json::to_value(row).unwrap();
+        assert_eq!(json["memory"]["per_token"], memory.per_token);
+        assert_eq!(json["budget"], budget);
     }
 
     #[test]
@@ -341,7 +418,7 @@ mod tests {
     fn lists_fit_marks_corrupt_models_and_offers_aliases() {
         let root = tempfile::tempdir().unwrap();
         let ctx = test_support::ctx(root.path(), "http://unused");
-        let empty = render(&rows(&ctx), "qwen3.6");
+        let empty = render(&rows(&ctx), "qwen3.6", None);
         assert!(
             empty.ends_with("\nno models yet; run 'mrun pull qwen3.6'\n"),
             "{empty}"
@@ -359,7 +436,7 @@ mod tests {
         fs::write(broken.dir(&ctx.paths).join("model.safetensors"), b"ww").unwrap();
 
         let rows = rows(&ctx);
-        let text = render(&rows, "qwen3.6");
+        let text = render(&rows, "qwen3.6", None);
         let lines: Vec<String> = text.lines().map(columns).collect();
         assert_eq!(
             lines,
@@ -415,7 +492,7 @@ mod tests {
         let rows = super::rows(&guessed);
         assert!(rows.iter().all(|row| row.estimated));
         assert_eq!(serde_json::to_value(&rows).unwrap()[0]["estimated"], true);
-        assert!(render(&rows, "qwen3.6").contains("\nfit is estimated: no Metal device"));
+        assert!(render(&rows, "qwen3.6", None).contains("\nfit is estimated: no Metal device"));
 
         let unknown = Ctx {
             device: None,
