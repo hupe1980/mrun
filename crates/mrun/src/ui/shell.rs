@@ -431,10 +431,12 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
     let open = MenuItem::with_id("open", "Open mrun", true, None);
     let new_chat = MenuItem::with_id("new-chat", "New Chat", true, None);
     let tray_quit = MenuItem::with_id("quit", "Quit mrun", true, None);
+    let tray_stop = MenuItem::with_id("stop", "Stop Serving", false, None);
     let _ = tray_menu.append_items(&[
         &state_item,
         &memory_item,
         &requests_item,
+        &tray_stop,
         &PredefinedMenuItem::separator(),
         &connect,
         &PredefinedMenuItem::separator(),
@@ -546,6 +548,21 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
             window.set_visible(true);
             window.set_focus();
         };
+        // Quitting asks first while a download runs (the page answers through /app/quit, FR-020),
+        // and stops the server this window started.
+        let quit = |target: &tao::event_loop::EventLoopWindowTarget<UserEvent>,
+                    control_flow: &mut ControlFlow| {
+            let pulling = host_for_quit.jobs.list().iter().any(|j| {
+                j.kind == super::actions::Kind::Pull && j.state == super::actions::State::Running
+            });
+            if pulling {
+                show(target);
+                let _ = webview.evaluate_script(&menu_script("quit", None));
+            } else {
+                host_for_quit.stop_own_server();
+                *control_flow = ControlFlow::Exit;
+            }
+        };
         match event {
             Event::NewEvents(StartCause::Init) => {
                 app_menu.init_for_nsapp();
@@ -626,6 +643,7 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
                     .then(|| next_frame.unwrap_or_else(|| Instant::now() + READING_STEP));
                 let glyph = snap.glyph((!reduce_motion).then_some(frame));
                 state_item.set_text(snap.state_line());
+                tray_stop.set_enabled(snap.running);
                 memory_item.set_text(if let Some(price) = &snap.cost_per_hr {
                     format!("On RunPod · {price}")
                 } else if snap.budget > 0 {
@@ -669,19 +687,10 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
                         let _ = webview.evaluate_script(&menu_script("new-chat", None));
                     }
                     "close" => window.set_visible(false),
-                    "quit" => {
-                        let pulling = host_for_quit.jobs.list().iter().any(|j| {
-                            j.kind == super::actions::Kind::Pull
-                                && j.state == super::actions::State::Running
-                        });
-                        if pulling {
-                            // The page asks; it answers through /app/quit (FR-020).
-                            show(target);
-                            let _ = webview.evaluate_script(&menu_script("quit", None));
-                        } else {
-                            *control_flow = ControlFlow::Exit;
-                        }
+                    "stop" => {
+                        let _ = webview.evaluate_script(&menu_script("stop", None));
                     }
+                    "quit" => quit(target, control_flow),
                     other => {
                         if let Some(id) = other.strip_prefix("ctx:") {
                             let _ = webview.evaluate_script(&pick_script(Some(id)));
@@ -692,17 +701,23 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
                     }
                 }
             }
-            Event::UserEvent(UserEvent::Quit) => *control_flow = ControlFlow::Exit,
+            Event::UserEvent(UserEvent::Quit) => {
+                host_for_quit.stop_own_server();
+                *control_flow = ControlFlow::Exit;
+            }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
-                // Closing hides: the menu bar item keeps mrun at hand (⌘Q quits).
                 save_at = None;
                 save(&window);
-                window.set_visible(false);
-                if background || tray.is_some() {
+                if tray.is_some() || background {
+                    // The menu bar item keeps mrun at hand; Quit there (or ⌘Q) ends it.
+                    window.set_visible(false);
                     target.set_activation_policy_at_runtime(ActivationPolicy::Accessory);
+                } else {
+                    // Nothing would be left to bring the window back: closing it quits.
+                    quit(target, control_flow);
                 }
             }
             _ => {}

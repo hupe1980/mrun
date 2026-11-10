@@ -54,8 +54,12 @@
 
   async function act(kind: string, m: ModelEntry, on = m.name) {
     let confirm = false;
-    if (kind === "use" && live.app?.server.started_by === "other") {
-      confirm = window.confirm("This server was started from a terminal. Switch it to " + m.name + " anyway?");
+    if ((kind === "use" || kind === "stop") && live.app?.server.started_by === "other") {
+      confirm = window.confirm(
+        kind === "use"
+          ? "This server was started from a terminal. Switch it to " + m.name + " anyway?"
+          : "This model was started in a terminal and your agents may be using it. Eject it anyway?",
+      );
       if (!confirm) return;
     }
     try {
@@ -249,6 +253,7 @@
               </button>
             {:else if m.serving}
               <span class="current"><Symbol name="check" size={13} weight={2} /> In Use</span>
+              <button class="btn" disabled={jobs.running("stop", "")} onclick={() => act("stop", m, "")} title="Free its memory (mrun stop)"><Symbol name="eject" size={13} /> Eject</button>
             {:else if m.part}
               <button class="btn" onclick={() => act("pull", m)}><Symbol name="download" size={13} /> Download the Rest</button>
             {:else if forPool(m)}

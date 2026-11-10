@@ -101,7 +101,7 @@ that model. A model that won't fit is never loaded. Each model that fits offers 
 (automatic, or 16K up to what fits) with the memory it uses; Use serves it with that context, and
 for the model in use Apply restarts it (`mrun serve --context`).
 
-<figure class="screenshot"><a href="../../screenshots/models.png" title="Open full size"><img src="../../screenshots/models.png" alt="Models: the fit verdict for this Mac, the model in use and the best one" width="1100" height="720" loading="lazy" decoding="async"></a><figcaption>Models: the fit verdict for this Mac, the model in use and the best one</figcaption></figure>
+<figure class="screenshot"><a href="../../screenshots/models.png" title="Open full size"><img src="../../screenshots/models.png" alt="Models: the fit verdict for this Mac, a context per model, the model in use with Eject" width="1100" height="720" loading="lazy" decoding="async"></a><figcaption>Models: the fit verdict for this Mac, a context per model, the model in use with Eject</figcaption></figure>
 
 **Add a model**: paste a Hugging Face repo (`org/name`) or its link to see what would be
 downloaded, whether the model is supported and the verdict (`mrun pull <repo> --dry-run`).
@@ -128,7 +128,10 @@ settings for Zed and Crush, as `mrun connect zed` prints them.
 
 Every action in the window is an `mrun` command. The … menu and the context menu of a model,
 chat or agent (or <kbd>⇧F10</kbd>) have **Copy as Command**, for example `mrun pull qwen3.6`.
-Settings › Server shows the server's settings with their sources and opens `config.toml`.
+Settings › Server shows the server's settings with their sources, opens `config.toml` and opens
+the server log in Console, which follows it live (`mrun logs -f` in a terminal).
+
+<figure class="screenshot"><a href="../../screenshots/settings-server.png" title="Open full size"><img src="../../screenshots/settings-server.png" alt="Settings, Server: each setting with where it comes from" width="1100" height="720" loading="lazy" decoding="async"></a><figcaption>Settings › Server: each setting with where it comes from</figcaption></figure>
 
 ## Keyboard
 
@@ -136,7 +139,7 @@ Settings › Server shows the server's settings with their sources and opens `co
 | --- | --- |
 | <kbd>⌘1</kbd>–<kbd>⌘6</kbd> | Now, Chat, Sessions, Pool, Models, Agents |
 | <kbd>⌘K</kbd> | Every action and place by name |
-| <kbd>⌘L</kbd> | Choose a model |
+| <kbd>⌘L</kbd> | Choose a model (<kbd>⏏</kbd> in the toolbar ejects it) |
 | <kbd>⌘N</kbd> | New chat |
 | <kbd>⌘E</kbd> | The chat's system prompt |
 | <kbd>⌘R</kbd> | Regenerate the last reply |
@@ -149,6 +152,13 @@ Settings › Server shows the server's settings with their sources and opens `co
 | <kbd>⌘+</kbd> <kbd>⌘−</kbd> <kbd>⌘0</kbd> | Sessions: zoom in, out, fit the session |
 
 ## On the Mac
+
+The model chip at the top of every place shows what is served and its memory; a click (or
+<kbd>⌘L</kbd>) switches models, and <kbd>⏏</kbd> beside it ejects the model, freeing its memory
+(`mrun stop`). The menu bar menu has **Stop Serving** too.
+
+Closing the window keeps mrun in the menu bar; without the menu bar item, closing quits. Quit
+ejects the model the window started; a server started in a terminal keeps serving its agents.
 
 The window reopens where you left it. While mrun reads a prompt, the menu bar bolt fills from
 the bottom (still with Reduce Motion). Increase Contrast strengthens separators, bars and focus

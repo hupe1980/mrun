@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/mrun-engine", "crates/mrun-runpod", "crates/mrun"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -12,8 +12,8 @@ authors = ["hupe1980"]
 
 [workspace.dependencies]
 # Path plus version: local builds use the path, published crates the version.
-mrun-engine = { path = "crates/mrun-engine", version = "=0.4.0", default-features = false }
-mrun-runpod = { path = "crates/mrun-runpod", version = "=0.4.0" }
+mrun-engine = { path = "crates/mrun-engine", version = "=0.4.1", default-features = false }
+mrun-runpod = { path = "crates/mrun-runpod", version = "=0.4.1" }
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
 minijinja = { version = "3.0.0", features = ["serde", "json", "loop_controls", "preserve_order"] }
 minijinja-contrib = { version = "3.0.0", features = ["pycompat"] }
