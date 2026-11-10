@@ -686,7 +686,12 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
                         show(target);
                         let _ = webview.evaluate_script(&menu_script("new-chat", None));
                     }
-                    "close" => window.set_visible(false),
+                    // ⌘W as the close button: quits, unless mrun was started at login.
+                    "close" if background => window.set_visible(false),
+                    "close" => {
+                        save(&window);
+                        quit(target, control_flow);
+                    }
                     "stop" => {
                         let _ = webview.evaluate_script(&menu_script("stop", None));
                     }
@@ -711,12 +716,12 @@ pub fn run(runtime: tokio::runtime::Runtime, host: Host, url: String, background
             } => {
                 save_at = None;
                 save(&window);
-                if tray.is_some() || background {
-                    // The menu bar item keeps mrun at hand; Quit there (or ⌘Q) ends it.
+                if background {
+                    // Started at login: mrun lives in the menu bar; Quit there ends it.
                     window.set_visible(false);
                     target.set_activation_policy_at_runtime(ActivationPolicy::Accessory);
                 } else {
-                    // Nothing would be left to bring the window back: closing it quits.
+                    // Closing the window quits, and ejects the model this window started.
                     quit(target, control_flow);
                 }
             }

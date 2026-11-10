@@ -2,10 +2,12 @@
   // The window: a glass sidebar with six places, a toolbar with the model and its state, and
   // the privacy line at the bottom (FR-001, FR-019). Keyboard-complete (FR-003): ⌘1–6 places,
   // ⌘K palette, ⌘L models, ⌘, settings; the chat adds its own keys.
+  import { ask } from "./lib/ask.svelte";
   import { onMount } from "svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
   import FirstRun from "./components/FirstRun.svelte";
   import Palette, { type Command } from "./components/Palette.svelte";
+  import Ask from "./components/Ask.svelte";
   import Symbol from "./components/Symbol.svelte";
   import { adoptToken, host } from "./lib/api";
   import { bytes, stateWord } from "./lib/format";
@@ -78,7 +80,7 @@
     let confirm = false;
     if (kind === "stop" && live.app?.server.started_by === "other") {
       // Agents in a terminal may use that server; say so before ejecting it.
-      confirm = window.confirm("This model was started in a terminal and your agents may be using it. Eject it anyway?");
+      confirm = await ask(`Eject ${live.status?.model?.id ?? "the model"}?`, "Eject", { detail: "It was started outside this window; your agents may be using it.", destructive: true });
       if (!confirm) return;
     }
     try {
@@ -94,7 +96,7 @@
     if (detail.item === "new-chat") place = "chat";
     else if (detail.item === "connect" && detail.target) void action("connect", detail.target);
     else if (detail.item === "quit") {
-      if (window.confirm("A download is still running. Quit mrun and stop it? It resumes next time.")) void host.quit();
+      void ask("Quit mrun?", "Quit", { detail: "A download is still running; it resumes next time." }).then((yes) => { if (yes) void host.quit(); });
     }
     else if (detail.item === "settings") settings = true;
     else if (detail.item === "stop") void action("stop");
@@ -228,6 +230,7 @@
   {/if}
   {#if settings}<Settings onclose={() => (settings = false)} />{/if}
   {#if palette}<Palette {commands} query={palette.query} onclose={() => (palette = null)} />{/if}
+  <Ask />
   <ContextMenu />
   {#if toast}
     <div class="toast glass" role="status"><Symbol name="warning" size={14} />{toast}</div>

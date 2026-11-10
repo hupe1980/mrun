@@ -163,7 +163,7 @@ pub async fn start(
     generate.sampling = sampling;
     generate.stop = request.stop.clone();
     generate.hook = hook(&loaded, &request, rendered.reasoning_open).boxed();
-    generate.call_fence = call_fence(&loaded);
+    generate.call_fence = call_fence(&loaded, rendered.reasoning_open);
     generate.turn = request.member.clone();
     let generation = loaded.handle.generate(generate).map_err(|e| match e {
         SubmitError::QueueFull(full) => {
@@ -323,12 +323,15 @@ fn hook(loaded: &Loaded, request: &ChatRequest, reasoning_open: bool) -> Request
     RequestHook::new(request.ignore_eos, constraint, ban, single_call)
 }
 
-/// The tool-call delimiters of the model's syntax, for the loop guard (D052).
-fn call_fence(loaded: &Loaded) -> Option<CallFence> {
+/// The tool-call delimiters of the model's syntax, and its reasoning's, for the loop guard
+/// (D052); `thinking`: the prompt opened the reasoning.
+fn call_fence(loaded: &Loaded, thinking: bool) -> Option<CallFence> {
     let token = |text: &str| loaded.tokenizer.token_id(text);
     Some(CallFence {
         open: token(constrain::OPENER)?,
         close: token(constrain::CLOSER)?,
+        think: token("<think>").zip(token("</think>")),
+        thinking,
     })
 }
 

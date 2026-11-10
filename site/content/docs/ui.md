@@ -157,8 +157,9 @@ The model chip at the top of every place shows what is served and its memory; a 
 <kbd>⌘L</kbd>) switches models, and <kbd>⏏</kbd> beside it ejects the model, freeing its memory
 (`mrun stop`). The menu bar menu has **Stop Serving** too.
 
-Closing the window keeps mrun in the menu bar; without the menu bar item, closing quits. Quit
-ejects the model the window started; a server started in a terminal keeps serving its agents.
+Closing the window quits mrun (as ⌘Q does) and ejects the model the window started; a server
+started in a terminal keeps serving its agents. Opened at login, mrun runs from the menu bar
+until you quit it there.
 
 The window reopens where you left it. While mrun reads a prompt, the menu bar bolt fills from
 the bottom (still with Reduce Motion). Increase Contrast strengthens separators, bars and focus

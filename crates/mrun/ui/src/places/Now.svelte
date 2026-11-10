@@ -2,6 +2,7 @@
   // Now: what mrun is doing, at a glance (US1). The headline is a sentence; the budget is one
   // bar; running work has real progress; every recent request shows how much of its prompt was
   // reused, and why not.
+  import { ask } from "../lib/ask.svelte";
   import BudgetBar from "../components/BudgetBar.svelte";
   import Lane from "../components/Lane.svelte";
   import ReuseRibbon from "../components/ReuseRibbon.svelte";
@@ -33,7 +34,7 @@
   const starting = $derived(pod ? undefined : jobs.active("cloud-up"));
   const autoStop = $derived(pod ? stopsIn(pod.idle_s, pod.idle_stop_s) : null);
   async function stopPod() {
-    if (!window.confirm("Stop the pod? Billing ends; the model loads again next time.")) return;
+    if (!(await ask("Stop the pod?", "Stop Pod", { detail: "Billing ends; the model loads again next time.", destructive: true }))) return;
     const job = await jobs.run("cloud-down", "", true);
     if (job.state === "failed") onAction("notify", job.error ?? "The pod did not stop.");
   }

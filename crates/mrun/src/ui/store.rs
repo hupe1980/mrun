@@ -23,6 +23,9 @@ pub struct Prefs {
     pub window: Option<Frame>,
     /// Models the user added to Models' cloud section (024).
     pub cloud_models: Vec<CloudModel>,
+    /// The server process the window started, so a later window still knows it is its own
+    /// (Quit ejects it).
+    pub server_pid: Option<u32>,
 }
 
 /// A model added to the cloud section: the repo and what `pull --dry-run` said of it.
@@ -83,6 +86,7 @@ impl Default for Prefs {
             last_model: None,
             window: None,
             cloud_models: Vec::new(),
+            server_pid: None,
         }
     }
 }

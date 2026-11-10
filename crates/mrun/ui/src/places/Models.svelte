@@ -2,6 +2,7 @@
   // Models, like Xcode's components: mrun's aliases and pulled models, each with the CLI's own
   // fit verdict for this Mac (FR-011), one marked Best for this Mac, and Pull, Use, Remove. A
   // model that won't fit cannot be loaded from here (US3 AS5).
+  import { ask } from "../lib/ask.svelte";
   import { onMount } from "svelte";
   import ActionMenu from "../components/ActionMenu.svelte";
   import CloudSheet, { type CloudPick } from "../components/CloudSheet.svelte";
@@ -55,11 +56,10 @@
   async function act(kind: string, m: ModelEntry, on = m.name) {
     let confirm = false;
     if ((kind === "use" || kind === "stop") && live.app?.server.started_by === "other") {
-      confirm = window.confirm(
+      confirm =
         kind === "use"
-          ? "This server was started from a terminal. Switch it to " + m.name + " anyway?"
-          : "This model was started in a terminal and your agents may be using it. Eject it anyway?",
-      );
+          ? await ask(`Switch the server to ${m.name}?`, "Switch", { detail: "It was started outside this window; your agents may be using it." })
+          : await ask(`Eject ${live.status?.model?.id ?? "the model"}?`, "Eject", { detail: "It was started outside this window; your agents may be using it.", destructive: true });
       if (!confirm) return;
     }
     try {
