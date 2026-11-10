@@ -27,7 +27,7 @@ pub const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 enum Command {
     Generate {
-        request: GenerateRequest,
+        request: Box<GenerateRequest>,
         ticket: Ticket,
         events: Sender<Event>,
         finished: Sender<Finished>,
@@ -62,6 +62,8 @@ pub struct EngineHandle {
     cache: Arc<Mutex<Option<CacheStats>>>,
     /// Reply records for token splicing, shared with the prefix store (D051).
     ledger: Arc<Mutex<Ledger>>,
+    /// Speculative decoding may run (006, `--speculation`); on by default.
+    speculation: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Why a request was not queued.
@@ -218,7 +220,19 @@ impl EngineHandle {
             queue,
             cache,
             ledger,
+            speculation: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
+    }
+
+    /// Turns speculative decoding on or off for the requests queued from now on.
+    pub fn set_speculation(&self, on: bool) {
+        self.speculation
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether speculative decoding is on.
+    pub fn speculation(&self) -> bool {
+        self.speculation.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Finished replies for token splicing (D030).
@@ -260,7 +274,8 @@ impl EngineHandle {
 
     /// Queues a request, or refuses at once when the queue is full. A request whose cancel
     /// token fires while it waits finishes `Cancelled` without reaching the engine.
-    pub fn generate(&self, request: GenerateRequest) -> Result<Generation, SubmitError> {
+    pub fn generate(&self, mut request: GenerateRequest) -> Result<Generation, SubmitError> {
+        request.speculate &= self.speculation();
         self.queue.admit().map_err(SubmitError::QueueFull)?;
         let ticket = Ticket::new(request.cancel.clone(), self.queue.clone());
         let (events, events_rx) = bounded(EVENT_CAPACITY);
@@ -268,7 +283,7 @@ impl EngineHandle {
         if self
             .commands
             .send(Command::Generate {
-                request,
+                request: Box::new(request),
                 ticket: ticket.clone(),
                 events,
                 finished,
@@ -372,7 +387,7 @@ fn worker<E: Engine>(
                 };
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
                     let mut detok = tokenizer.stream();
-                    generate::generate(engine, policy, &mut detok, request, &mut sink, pressure)
+                    generate::generate(engine, policy, &mut detok, *request, &mut sink, pressure)
                 }));
                 // Close the event stream first so a consumer draining it moves on to `Finished`.
                 drop(sink);
@@ -447,7 +462,7 @@ mod tests {
             let (events, _) = bounded(1);
             let (finished, _) = bounded(1);
             Command::Generate {
-                request,
+                request: Box::new(request),
                 ticket: Ticket::new(CancelToken::new(), Arc::default()),
                 events,
                 finished,

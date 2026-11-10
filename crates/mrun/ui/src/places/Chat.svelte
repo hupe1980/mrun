@@ -275,6 +275,9 @@
           case "stop":
             stats.stop = ev.reason === "max_tokens" ? "length" : "end";
             break;
+          case "speculation":
+            stats.speculation = ev.speculation;
+            break;
           case "error":
             msg.error = ev.message;
             stats.stop = "error";

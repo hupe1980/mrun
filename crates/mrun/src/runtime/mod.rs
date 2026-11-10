@@ -1,5 +1,6 @@
 //! Runtime: the engine worker thread, the generation loop and the memory-pressure source.
 
+pub mod draft;
 pub mod generate;
 pub mod handle;
 pub mod power;

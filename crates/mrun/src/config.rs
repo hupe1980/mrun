@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use clap::{Arg, ArgAction, Command};
 
 /// Every `MRUN_*` variable mrun reads (`--record` has none by design).
-pub const KNOWN: [&str; 33] = [
+pub const KNOWN: [&str; 34] = [
     "MRUN_HOME",
     "MRUN_CONFIG",
     "MRUN_PORT",
@@ -22,6 +22,7 @@ pub const KNOWN: [&str; 33] = [
     "MRUN_QUEUE_WAIT_S",
     "MRUN_BUDGET_GIB",
     "MRUN_NO_CACHE",
+    "MRUN_SPECULATION",
     "MRUN_REJECT_TOOL_IMAGES",
     "MRUN_DETACH",
     "MRUN_CALIBRATION_DEBUG",

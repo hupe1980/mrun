@@ -530,6 +530,7 @@ impl StreamEncode for StreamEncoder {
                     cached: *cached,
                     output: 0,
                     reasoning: 0,
+                    speculation: None,
                 });
                 frames.push(sse::event(
                     "message_start",
@@ -827,6 +828,7 @@ mod tests {
                     cached: 2,
                     output: 4,
                     reasoning: 1,
+                    speculation: None,
                 },
             },
         ] {
@@ -913,6 +915,7 @@ mod tests {
                         cached: 40,
                         output: 7,
                         reasoning: 3,
+                        speculation: None,
                     },
                 },
             ],

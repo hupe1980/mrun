@@ -102,20 +102,22 @@ impl GatedDeltaNet {
 
     /// The layer over `x` `[1, S, hidden]`, advancing `state` (zeros when unset) by `S`.
     fn forward(&self, x: &Array, state: &mut Recurrent) -> tensor::Result<Array> {
-        self.forward_split(x, state, &[], &mut Vec::new())
+        self.forward_split(x, state, &[], &mut Vec::new(), false)
     }
 
     /// [`Self::forward`] with the recurrence run in segments ending at the chunk-relative
     /// positions `splits` (ascending, inside `(0, S)`), threading the state from one segment to
     /// the next (003 SC-009, ollama's snapshot splits): the projections and the convolution run
     /// once over the whole chunk, unchanged. The state after each split (conv tail and delta
-    /// state) is pushed to `captured`.
+    /// state) is pushed to `captured`. With `rows` (a verify) the convolution runs once per
+    /// position over its own `K` inputs, the call a decode step makes, so each row has its bits.
     fn forward_split(
         &self,
         x: &Array,
         state: &mut Recurrent,
         splits: &[i32],
         captured: &mut Vec<Recurrent>,
+        rows: bool,
     ) -> tensor::Result<Array> {
         let c = &self.cfg;
         let len = x.dim(1);
@@ -136,14 +138,22 @@ impl GatedDeltaNet {
             &[0, total - (c.kernel - 1), 0],
             &[1, total, c.conv_dim()],
         )?)?);
-        let conv_out = activations::silu(&tensor::conv1d(
-            &conv_input,
-            &self.conv,
-            1,
-            0,
-            1,
-            c.conv_dim(),
-        )?)?;
+        let conv = |input: &Array| tensor::conv1d(input, &self.conv, 1, 0, 1, c.conv_dim());
+        let conv_out = if rows {
+            let outs = (0..len)
+                .map(|i| {
+                    conv(&tensor::slice(
+                        &conv_input,
+                        &[0, i, 0],
+                        &[1, i + c.kernel, c.conv_dim()],
+                    )?)
+                })
+                .collect::<tensor::Result<Vec<_>>>()?;
+            tensor::concatenate(&outs.iter().collect::<Vec<_>>(), 1)?
+        } else {
+            conv(&conv_input)?
+        };
+        let conv_out = activations::silu(&conv_out)?;
 
         let key_dim = c.key_dim();
         let parts = tensor::split_sections(&conv_out, &[key_dim, 2 * key_dim], -1)?;
@@ -493,6 +503,34 @@ impl Qwen3_5Moe {
     }
 }
 
+impl Qwen3_5Moe {
+    /// A decoder layer with its linear mixer split at `splits`, the convolution per row when
+    /// `rows` ([`Model::layer_split`], [`Model::layer_verify`]).
+    #[allow(clippy::too_many_arguments)]
+    fn layer_with(
+        &self,
+        i: usize,
+        x: &Array,
+        state: &mut LayerState,
+        offset: i32,
+        splits: &[i32],
+        captured: &mut Vec<Recurrent>,
+        rows: bool,
+    ) -> tensor::Result<Array> {
+        let layer = &self.layers[i - self.first];
+        let h = layer.input_layernorm.forward(x)?;
+        let r = match &layer.mixer {
+            Mixer::Linear(gdn) => {
+                gdn.forward_split(&h, state.recurrent()?, splits, captured, rows)?
+            }
+            Mixer::Attention(attn) => attn.forward(&h, state.kv()?, offset)?,
+        };
+        let x = tensor::add(x, &r)?;
+        let h = layer.post_attention_layernorm.forward(&x)?;
+        tensor::add(&x, &layer.ffn.forward(&h)?)
+    }
+}
+
 impl Model for Qwen3_5Moe {
     fn layer_kinds(&self) -> &[LayerKind] {
         &self.kinds
@@ -538,6 +576,10 @@ impl Model for Qwen3_5Moe {
         common::head(&self.head)?.logits(x)
     }
 
+    fn logits_rows(&self, x: &Array) -> tensor::Result<Array> {
+        common::head(&self.head)?.rows(x)
+    }
+
     fn hidden(&self) -> i32 {
         self.hidden as i32
     }
@@ -551,15 +593,19 @@ impl Model for Qwen3_5Moe {
         splits: &[i32],
         captured: &mut Vec<Recurrent>,
     ) -> tensor::Result<Array> {
-        let layer = &self.layers[i - self.first];
-        let h = layer.input_layernorm.forward(x)?;
-        let r = match &layer.mixer {
-            Mixer::Linear(gdn) => gdn.forward_split(&h, state.recurrent()?, splits, captured)?,
-            Mixer::Attention(attn) => attn.forward(&h, state.kv()?, offset)?,
-        };
-        let x = tensor::add(x, &r)?;
-        let h = layer.post_attention_layernorm.forward(&x)?;
-        tensor::add(&x, &layer.ffn.forward(&h)?)
+        self.layer_with(i, x, state, offset, splits, captured, false)
+    }
+
+    fn layer_verify(
+        &self,
+        i: usize,
+        x: &Array,
+        state: &mut LayerState,
+        offset: i32,
+        captured: &mut Vec<Recurrent>,
+    ) -> tensor::Result<Array> {
+        let splits: Vec<i32> = (1..x.dim(1)).collect();
+        self.layer_with(i, x, state, offset, &splits, captured, true)
     }
 
     fn chunk_scratch(&self, len: u32, depth: u32) -> u64 {

@@ -100,10 +100,12 @@ comment lines in streams:
 | `x-mrun-cache-unreused` | Tokens shared with recently stored or dropped state that were computed again anyway (only when non-zero) |
 | `x-mrun-cache-ring-wrapped` | `true` once the record of dropped state has overwritten old entries (absent otherwise) |
 | `x-mrun-warning` | Comma-separated in-band warnings |
+| `x-mrun-speculation` | `drafted=N; accepted=N; passes=N` when speculative decoding verified drafts |
 
 In a stream, the first comment carries `cached`, `processed`, `max_tokens`, `spliced` and the miss
 report (`cause`, `divergence`, `message`, `gap`, `unreused`, `ring_wrapped`); a second comment
-with `warnings` comes before the terminal event when there are any. See [Prefix cache](@/docs/prefix-cache.md) for the causes.
+with `warnings` and `speculation` (`drafted`, `accepted`, `passes`) comes before the terminal
+event when there are any. See [Prefix cache](@/docs/prefix-cache.md) for the causes.
 
 Warnings:
 
@@ -146,8 +148,13 @@ with their state (`joined`, `downloading`, `loading`, `serving`, `lost`) and, on
 
 `finished` lists the last 20 requests that left the queue, oldest first, each with
 `prompt_tokens`, `cached`, `processed`, the miss fields of `last` (`cause`, `divergence`,
-`message`, `unreused`), `generated`, `ttft_ms` (from arrival), `decode_tps` and `stop` (`end`,
-`stopped`, `error`). It holds counters only, never content.
+`message`, `unreused`), `generated`, `ttft_ms` (from arrival), `decode_tps`, `speculation` and
+`stop` (`end`, `stopped`, `error`). It holds counters only, never content.
+
+`speculation` is `{mode, drafted, accepted, passes}` at the top level (`mode`: `auto` or `off`;
+totals since start) and `{drafted, accepted, passes}` or `null` per running and finished request.
+`/metrics` counts `mrun_speculation_drafted_tokens_total`,
+`mrun_speculation_accepted_tokens_total` and `mrun_speculation_passes_total`.
 
 `POST /mrun/cache/clear` waits for a running request, then drops every branch, checkpoint and
 the live conversation and answers `200` with `{"branches_dropped": N, "bytes_freed": B}`

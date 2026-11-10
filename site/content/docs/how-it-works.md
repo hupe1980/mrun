@@ -78,6 +78,17 @@ The M5 Neural Accelerator (NAX) kernels are compiled in but stay off until measu
   but the state exists only for the position it was computed at, so mrun saves checkpoints and
   resumes from the nearest one.
 
+## Speculative decoding
+
+Each decode step reads every weight once to produce one token. Agent replies copy a lot (an
+`Edit`'s old text, a rewritten file, repeated paths), so mrun looks up the reply's last tokens in
+the prompt and the reply so far and drafts what followed there. One pass checks the draft and up
+to 7 tokens at a time. Each position is sampled exactly as plain decoding samples it, with the
+same random draw, and a drafted token is kept only where it equals that sample, so the reply is
+the same token for token. The pass runs nuvec's row-exact kernels: each row has the bits of a
+one-token step. A request drafts only while its speculative rounds are faster than its plain steps.
+`mrun ps`, Now and each chat reply show the tokens per pass. Pools and the CPU decode plainly.
+
 ## Design rules
 
 - **Exactness.** A cached prefix is used only if every token and the model identity match (see

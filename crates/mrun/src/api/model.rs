@@ -267,6 +267,9 @@ pub struct Usage {
     pub cached: u32,
     pub output: u32,
     pub reasoning: u32,
+    /// Speculative decoding (006): drafted, accepted, verify passes; `None` without a verify.
+    /// mrun's metadata only (`x-mrun-speculation`, the closing `: mrun` comment).
+    pub speculation: Option<[u32; 3]>,
 }
 
 /// In-band warnings (the only four in 0.1); every other condition is logged.

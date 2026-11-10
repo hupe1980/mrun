@@ -6,7 +6,7 @@
   import Lane from "../components/Lane.svelte";
   import ReuseRibbon from "../components/ReuseRibbon.svelte";
   import Symbol from "../components/Symbol.svelte";
-  import { bytes, context, percent, perHour, seconds, spend, stopsIn, stopWord, tokens, uptime } from "../lib/format";
+  import { bytes, context, keptWords, percent, perHour, perPass, seconds, spend, stopsIn, stopWord, tokens, uptime } from "../lib/format";
   import { jobs } from "../lib/jobs.svelte";
   import { live } from "../lib/live.svelte";
   import { host } from "../lib/api";
@@ -19,6 +19,7 @@
   const srv = $derived(live.state);
   const active = $derived(s?.requests.filter((r) => r.phase !== "queued") ?? []);
   const waiting = $derived(s?.requests.filter((r) => r.phase === "queued") ?? []);
+  const speculated = $derived(s?.speculation?.mode === "auto" && s.speculation.passes > 0 ? s.speculation : null);
   const recent = $derived((s?.finished ?? []).slice().reverse().slice(0, 12));
   // A share means something only with some history (019 FR-006).
   const lifetime = $derived(
@@ -113,6 +114,7 @@
         <div class="lifetime" title="Prompt tokens mrun did not have to compute since the server started">
           <span class="big num">{percent(lifetime.cached, lifetime.total)}</span>
           <span class="small">of all prompt tokens reused</span>
+          {#if speculated}<span class="small num spec" title={keptWords(speculated)}>{perPass(speculated)}, drafted from the prompt</span>{/if}
         </div>
       {/if}
     </div>
@@ -202,6 +204,7 @@
                 <span class="meta num">
                   {#if f.ttft_ms !== null}{seconds(f.ttft_ms)} to first token{/if}
                   {#if f.decode_tps} · {f.decode_tps.toFixed(1)} tok/s{/if}
+                  {#if f.speculation?.passes}<span title={keptWords(f.speculation)}> · {perPass(f.speculation)}</span>{/if}
                   {#if f.stop} · {stopWord(f.stop)}{/if}
                   {#if onshow}<button class="show" onclick={() => onshow(f.id)} title="Show in Sessions" aria-label="Show request {f.id} in Sessions"><Symbol name="sessions" size={12} /></button>{/if}
                 </span>
@@ -290,6 +293,10 @@
   .lifetime .small {
     font-size: 11px;
     color: var(--muted);
+  }
+  .lifetime .spec {
+    display: block;
+    margin-top: 4px;
   }
   .lanes,
   .recent {

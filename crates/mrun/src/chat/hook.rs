@@ -123,6 +123,10 @@ impl RequestHook {
 }
 
 impl DecodeHook for RequestHook {
+    fn masks(&self) -> bool {
+        self.constraint.is_some() || self.ban.is_some() || self.single_call.is_some()
+    }
+
     fn first_mask(&mut self) -> Option<TokenMask> {
         if let Some(constraint) = &self.constraint
             && matches!(constraint.arm, Arm::Now | Arm::OptionalThink { .. })

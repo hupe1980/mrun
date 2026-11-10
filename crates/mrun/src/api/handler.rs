@@ -236,6 +236,8 @@ pub struct Meta {
     pub miss: Option<MissReport>,
     pub spliced: u32,
     pub warnings: Vec<Warning>,
+    /// Speculative decoding (006): drafted, accepted, verify passes, from the finish.
+    pub speculation: Option<[u32; 3]>,
 }
 
 impl Meta {
@@ -266,6 +268,9 @@ impl Meta {
             self.cached = *cached;
             self.max_tokens = *max_tokens;
             self.miss = *miss;
+        }
+        if let GenEvent::Finished { usage, .. } = event {
+            self.speculation = usage.speculation;
         }
     }
 
@@ -325,6 +330,13 @@ impl Meta {
         {
             headers.insert("x-mrun-warning", value);
         }
+        if let Some([drafted, accepted, passes]) = self.speculation
+            && let Ok(value) = HeaderValue::from_str(&format!(
+                "drafted={drafted}; accepted={accepted}; passes={passes}"
+            ))
+        {
+            headers.insert("x-mrun-speculation", value);
+        }
     }
 
     /// The `: mrun` comment opening a stream: reuse, the miss report and the applied limit.
@@ -348,10 +360,17 @@ impl Meta {
         sse::comment(&format!("mrun {meta}"))
     }
 
-    /// The `: mrun` comment before the terminal event, when there are warnings.
+    /// The `: mrun` comment before the terminal event: warnings and speculation, when any.
     pub fn end_comment(&self) -> Option<String> {
-        let list: Vec<&str> = self.warnings.iter().map(|w| w.as_str()).collect();
-        (!list.is_empty()).then(|| sse::comment(&format!("mrun {}", json!({"warnings": list}))))
+        let mut meta = json!({});
+        if !self.warnings.is_empty() {
+            meta["warnings"] = self.warnings.iter().map(|w| w.as_str()).collect();
+        }
+        if let Some([drafted, accepted, passes]) = self.speculation {
+            meta["speculation"] =
+                json!({"drafted": drafted, "accepted": accepted, "passes": passes});
+        }
+        (meta != json!({})).then(|| sse::comment(&format!("mrun {meta}")))
     }
 }
 
@@ -565,15 +584,26 @@ mod tests {
             miss: None,
             spliced: 7,
             warnings: vec![Warning::ToolArgsInvalid],
+            speculation: Some([30, 24, 9]),
         };
         let mut headers = HeaderMap::new();
         meta.headers(&mut headers);
         assert_eq!(headers["x-mrun-cache-processed"], "6");
         assert_eq!(headers["x-mrun-spliced"], "7");
         assert_eq!(headers["x-mrun-warning"], "tool-args-invalid");
+        assert_eq!(
+            headers["x-mrun-speculation"],
+            "drafted=30; accepted=24; passes=9"
+        );
         let comment = meta.start_comment();
         assert!(comment.contains("\"processed\":6") && comment.contains("\"spliced\":7"));
-        assert!(meta.end_comment().unwrap().contains("tool-args-invalid"));
+        let end = meta.end_comment().unwrap();
+        assert!(end.contains("tool-args-invalid"), "{end}");
+        assert!(
+            end.contains(r#""speculation":{"drafted":30,"accepted":24,"passes":9}"#),
+            "{end}"
+        );
+        assert_eq!(Meta::default().end_comment(), None);
     }
 
     #[test]

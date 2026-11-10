@@ -267,6 +267,17 @@ impl Head {
         let vocab = logits.dim(-1);
         tensor::reshape(&logits, &[1, vocab])
     }
+
+    /// Hidden states `[1, L, hidden]` → logits of every position `[L, vocab]` (a verify's rows).
+    pub fn rows(&self, x: &Array) -> tensor::Result<Array> {
+        let h = self.norm.forward(x)?;
+        let logits = match &self.lm_head {
+            Some(head) => head.forward(&h)?,
+            None => self.embed.as_linear(&h)?,
+        };
+        let vocab = logits.dim(-1);
+        tensor::reshape(&logits, &[x.dim(1), vocab])
+    }
 }
 
 /// Fails on tensors no layer took (after the family dropped what it ignores).

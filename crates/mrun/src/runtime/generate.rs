@@ -12,6 +12,7 @@ use crate::cache::{PrefixStore, Prepared};
 use crate::chat::prompt::RenderedPrompt;
 use crate::chat::stop::{Fed, StopMatcher};
 use crate::chat::tokenizer::StreamDecoder;
+use crate::runtime::draft::{Drafter, Pace};
 use crate::runtime::pressure::PressureGauge;
 use mrun_engine::{CancelToken, Checkpoint, Engine, EngineError, Sampling, TokenMask};
 use std::sync::Arc;
@@ -96,6 +97,11 @@ pub trait DecodeHook: Send {
     fn ignore_eos(&self) -> bool {
         false
     }
+    /// Whether any step may get a mask. Speculative decoding (006) samples drafted positions
+    /// without one, so it runs only under hooks that never mask.
+    fn masks(&self) -> bool {
+        true
+    }
 }
 
 impl std::fmt::Debug for dyn DecodeHook {
@@ -117,6 +123,8 @@ pub struct GenerateRequest {
     /// Who waits for it (026: a pool member's id; `None` for this Mac): waiting requests are
     /// served in turns between them.
     pub turn: Option<String>,
+    /// Speculative decoding may run (006; the engine handle also applies the server's setting).
+    pub speculate: bool,
 }
 
 impl GenerateRequest {
@@ -131,6 +139,7 @@ impl GenerateRequest {
             hook: None,
             call_fence: None,
             turn: None,
+            speculate: true,
         }
     }
 }
@@ -221,6 +230,10 @@ pub struct Stats {
     pub prefill_tps: f64,
     pub decode_tps: f64,
     pub miss: Option<MissReport>,
+    /// Speculative decoding (006): draft tokens verified, kept, and verify passes.
+    pub drafted: u32,
+    pub accepted: u32,
+    pub passes: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,6 +248,11 @@ pub enum Event {
     Progress {
         done: u32,
         total: u32,
+    },
+    /// A verify pass (006) ran: `drafted` tokens checked, `accepted` kept; its tokens follow.
+    Verified {
+        drafted: u32,
+        accepted: u32,
     },
     /// One per output token, in order. `text` is what became visible now (possibly empty);
     /// `held` counts bytes of decoded text held back as a possible stop sequence.
@@ -512,6 +530,25 @@ fn run<E: Engine>(
     let mut last = prompt.tokens[prompt.tokens.len() - 1];
     let mut decode_started = None;
     let mut guard = LoopGuard::new(request.call_fence);
+    // Speculative decoding (006): prompt lookup over the prompt and the reply, verified exactly.
+    let max_draft = if request.speculate && hook.as_ref().is_none_or(|hook| !hook.masks()) {
+        engine.max_draft() as usize
+    } else {
+        0
+    };
+    let mut drafter = (max_draft > 0).then(|| Drafter::new(&prompt.tokens));
+    let mut pace = Pace::default();
+    let mut tokens = Ctx {
+        sink,
+        detok,
+        matcher: &mut matcher,
+        hook: &mut hook,
+        mask: &mut mask,
+        guard: &mut guard,
+        eos: &eos,
+        ignore_eos,
+        limit,
+    };
     loop {
         if cancel.is_cancelled() {
             return Ok(FinishReason::Cancelled);
@@ -519,16 +556,43 @@ fn run<E: Engine>(
         if turn.stats.generated_tokens.is_multiple_of(PRESSURE_EVERY) {
             relieve_pressure(engine, store, pressure);
         }
-        let step = with_memory(engine, store, &mut turn.captured, |engine| {
-            engine.forward(last)
-        })?;
+        let round = Instant::now();
+        // Room for the draft: the output limit counts every committed token, the final sample
+        // included.
+        let room = (limit - turn.stats.generated_tokens).saturating_sub(1) as usize;
+        let draft = match &drafter {
+            Some(drafter) if tokens.mask.is_none() && pace.drafting() => {
+                drafter.draft(max_draft.min(room))
+            }
+            _ => Vec::new(),
+        };
+        let committed = if draft.is_empty() {
+            let step = with_memory(engine, store, &mut turn.captured, |engine| {
+                engine.forward(last)
+            })?;
+            vec![engine.sample(step, &request.sampling, tokens.mask.take().as_ref())?]
+        } else {
+            let committed = with_memory(engine, store, &mut turn.captured, |engine| {
+                engine.verify(last, &draft, &request.sampling)
+            })?;
+            turn.stats.drafted += draft.len() as u32;
+            turn.stats.accepted += committed.len() as u32 - 1;
+            turn.stats.passes += 1;
+            if !tokens.sink.send(Event::Verified {
+                drafted: draft.len() as u32,
+                accepted: committed.len() as u32 - 1,
+            }) {
+                return Ok(FinishReason::Cancelled);
+            }
+            committed
+        };
+        // `last` is fed now; it is an output token after the first step.
         if turn.decoding {
             turn.forwarded += 1;
         } else {
             turn.decoding = true;
             turn.prefilled = len;
         }
-        let next = engine.sample(step, &request.sampling, mask.take().as_ref())?;
         if decode_started.is_none() {
             turn.stats.ttft = Some(turn.started.elapsed());
             let prefill = prefill_started.elapsed().as_secs_f64();
@@ -537,21 +601,67 @@ fn run<E: Engine>(
             }
             decode_started = Some(Instant::now());
         }
-        if !ignore_eos && eos.contains(&next) {
-            flush(sink, &mut matcher, turn);
-            let reason = FinishReason::Stop {
+        let kept = committed.len() - 1;
+        for (i, &next) in committed.iter().enumerate() {
+            if let Some(reason) = tokens.take(next, turn)? {
+                let reason = match reason {
+                    FinishReason::Cancelled => reason,
+                    reason => finish_decode(turn, decode_started, reason),
+                };
+                return Ok(reason);
+            }
+            if let Some(drafter) = &mut drafter {
+                drafter.push(next);
+            }
+            // A kept draft token was fed in the verify; the final sample is fed next round.
+            if i < kept {
+                turn.forwarded += 1;
+            }
+        }
+        // The first step (the prompt's) is not a decode step; the rest time the pace.
+        if turn.stats.generated_tokens > committed.len() as u32 {
+            if draft.is_empty() {
+                pace.plain(round.elapsed());
+            } else {
+                pace.round(committed.len(), round.elapsed());
+            }
+        }
+        last = committed[kept];
+    }
+}
+
+/// What each committed output token passes through.
+struct Ctx<'a, 'd> {
+    sink: &'a mut dyn EventSink,
+    detok: &'a mut StreamDecoder<'d>,
+    matcher: &'a mut StopMatcher,
+    hook: &'a mut Option<Box<dyn DecodeHook>>,
+    mask: &'a mut Option<TokenMask>,
+    guard: &'a mut LoopGuard,
+    eos: &'a [u32],
+    ignore_eos: bool,
+    limit: u32,
+}
+
+impl Ctx<'_, '_> {
+    /// The per-token path: EOS, the hook, detokenizing, stop sequences, the output limit and
+    /// the loop guard. `Some` ends the request (`finish_decode` is the caller's).
+    fn take(&mut self, next: u32, turn: &mut Turn) -> Result<Option<FinishReason>, Failure> {
+        if !self.ignore_eos && self.eos.contains(&next) {
+            flush(self.sink, self.matcher, turn);
+            return Ok(Some(FinishReason::Stop {
                 stop: None,
                 eos_token: Some(next),
-            };
-            return Ok(finish_decode(turn, decode_started, reason));
+            }));
         }
         turn.stats.generated_tokens += 1;
         turn.output.push(next);
-        if let Some(hook) = &mut hook {
-            mask = hook.on_token(next);
+        if let Some(hook) = self.hook {
+            *self.mask = hook.on_token(next);
         }
         let mut fed = Fed::default();
-        let text = detok
+        let text = self
+            .detok
             .step(next)
             .map_err(|error| Failure::Detokenize(error.to_string()))?;
         if let Some(text) = text {
@@ -559,32 +669,27 @@ fn run<E: Engine>(
             let ends = turn.output.len() - turn.text_ends.len();
             turn.text_ends
                 .extend(std::iter::repeat_n(turn.decoded_bytes, ends));
-            fed = matcher.feed(&text);
+            fed = self.matcher.feed(&text);
         }
-        if !emit(sink, next, fed.emit, matcher.held(), turn) {
-            return Ok(FinishReason::Cancelled);
+        if !emit(self.sink, next, fed.emit, self.matcher.held(), turn) {
+            return Ok(Some(FinishReason::Cancelled));
         }
         if let Some(stop) = fed.stopped {
-            let reason = FinishReason::Stop {
+            return Ok(Some(FinishReason::Stop {
                 stop: Some(stop),
                 eos_token: None,
-            };
-            return Ok(finish_decode(turn, decode_started, reason));
+            }));
         }
-        if turn.stats.generated_tokens >= limit {
-            flush(sink, &mut matcher, turn);
-            return Ok(finish_decode(turn, decode_started, FinishReason::Length));
+        if turn.stats.generated_tokens >= self.limit {
+            flush(self.sink, self.matcher, turn);
+            return Ok(Some(FinishReason::Length));
         }
         // Off with `ignore_eos`: forced-length runs (bench) generate to the limit on purpose.
-        if guard.push(next) && !ignore_eos {
-            flush(sink, &mut matcher, turn);
-            return Ok(finish_decode(
-                turn,
-                decode_started,
-                FinishReason::Repetition,
-            ));
+        if self.guard.push(next) && !self.ignore_eos {
+            flush(self.sink, self.matcher, turn);
+            return Ok(Some(FinishReason::Repetition));
         }
-        last = next;
+        Ok(None)
     }
 }
 
@@ -840,6 +945,9 @@ mod tests {
         fn ignore_eos(&self) -> bool {
             true
         }
+        fn masks(&self) -> bool {
+            false
+        }
     }
 
     #[test]
@@ -958,5 +1066,190 @@ mod tests {
         let r = run(&mut engine, &mut store, bad);
         assert!(matches!(r.finished.reason, FinishReason::Rejected(_)));
         assert!(r.events.is_empty());
+    }
+
+    /// A sink that disconnects after `left` tokens.
+    struct Leaves {
+        events: Vec<Event>,
+        left: usize,
+    }
+
+    impl EventSink for Leaves {
+        fn send(&mut self, event: Event) -> bool {
+            if matches!(event, Event::Token { .. }) {
+                if self.left == 0 {
+                    return false;
+                }
+                self.left -= 1;
+            }
+            self.events.push(event);
+            true
+        }
+    }
+
+    /// One request with speculation off and on (006), on an attention-only and a hybrid engine:
+    /// the same events, finish, stats, live state and cache; returns the speculative run's
+    /// drafted and accepted counts.
+    fn same_with_speculation(
+        script: &[u32],
+        prompt: &[u32],
+        max_tokens: u32,
+        leave_after: Option<usize>,
+        setup: impl Fn(&mut GenerateRequest),
+    ) -> (u32, u32) {
+        let mut counts = (0, 0);
+        for hybrid in [false, true] {
+            let mut runs = Vec::new();
+            for max_draft in [0, 7] {
+                let mut engine = if hybrid {
+                    ScriptedEngine::new_hybrid(script.to_vec(), 10_000, 64)
+                } else {
+                    ScriptedEngine::new(script.to_vec(), 10_000)
+                };
+                engine.max_draft = max_draft;
+                let mut store = store();
+                let mut req = request(prompt.to_vec(), max_tokens);
+                setup(&mut req);
+                let tokenizer = byte_tokenizer();
+                let mut sink = Leaves {
+                    events: Vec::new(),
+                    left: leave_after.unwrap_or(usize::MAX),
+                };
+                let finished = generate(
+                    &mut engine,
+                    &mut store,
+                    &mut tokenizer.stream(),
+                    req,
+                    &mut sink,
+                    &PressureGauge::default(),
+                );
+                assert_eq!(
+                    engine.tokens(),
+                    store.live_tokens(),
+                    "the store mirrors the state"
+                );
+                assert!(!engine.has_pending());
+                // A follow-up reuses what the request left.
+                let live = engine.tokens().to_vec();
+                let mut follow = live.clone();
+                follow.extend(ids("?"));
+                let again = run(&mut engine, &mut store, request(follow, 1));
+                runs.push((
+                    sink.events,
+                    finished,
+                    live,
+                    again.finished.stats.cached_tokens,
+                ));
+            }
+            let [
+                (plain_events, plain, plain_tokens, plain_cached),
+                (events, spec, tokens, cached),
+            ] = <[_; 2]>::try_from(runs).unwrap();
+            let tokens_only = |events: Vec<Event>| -> Vec<Event> {
+                events
+                    .into_iter()
+                    .filter(|e| !matches!(e, Event::Verified { .. }))
+                    .collect()
+            };
+            assert_eq!(
+                tokens_only(events),
+                plain_events,
+                "events (hybrid: {hybrid})"
+            );
+            assert_eq!(spec.reason, plain.reason, "finish (hybrid: {hybrid})");
+            if hybrid {
+                // A verify's trim window cuts position-bound state where plain decoding cannot
+                // (a stop inside fed tokens): the state kept is exact and never less.
+                assert!(spec.prefilled >= plain.prefilled, "prefilled (hybrid)");
+                assert!(tokens.starts_with(&plain_tokens), "live state (hybrid)");
+                assert!(cached >= plain_cached, "reuse after (hybrid)");
+            } else {
+                assert_eq!(spec.prefilled, plain.prefilled, "prefilled");
+                assert_eq!(tokens, plain_tokens, "live state");
+                assert_eq!(cached, plain_cached, "reuse after");
+            }
+            let strip = |stats: &Stats| Stats {
+                ttft: None,
+                prefill_tps: 0.0,
+                decode_tps: 0.0,
+                drafted: 0,
+                accepted: 0,
+                passes: 0,
+                ..stats.clone()
+            };
+            assert_eq!(
+                strip(&spec.stats),
+                strip(&plain.stats),
+                "stats (hybrid: {hybrid})"
+            );
+            assert_eq!((plain.stats.drafted, plain.stats.passes), (0, 0));
+            counts = (spec.stats.drafted, spec.stats.accepted);
+        }
+        counts
+    }
+
+    #[test]
+    fn speculation_copies_from_the_prompt_and_changes_nothing() {
+        let prompt = ids("the quick brown fox jumps over the lazy dog. the quick");
+        let script = ids(" brown fox jumps over the lazy cat.");
+        let (drafted, accepted) = same_with_speculation(&script, &prompt, 100, None, |_| {});
+        assert!(
+            drafted > 0 && accepted > 0,
+            "drafted {drafted}, accepted {accepted}"
+        );
+        // A reply that leaves the copy inside a draft: "cdefghi" drafted, "cdefg" kept.
+        let prompt = ids("abcdefghijklmnop abcdefghijklmnop ab");
+        let (drafted, accepted) =
+            same_with_speculation(&ids("cdefgX."), &prompt, 100, None, |_| {});
+        assert!(accepted < drafted, "drafted {drafted}, accepted {accepted}");
+    }
+
+    #[test]
+    fn speculation_ends_inside_a_batch_as_plain_decoding_does() {
+        let prompt = ids("the quick brown fox jumps over the lazy dog. the quick");
+        let script = ids(" brown fox jumps over the lazy dog.");
+        // A stop sequence, the output limit and a disconnect inside accepted drafts.
+        same_with_speculation(&script, &prompt, 100, None, |r| {
+            r.stop = vec!["over".into()]
+        });
+        same_with_speculation(&script, &prompt, 9, None, |_| {});
+        same_with_speculation(&script, &prompt, 100, Some(7), |_| {});
+        // EOS as an accepted draft token: the prompt holds it after the copied text.
+        let mut prompt = ids("ab");
+        prompt.push(SCRIPT_EOS);
+        prompt.extend(ids("xyz. ab"));
+        let (drafted, _) = same_with_speculation(&ids("ab"), &prompt, 100, None, |_| {});
+        assert!(drafted > 0);
+        // The loop guard, fed from the reply's own repetition.
+        let script: Vec<u32> = ids("ab").into_iter().cycle().take(2_000).collect();
+        let (drafted, accepted) = same_with_speculation(&script, &ids("x"), 1_500, None, |_| {});
+        assert!(accepted > drafted / 2, "a repeating reply drafts itself");
+    }
+
+    #[test]
+    fn no_speculation_under_masks_or_when_off() {
+        let prompt = ids("the quick brown fox. the quick");
+        let script = ids(" brown fox.");
+        for (speculate, hook) in [(false, false), (true, true)] {
+            let mut engine = ScriptedEngine::new(script.clone(), 10_000);
+            engine.max_draft = 7;
+            let mut req = request(prompt.clone(), 100);
+            req.speculate = speculate;
+            if hook {
+                req.hook = Some(Box::new(Starve {
+                    after: 1_000,
+                    seen: 0,
+                }));
+            }
+            let r = run(&mut engine, &mut store(), req);
+            assert_eq!(r.finished.stats.passes, 0);
+        }
+        // `ignore_eos` alone never masks: speculation runs.
+        let mut engine = ScriptedEngine::new(script, 10_000);
+        engine.max_draft = 7;
+        let mut req = request(prompt, 12);
+        req.hook = Some(Box::new(IgnoreEos));
+        let r = run(&mut engine, &mut store(), req);
+        assert!(r.finished.stats.passes > 0);
     }
 }

@@ -355,7 +355,8 @@ pub async fn execute(plan: &Plan, interactive: bool) -> (RunResult, bool) {
         let version = system.version(&ctx.client).await;
         let mut record = system.describe(version, context.unwrap_or(0));
         if system.is_mrun() {
-            (record.lanes, record.numerics) = system.status_facts(&ctx.client).await;
+            (record.lanes, record.numerics, record.speculation) =
+                system.status_facts(&ctx.client).await;
         }
         if system.is_mrun() && mrun_record.is_none() {
             mrun_record = Some(record.clone());

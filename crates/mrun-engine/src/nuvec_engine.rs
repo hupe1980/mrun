@@ -31,7 +31,7 @@ use crate::budget::{self, BudgetError, DeviceMemory, GIB, INITIAL_STATE_TOKENS, 
 use crate::calibration;
 use crate::engine::{
     CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind, MemoryBudget, ModelInfo,
-    Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, chunk_len,
+    Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, chunk_len, verify_serially,
 };
 use crate::identity::{self, IdentityError};
 use crate::ledger::Ledger;
@@ -136,6 +136,9 @@ pub struct NuvecEngine {
     part: Part,
     /// The ring to the pool's other parts (026); `None` alone.
     pipe: Option<Pipe>,
+    /// Hybrids after a verify (006): the recurrent state after each position from the verify's
+    /// start (index 0: before `last`), for exact trims while the ledger's window is open.
+    verified: Vec<RecurrentState>,
 }
 
 impl std::fmt::Debug for NuvecEngine {
@@ -146,6 +149,16 @@ impl std::fmt::Debug for NuvecEngine {
             .field("capacity", &self.seq.capacity())
             .finish_non_exhaustive()
     }
+}
+
+/// The random key of draw `draw` (counted from 1): from the seed, or from the clock.
+fn key_at(seed: Option<u64>, draw: u64) -> tensor::Result<Array> {
+    let base = seed.unwrap_or_else(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64)
+    });
+    tensor::random_key(base.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(draw))
 }
 
 fn backend(error: tensor::Error) -> EngineError {
@@ -256,6 +269,7 @@ impl NuvecEngine {
             fail: None,
             part,
             pipe: None,
+            verified: Vec::new(),
         };
         let (weights, peak) = engine.warm_up()?;
         let scratch = |depth: u32| {
@@ -674,6 +688,15 @@ impl NuvecEngine {
     }
 
     /// After a position was committed: as mlx-lm, return decode's freed buffers every 256.
+    /// Drops a verify's states and closes its trim window: the next state change makes them
+    /// stale, and they count against the budget only while it is open (III).
+    fn end_verify(&mut self) {
+        if !self.verified.is_empty() || self.ledger.window().is_some() {
+            self.verified.clear();
+            self.ledger.close_window();
+        }
+    }
+
     fn after_decode_step(&self) {
         if self.ledger.len().is_multiple_of(DECODE_CLEAR_INTERVAL) {
             tensor::memory::clear_cache();
@@ -683,15 +706,53 @@ impl NuvecEngine {
     /// Random key for the next draw: from the seed and the draw count, or from the clock.
     fn key(&mut self, seed: Option<u64>) -> tensor::Result<Array> {
         self.draws += 1;
-        let base = seed.unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos() as u64)
-        });
-        tensor::random_key(
-            base.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                .wrapping_add(self.draws),
-        )
+        key_at(seed, self.draws)
+    }
+
+    /// The token ids of positions before `end` that a repetition penalty sees (as
+    /// [`Self::recent_ids`] at that length).
+    fn recent_before(&self, sampling: &Sampling, end: usize) -> Option<Array> {
+        if sampling.repetition_penalty == 1.0 {
+            return None;
+        }
+        let live = &self.ids[..end.min(self.ids.len())];
+        let recent = &live[live.len().saturating_sub(sample::REPETITION_CONTEXT)..];
+        (!recent.is_empty()).then(|| Array::from_u32(recent, &[1, recent.len() as i32]))
+    }
+
+    /// The verify pass (006): `tokens` through every layer at `len()` as decode steps would run
+    /// them, row by row exact; returns the logits of every row and the recurrent state after each
+    /// position but the last (the last is live).
+    fn run_verify(&mut self, tokens: &[u32]) -> Result<(Array, Vec<RecurrentState>), EngineError> {
+        let offset = self.ledger.len() as i32;
+        let ids = Array::from_u32(tokens, &[1, tokens.len() as i32]);
+        tensor::with_row_exact(|| {
+            let mut x = self.model.embed(&ids).map_err(backend)?;
+            let mut states = vec![Vec::new(); tokens.len() - 1];
+            for (k, layer) in self.seq.layers.iter_mut().enumerate() {
+                let mut at = Vec::new();
+                x = self
+                    .model
+                    .layer_verify(self.part.first + k, &x, layer, offset, &mut at)
+                    .map_err(backend)?;
+                for (state, r) in states.iter_mut().zip(at) {
+                    state.push(r);
+                }
+            }
+            let rows = self.model.logits_rows(&x).map_err(backend)?;
+            let mut outputs: Vec<&Array> = vec![&rows];
+            for layer in &self.seq.layers {
+                outputs.extend(layer.arrays());
+            }
+            outputs.extend(
+                states
+                    .iter()
+                    .flatten()
+                    .flat_map(|r| r.conv.iter().chain(&r.state)),
+            );
+            tensor::eval(&outputs).map_err(backend)?;
+            Ok((rows, states))
+        })
     }
 
     fn current_logits(&self, step: &Step) -> Result<&Array, EngineError> {
@@ -799,12 +860,14 @@ impl Engine for NuvecEngine {
     }
 
     fn set_limit(&mut self, total: u32) -> Result<(), EngineError> {
+        self.end_verify();
         self.ledger.set_limit(total)?;
         self.draws = 0;
         Ok(())
     }
 
     fn prefill_chunk(&mut self, tokens: &[u32], cancel: &CancelToken) -> Result<bool, EngineError> {
+        self.end_verify();
         if tokens.is_empty() {
             return Ok(true);
         }
@@ -832,6 +895,7 @@ impl Engine for NuvecEngine {
     }
 
     fn forward(&mut self, last: u32) -> Result<Step, EngineError> {
+        self.end_verify();
         self.ledger.usable()?;
         if let Some(pending) = self.ledger.reuse_pending(|p| p.token == last) {
             self.step = Some((pending.id, pending.logits));
@@ -947,16 +1011,209 @@ impl Engine for NuvecEngine {
         }
     }
 
+    fn max_draft(&self) -> u32 {
+        // nuvec promises row-exact products on the GPU only (on the CPU a float32 product of two
+        // rows can differ from one row's in the last bits), and pools verify nothing.
+        if self.info.numerics.gpu_arch == "cpu"
+            || self.pipe.is_some()
+            || self.part != Part::whole(self.model.layers())
+        {
+            return 0;
+        }
+        // nuvec keeps float32 attention at head sizes 192 and 256 serial-exact for 32 / gqa rows
+        // only; the query heads are not known here, so the smallest such width.
+        let rows = if self.model.state_dtype() == tensor::Dtype::Float32
+            && matches!(self.info.head_dim, 192 | 256)
+        {
+            2
+        } else {
+            tensor::ROW_INDEPENDENT_ROWS as u32
+        };
+        rows - 1
+    }
+
+    fn verify(
+        &mut self,
+        last: u32,
+        draft: &[u32],
+        sampling: &Sampling,
+    ) -> Result<Vec<u32>, EngineError> {
+        self.ledger.usable()?;
+        let max = self.max_draft();
+        if max > 0 && draft.len() > max as usize {
+            return Err(EngineError::DraftTooLong {
+                draft: draft.len() as u32,
+                max,
+            });
+        }
+        if max == 0 {
+            return verify_serially(self, last, draft, sampling);
+        }
+        let hybrid = self.hybrid();
+        // Shorten the draft to what the reservation and the free memory hold (the recurrent
+        // state after each position is kept until the next call).
+        let mut n = draft.len();
+        let growth = loop {
+            if n == 0 {
+                return verify_serially(self, last, &[], sampling);
+            }
+            let positions = n as u32 + 1;
+            let states = if hybrid { positions } else { 0 };
+            match self.ledger.plan_append_with_checkpoints(positions, states) {
+                Ok(growth) => break growth,
+                Err(EngineError::NeedsMemory { .. } | EngineError::ReservationExceeded { .. }) => {
+                    n -= 1;
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        let draft = &draft[..n];
+        self.verified.clear();
+        // A pending step of `last` already holds row 0 (without growth, which rolls it back).
+        let pending = match self.ledger.pending() {
+            Some(p) if growth.is_none() && p.token == last => {
+                Some((p.logits.clone(), p.before.clone()))
+            }
+            _ => None,
+        };
+        let reused = pending.is_some();
+        let capacity = if reused {
+            self.seq.capacity()
+        } else {
+            self.grow(growth)?
+        };
+        self.step = None;
+        let start = if reused {
+            self.ledger.len() - 1
+        } else {
+            self.ledger.len()
+        };
+        let fed: Vec<u32> = if reused {
+            draft.to_vec()
+        } else {
+            [&[last][..], draft].concat()
+        };
+        let at_pass = hybrid.then(|| self.seq.recurrent());
+        let (rows, captured) = match self.run_verify(&fed) {
+            Ok(pass) => pass,
+            Err(e) => {
+                if let Some(state) = at_pass {
+                    self.seq.set_recurrent(state);
+                }
+                if !reused {
+                    self.shrink_back(capacity)?;
+                }
+                return Err(e);
+            }
+        };
+        // Every row sampled as `sample` samples its position: its repetition window and draw.
+        let mut logits = Vec::with_capacity(draft.len() + 1);
+        if let Some((row0, _)) = &pending {
+            logits.push(row0.clone());
+        }
+        let vocab = rows.dim(-1);
+        for r in 0..fed.len() as i32 {
+            logits.push(tensor::slice(&rows, &[r, 0], &[r + 1, vocab]).map_err(backend)?);
+        }
+        self.record(start, &[&[last][..], draft].concat());
+        let mut samples = Vec::with_capacity(logits.len());
+        for (r, row) in logits.iter().enumerate() {
+            let recent = self.recent_before(sampling, start as usize + r + 1);
+            let draw = self.draws + r as u64 + 1;
+            let token = sample::sample(row, sampling, None, recent.as_ref(), || {
+                key_at(sampling.seed, draw)
+            })
+            .map_err(backend)?
+            .ok_or(EngineError::EmptyMask)?;
+            samples.push(tensor::reshape(&token, &[1]).map_err(backend)?);
+        }
+        let samples = tensor::concatenate(&samples.iter().collect::<Vec<_>>(), 0)
+            .and_then(|all| all.to_vec_u32())
+            .map_err(backend)?;
+        let kept = draft
+            .iter()
+            .zip(&samples)
+            .take_while(|(d, s)| d == s)
+            .count();
+        let next = samples[kept];
+        if !sampling.is_greedy() {
+            self.draws += kept as u64 + 1;
+        }
+        // Commit `last` and the kept drafts; the state after them becomes live.
+        if reused {
+            self.ledger.reuse_pending(|_| true);
+            self.ledger.advance(kept as u32);
+        } else {
+            self.ledger.advance(kept as u32 + 1);
+        }
+        self.record(start, &[&[last][..], &draft[..kept]].concat());
+        if let Some(at_pass) = at_pass {
+            let live = self.seq.recurrent();
+            let mut states = Vec::with_capacity(draft.len() + 2);
+            if let Some((_, before)) = pending {
+                states.push(before.expect("a hybrid's pending step keeps its state"));
+            }
+            states.push(at_pass);
+            states.extend(captured);
+            states.push(live);
+            states.truncate(kept + 2);
+            self.seq.set_recurrent(states[kept + 1].clone());
+            self.verified = states;
+        }
+        // Pipeline the final sample as `sample` does.
+        if self.ledger.has_room() && self.pipe.is_none() {
+            let before = hybrid.then(|| self.seq.recurrent());
+            let fed = self
+                .feed(&Array::from_u32(&[next], &[1, 1]))
+                .and_then(|logits| {
+                    tensor::async_eval(&[&logits])
+                        .map_err(backend)
+                        .map(|()| logits)
+                });
+            match fed {
+                Ok(logits) => {
+                    let id = self.ledger.id();
+                    self.ledger.push_pending(Pending {
+                        token: next,
+                        id,
+                        logits,
+                        before,
+                    });
+                    self.record(self.ledger.len() - 1, &[next]);
+                }
+                Err(e) => {
+                    if let Some(before) = before {
+                        self.seq.set_recurrent(before);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        self.ledger.open_window(start);
+        self.after_decode_step();
+        let mut committed = draft[..kept].to_vec();
+        committed.push(next);
+        Ok(committed)
+    }
+
     fn top_logprobs(&mut self, step: &Step, n: usize) -> Result<Vec<(u32, f32)>, EngineError> {
         let logits = self.current_logits(step)?;
         sample::top_logprobs(logits, n).map_err(backend)
     }
 
     fn trim(&mut self, len: u32) -> Result<(), EngineError> {
+        let window = self.ledger.window();
         let cut = self.ledger.trim(len)?;
         self.ids.truncate(len as usize);
         if let Some(before) = cut.rolled_back.and_then(|p| p.before) {
             self.seq.set_recurrent(before);
+        }
+        // Inside a verify's window: the state after exactly `len` positions.
+        if let Some(state) = window
+            .and_then(|start| len.checked_sub(start))
+            .and_then(|i| self.verified.get(i as usize))
+        {
+            self.seq.set_recurrent(state.clone());
         }
         if cut.cut_step {
             self.step = None;
@@ -973,6 +1230,7 @@ impl Engine for NuvecEngine {
     }
 
     fn checkpoint(&mut self) -> Result<Checkpoint, EngineError> {
+        self.end_verify();
         let bytes = self.ledger.plan_checkpoint()?;
         let recurrent = if self.hybrid() {
             // Before the pending step's rollback: the state at the confirmed length.
@@ -993,6 +1251,7 @@ impl Engine for NuvecEngine {
     }
 
     fn restore(&mut self, id: CheckpointId) -> Result<(), EngineError> {
+        self.end_verify();
         let position = self.ledger.plan_restore(id)?;
         let recurrent = self.ledger.checkpoint_data(id).cloned();
         self.roll_back();
@@ -1014,6 +1273,7 @@ impl Engine for NuvecEngine {
     }
 
     fn detach_tail(&mut self, at: u32) -> Result<Segment, EngineError> {
+        self.end_verify();
         let plan = self.ledger.plan_detach(at)?;
         self.roll_back();
         self.step = None;
@@ -1040,6 +1300,7 @@ impl Engine for NuvecEngine {
     }
 
     fn attach(&mut self, id: SegmentId) -> Result<(), EngineError> {
+        self.end_verify();
         let plan = self.ledger.plan_attach(id)?;
         let stored = self.ledger.take_segment(id).expect("planned");
         self.roll_back();
@@ -1069,6 +1330,7 @@ impl Engine for NuvecEngine {
     }
 
     fn reset(&mut self) {
+        self.end_verify();
         self.seq.clear();
         self.ledger.reset();
         self.step = None;
@@ -1076,6 +1338,7 @@ impl Engine for NuvecEngine {
     }
 
     fn reset_all(&mut self) {
+        self.end_verify();
         self.reset();
         self.ledger.reset_all();
         tensor::memory::clear_cache();

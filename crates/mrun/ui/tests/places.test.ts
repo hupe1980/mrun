@@ -79,6 +79,24 @@ describe("Now (US1)", () => {
     expect(ribbons[1]?.textContent).toContain("900 computed · a new conversation");
   });
 
+  it("shows speculative decoding's tokens per pass, overall and per request (006)", () => {
+    const one = { ...status.finished![0]!, speculation: { drafted: 120, accepted: 96, passes: 40 } };
+    live.status = {
+      ...status,
+      finished: [one, { ...one, id: 6 }, { ...one, id: 7 }],
+      speculation: { mode: "auto", drafted: 530, accepted: 412, passes: 200 },
+    };
+    const { target } = render(Now, { onAction: () => {} });
+    flushSync();
+    const text = target.textContent ?? "";
+    expect(text).toContain("3.1 tokens per pass, drafted from the prompt");
+    expect(text).toContain("3.4 tokens per pass");
+    live.status = { ...status, speculation: { mode: "off", drafted: 0, accepted: 0, passes: 0 } };
+    const off = render(Now, { onAction: () => {} });
+    flushSync();
+    expect(off.target.textContent).not.toContain("per pass");
+  });
+
   it("offers Start when the server is not running", () => {
     live.app = { ui_version: "0.1.0", server: { port: 8484, running: false, started_by: null }, prefs: { keep_chats: null, menu_bar: true, open_at_login: false, server_port: 8484 }, jobs: [] };
     live.status = null;

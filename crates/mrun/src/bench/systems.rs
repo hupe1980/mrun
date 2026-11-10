@@ -342,10 +342,13 @@ impl System {
     /// mrun's lanes and numerics class from its `/mrun/status` (FR-011, FR-021): lanes from
     /// `lanes.configured` (absent: 1), numerics from `numerics {nax, gpu_family}` (absent:
     /// `nax: unknown`).
-    pub async fn status_facts(&self, client: &reqwest::Client) -> (u32, Numerics) {
+    pub async fn status_facts(&self, client: &reqwest::Client) -> (u32, Numerics, String) {
         match self.get(client, "/mrun/status").await {
-            Ok(status) => status_facts(&status),
-            Err(_) => (1, Numerics::default()),
+            Ok(status) => {
+                let (lanes, numerics) = status_facts(&status);
+                (lanes, numerics, speculation(&status))
+            }
+            Err(_) => (1, Numerics::default(), "none".into()),
         }
     }
 
@@ -457,6 +460,16 @@ pub fn remote_backend(status: &Value) -> Option<String> {
         return None;
     }
     Some(status["backend"].as_str().unwrap_or("remote").to_string())
+}
+
+/// mrun's speculation method from a `/mrun/status` body (006): `pld` (prompt lookup) when on,
+/// `none` when off or not reported.
+pub fn speculation(status: &Value) -> String {
+    if status["speculation"]["mode"] == "auto" {
+        "pld".into()
+    } else {
+        "none".into()
+    }
 }
 
 /// Lanes and numerics from a `/mrun/status` body.
@@ -576,6 +589,15 @@ mod tests {
         assert_eq!(nuvec.kernels.as_deref(), Some("precompiled"));
         let (lanes, numerics) = status_facts(&serde_json::json!({"version": "0.1.0"}));
         assert_eq!((lanes, numerics), (1, Numerics::default()));
+        assert_eq!(
+            speculation(&serde_json::json!({"speculation": {"mode": "auto"}})),
+            "pld"
+        );
+        assert_eq!(
+            speculation(&serde_json::json!({"speculation": {"mode": "off"}})),
+            "none"
+        );
+        assert_eq!(speculation(&serde_json::json!({})), "none");
     }
 
     #[test]
