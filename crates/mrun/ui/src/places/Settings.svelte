@@ -2,6 +2,7 @@
   // Settings, a sheet opened with ⌘, (FR-001, US6): few settings and strong defaults. Server
   // settings are shown with their source and edited in config.toml, which mrun never writes
   // (D066): one settings source for the CLI and the UI.
+  import { ask } from "../lib/ask.svelte";
   import { onMount } from "svelte";
   import Symbol from "../components/Symbol.svelte";
   import { host } from "../lib/api";
@@ -44,7 +45,7 @@
   }
 
   async function removeKey() {
-    if (!window.confirm("Remove the RunPod key from your Keychain?")) return;
+    if (!(await ask("Remove the RunPod key from your Keychain?", "Remove", { destructive: true }))) return;
     await jobs.run("cloud-logout", "").catch(() => {});
   }
 
@@ -54,7 +55,7 @@
   }
 
   async function deleteAll() {
-    if (!window.confirm("Delete all chats kept on this Mac? This cannot be undone.")) return;
+    if (!(await ask("Delete all chats kept on this Mac?", "Delete All", { detail: "This cannot be undone.", destructive: true }))) return;
     deleted = (await host.deleteAllChats().catch(() => ({ deleted: 0 }))).deleted;
   }
 
@@ -111,7 +112,7 @@
       <section class="form">
         <label class="row"><span>Open mrun at login<small>Starts in the menu bar when you log in.</small></span>
           <input type="checkbox" role="switch" checked={prefs?.open_at_login ?? false} onchange={(e) => setPref("open_at_login", (e.currentTarget as HTMLInputElement).checked)} /></label>
-        <label class="row"><span>Show in menu bar<small>The model’s state and memory at a glance. Closing the window keeps mrun there; Quit ejects the model it started.</small></span>
+        <label class="row"><span>Show in menu bar<small>The model’s state and memory at a glance while mrun runs. Closing the window quits mrun and ejects the model it started.</small></span>
           <input type="checkbox" role="switch" checked={prefs?.menu_bar ?? true} onchange={(e) => setPref("menu_bar", (e.currentTarget as HTMLInputElement).checked)} /></label>
         <label class="row"><span>Keep chats on this Mac<small>Saved in ~/.mrun/chats, never anywhere else.</small></span>
           <input type="checkbox" role="switch" checked={prefs?.keep_chats === true} onchange={(e) => setPref("keep_chats", (e.currentTarget as HTMLInputElement).checked)} /></label>

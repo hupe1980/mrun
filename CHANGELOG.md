@@ -6,6 +6,18 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-10
+
+### Fixed
+
+- Eject, Delete All Chats, Remove key and Stop Pod did nothing in the native window: its webview
+  has no `confirm()`. They now ask in a sheet of the window's own.
+- Closing the window quits mrun and ejects the model it started, also after the window was
+  restarted; a server started in a terminal keeps running.
+- The loop guard caught neither a reply that mentioned a tool call while thinking nor a repeated
+  paragraph: a call opener inside the reasoning is text now, and repeats of up to 256 tokens end
+  the reply.
+
 ## [0.4.1] - 2026-11-10
 
 ### Added
@@ -122,7 +134,8 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/hupe1980/mrun/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/hupe1980/mrun/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/hupe1980/mrun/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/hupe1980/mrun/compare/v0.2.0...v0.3.0

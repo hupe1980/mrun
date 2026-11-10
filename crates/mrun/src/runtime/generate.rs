@@ -21,18 +21,23 @@ use std::time::{Duration, Instant};
 /// Decode tokens between memory-pressure checks.
 const PRESSURE_EVERY: u32 = 64;
 /// Loop guard (D033): the last `LOOP_WINDOW` output tokens repeating with a period up to
-/// `LOOP_MAX_PERIOD` end generation.
+/// `LOOP_MAX_PERIOD` (two full copies at least: a looping paragraph, not only a phrase) end
+/// generation.
 const LOOP_WINDOW: usize = 512;
-const LOOP_MAX_PERIOD: usize = 128;
+const LOOP_MAX_PERIOD: usize = 256;
 /// Tokens between loop checks.
 const LOOP_CHECK_EVERY: usize = 16;
 
 /// The tool-call opener and closer tokens: the loop guard ignores everything from an opener to
-/// its closer, so long repetitive arguments (file contents, tables) are never cut (D052).
+/// its closer, so long repetitive arguments (file contents, tables) are never cut (D052). Inside
+/// the reasoning (`think`: its open and close tokens; `thinking`: the reply starts in it) an
+/// opener is only text: a model thinking about tools must not switch the guard off.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CallFence {
     pub open: u32,
     pub close: u32,
+    pub think: Option<(u32, u32)>,
+    pub thinking: bool,
 }
 
 /// The loop guard's view of the output: tokens outside tool calls, the last [`LOOP_WINDOW`].
@@ -40,6 +45,8 @@ pub struct CallFence {
 struct LoopGuard {
     fence: Option<CallFence>,
     inside: bool,
+    /// In the reasoning, where a call opener is text.
+    thinking: bool,
     window: Vec<u32>,
     seen: usize,
 }
@@ -48,13 +55,21 @@ impl LoopGuard {
     fn new(fence: Option<CallFence>) -> Self {
         Self {
             fence,
+            thinking: fence.is_some_and(|f| f.thinking),
             ..Self::default()
         }
     }
 
     /// Notes one output token; `true` when the output outside calls is looping.
     fn push(&mut self, id: u32) -> bool {
-        if let Some(fence) = self.fence {
+        if let Some((open, close)) = self.fence.and_then(|f| f.think) {
+            if id == open {
+                self.thinking = true;
+            } else if id == close {
+                self.thinking = false;
+            }
+        }
+        if let Some(fence) = self.fence.filter(|_| !self.thinking) {
             if self.inside {
                 self.inside = id != fence.close;
                 return false;
@@ -1049,10 +1064,46 @@ mod tests {
         let mut engine = ScriptedEngine::new(script, 100_000);
         let mut store = store();
         let mut req = request(ids("x"), 2_000);
-        req.call_fence = Some(CallFence { open, close });
+        req.call_fence = Some(CallFence {
+            open,
+            close,
+            think: None,
+            thinking: false,
+        });
         let r = run(&mut engine, &mut store, req);
         assert_eq!(r.finished.reason, EOS_STOP);
         assert!(text(&r.events).ends_with(">done"));
+    }
+
+    #[test]
+    fn a_call_opener_while_thinking_does_not_blind_the_loop_guard() {
+        // The reply starts in the reasoning, mentions the opener and then loops: stopped.
+        let (open, close, think_end) = (ids("<")[0], ids(">")[0], ids("|")[0]);
+        let mut script = vec![open];
+        script.extend(ids("ab").into_iter().cycle().take(1_500));
+        let mut engine = ScriptedEngine::new(script, 100_000);
+        let mut req = request(ids("x"), 2_000);
+        req.call_fence = Some(CallFence {
+            open,
+            close,
+            think: Some((ids("~")[0], think_end)),
+            thinking: true,
+        });
+        let r = run(&mut engine, &mut store(), req);
+        assert_eq!(r.finished.reason, FinishReason::Repetition);
+    }
+
+    #[test]
+    fn a_looping_paragraph_is_caught_too() {
+        // A 200-token paragraph repeated: longer than a phrase, still a loop.
+        let paragraph: Vec<u32> = (0..200u32)
+            .map(|i| ids("abcdefghijklmnopqrstuvwxyz")[(i * 7 % 26) as usize] + (i / 26) % 2)
+            .collect();
+        let script: Vec<u32> = paragraph.iter().copied().cycle().take(3_000).collect();
+        let mut engine = ScriptedEngine::new(script, 100_000);
+        let r = run(&mut engine, &mut store(), request(ids("x"), 2_500));
+        assert_eq!(r.finished.reason, FinishReason::Repetition);
+        assert!(r.finished.stats.generated_tokens < 1_000);
     }
 
     #[test]

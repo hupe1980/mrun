@@ -369,7 +369,14 @@ async fn app_state(State(host): State<Host>) -> Response {
         if !running {
             *started = None;
         } else if started.is_none() {
-            *started = Some(StartedBy::Other);
+            // A server an earlier window started is still this window's.
+            let ours = host.store.prefs().server_pid.is_some()
+                && host.store.prefs().server_pid == server_pid(port);
+            *started = Some(if ours {
+                StartedBy::Ui
+            } else {
+                StartedBy::Other
+            });
         }
         match *started {
             Some(StartedBy::Ui) => json!("ui"),
@@ -592,6 +599,7 @@ async fn start_action(
     let started = host.started.clone();
     let store = host.store.clone();
     let target = body.target.clone();
+    let server_port = host.server_port;
     let listings = host.listings.clone();
     let on_done = move |state: JobState| {
         // Even a failed or cancelled job may have changed something (a partial pull).
@@ -607,6 +615,9 @@ async fn start_action(
                 *started = Some(StartedBy::Ui);
                 if kind == Kind::Use {
                     let _ = store.update(&json!({"last_model": target}));
+                }
+                if kind != Kind::CloudUp {
+                    let _ = store.update(&json!({"server_pid": server_pid(server_port)}));
                 }
             }
             Kind::Stop | Kind::CloudDown => *started = None,
@@ -758,6 +769,7 @@ async fn prefs(State(host): State<Host>, axum::Json(patch): axum::Json<Value>) -
     if let Value::Object(fields) = &mut patch {
         fields.remove("last_model");
         fields.remove("window");
+        fields.remove("server_pid");
     }
     match host.store.update(&patch) {
         Ok(prefs) => axum::Json(prefs).into_response(),
@@ -889,6 +901,15 @@ fn write_export(
 async fn focus(State(host): State<Host>) -> Response {
     host.focus.send_modify(|n| *n += 1);
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// The pid of the background server on `port` (`mrun serve --detach` writes it), if any.
+fn server_pid(port: u16) -> Option<u32> {
+    std::fs::read_to_string(crate::cli::stop::pid_file(port))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 impl Host {

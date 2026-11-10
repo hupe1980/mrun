@@ -15,6 +15,7 @@
   // Run a model on a rented GPU (024 US1), one sheet: the GPU with its price, Community Cloud
   // only when asked, what leaves the Mac and when billing ends, then a four-step stepper while
   // `mrun cloud up` works. The key is asked here once, if none is set, and kept in the Keychain.
+  import { ask } from "../lib/ask.svelte";
   import { host } from "../lib/api";
   import { bytes, context, fittingGpus, perHour, type Cloud } from "../lib/format";
   import { jobs } from "../lib/jobs.svelte";
@@ -114,7 +115,7 @@
   }
 
   async function stopOther() {
-    if (!window.confirm("Stop the pod? Billing ends; the model loads again next time.")) return;
+    if (!(await ask("Stop the pod?", "Stop Pod", { detail: "Billing ends; the model loads again next time.", destructive: true }))) return;
     await jobs.run("cloud-down", "", true);
   }
 

@@ -201,6 +201,35 @@ describe("Models (US3)", () => {
     expect(await violations()).toEqual([]);
   });
 
+  it("asks in the window's own sheet before ejecting a model started elsewhere", async () => {
+    const { default: Ask } = await import("../src/components/Ask.svelte");
+    live.app = { ui_version: "0.1.0", server: { port: 8484, running: true, started_by: "other" }, prefs: { keep_chats: null, menu_bar: true, open_at_login: false, server_port: 8484 }, jobs: [] };
+    live.status = status;
+    live.reachable = true;
+    live.models = [model({ pulled: true, serving: true })];
+    const sent: any[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/app/actions")) sent.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify(String(url).includes("/app/actions") ? { job: { id: "1", kind: "stop", target: "", state: "done", progress: null, error: null } } : []), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const sheet = render(Ask, {});
+    const { target } = render(Models, { onError: () => {} });
+    const eject = () => [...target.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Eject")!;
+    const button = (label: string) => [...sheet.target.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!;
+    eject().click();
+    await settle();
+    expect(sheet.target.querySelector("[role=alertdialog]")?.textContent).toContain("Eject qwen3.6?");
+    button("Cancel").click();
+    await settle();
+    expect(sent).toEqual([]);
+    eject().click();
+    await settle();
+    button("Eject").click();
+    await settle();
+    expect(sent.at(-1)).toMatchObject({ kind: "stop", confirm: true });
+    expect(await violations()).toEqual([]);
+  });
+
   it("offers Apply for the model in use only when its context changes (027)", () => {
     live.app = { ui_version: "0.1.0", server: { port: 8484, running: true, started_by: "ui" }, prefs: { keep_chats: null, menu_bar: true, open_at_login: false, server_port: 8484 }, jobs: [] };
     live.status = { ...status, budget: { ...status.budget!, kv_capacity_tokens: 65536, binding: "context" } };
