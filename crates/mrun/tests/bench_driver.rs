@@ -721,7 +721,9 @@ fn s(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|p| p.to_string()).collect()
 }
 
-#[tokio::test]
+// The fakes' scripted delays are the comparison: on their own threads, so the driver's work does
+// not delay both alike and blur 5 ms against 40 ms.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bench_writes_a_result_that_validates_against_the_schema() {
     let (url, fake) = spawn(Script::default()).await;
     let (llama, _) = spawn(Script {
