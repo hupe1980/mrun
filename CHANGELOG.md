@@ -6,6 +6,19 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-10
+
+### Added
+
+- Eject in the window: beside the model chip on every place and on the model in use in Models,
+  and Stop Serving in the menu bar menu (`mrun stop`).
+
+### Changed
+
+- Quit ejects the model the window started; a server started in a terminal keeps running.
+  Without the menu bar item, closing the window quits.
+- Settings › Server opens the server log in Console, which follows it live.
+
 ## [0.4.0] - 2026-11-10
 
 ### Added
@@ -109,7 +122,8 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/hupe1980/mrun/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/hupe1980/mrun/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/hupe1980/mrun/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hupe1980/mrun/compare/v0.1.1...v0.2.0

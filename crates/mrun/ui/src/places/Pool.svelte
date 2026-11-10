@@ -374,6 +374,16 @@
   }
   .choose select {
     flex: 1;
+    font: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 0.5px solid var(--separator);
+    border-radius: var(--r);
+    padding: 7px 10px;
+  }
+  .choose select:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
   }
   .banner {
     display: flex;

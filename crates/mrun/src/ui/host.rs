@@ -783,7 +783,12 @@ async fn open(axum::Json(body): axum::Json<OpenBody>) -> Response {
                 _ => vec![home.display().to_string()],
             }
         }
-        "log" => vec!["-R".into(), home.join("server.log").display().to_string()],
+        // Console follows the log live (`mrun logs -f` in a terminal).
+        "log" => vec![
+            "-a".into(),
+            "Console".into(),
+            home.join("server.log").display().to_string(),
+        ],
         "chats" => vec![home.join("chats").display().to_string()],
         "url" => match body.url {
             Some(url) if url.starts_with("https://") && !url.contains(char::is_whitespace) => {
@@ -884,6 +889,25 @@ fn write_export(
 async fn focus(State(host): State<Host>) -> Response {
     host.focus.send_modify(|n| *n += 1);
     StatusCode::NO_CONTENT.into_response()
+}
+
+impl Host {
+    /// Quitting stops the server this window started (`mrun stop`): its model leaves memory with
+    /// the app. A server started elsewhere keeps serving its clients.
+    pub fn stop_own_server(&self) {
+        let ours = *self
+            .started
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            == Some(StartedBy::Ui);
+        if ours {
+            let _ = std::process::Command::new(self.cli.as_ref())
+                .args(["stop", "--port", &self.server_port.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
 }
 
 async fn quit(State(host): State<Host>) -> Response {

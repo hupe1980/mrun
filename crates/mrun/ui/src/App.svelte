@@ -75,8 +75,14 @@
     if (kind === "pool") return void (place = "pool");
     if (kind === "open-log") return void host.open("log");
     if (kind === "notify") return void notify(target);
+    let confirm = false;
+    if (kind === "stop" && live.app?.server.started_by === "other") {
+      // Agents in a terminal may use that server; say so before ejecting it.
+      confirm = window.confirm("This model was started in a terminal and your agents may be using it. Eject it anyway?");
+      if (!confirm) return;
+    }
     try {
-      const job = await jobs.run(kind, target);
+      const job = await jobs.run(kind, target, confirm);
       if (job.state === "failed") notify(job.error ?? "That did not work.");
     } catch (e) {
       notify(String((e as Error).message));
@@ -91,6 +97,7 @@
       if (window.confirm("A download is still running. Quit mrun and stop it? It resumes next time.")) void host.quit();
     }
     else if (detail.item === "settings") settings = true;
+    else if (detail.item === "stop") void action("stop");
     else if (detail.item === "place" && detail.target) place = detail.target as Place;
   }
 
@@ -192,12 +199,18 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <header class="toolbar glass" onmousedown={chrome}>
         <h1 class="place-title">{places.find((p) => p.id === place)?.title}</h1>
-        <button class="chip" onclick={() => (palette = { query: "Use " })} title="Choose a model (⌘L)">
-          <i class="dot {srv}" aria-hidden="true"></i>
-          <span class="model">{live.status?.model?.id ?? "No model"}</span>
-          <span class="word">{stateWord[srv]}</span>
-          {#if used !== null && live.status?.budget}<span class="mem num">{bytes(used)} / {bytes(live.status.budget.budget)}</span>{/if}
-        </button>
+        <div class="chipbar">
+          <button class="chip" onclick={() => (palette = { query: "Use " })} title="Choose a model (⌘L)">
+            <i class="dot {srv}" aria-hidden="true"></i>
+            <span class="model">{live.status?.model?.id ?? "No model"}</span>
+            <span class="word">{stateWord[srv]}</span>
+            {#if used !== null && live.status?.budget}<span class="mem num">{bytes(used)} / {bytes(live.status.budget.budget)}</span>{/if}
+          </button>
+          {#if live.app?.server.running && srv !== "stopped"}
+            <!-- Eject: the model leaves memory (mrun stop); ⌘L or a click on the chip loads one. -->
+            <button class="eject" onclick={() => action("stop")} disabled={jobs.running("stop", "")} title="Eject {live.status?.model?.id ?? "the model"}: free its memory (mrun stop)" aria-label="Eject {live.status?.model?.id ?? "the model"}"><Symbol name="eject" size={14} /></button>
+          {/if}
+        </div>
       </header>
       <div class="scroll" class:flush={place === "chat" || place === "sessions"}>
         {#if place === "now"}<Now onAction={action} onshow={(id) => ((focus = id), (place = "sessions"))} />
@@ -352,6 +365,31 @@
   .place-title {
     margin: 0;
     font: 650 15px var(--display);
+  }
+  .chipbar {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-left: auto;
+  }
+  .eject {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: var(--fill);
+    color: var(--text-2);
+    cursor: default;
+  }
+  .eject:hover {
+    background: var(--fill-2);
+    color: var(--text);
+  }
+  .eject:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
   }
   .chip {
     display: flex;

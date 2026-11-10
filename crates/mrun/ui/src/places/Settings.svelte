@@ -111,7 +111,7 @@
       <section class="form">
         <label class="row"><span>Open mrun at login<small>Starts in the menu bar when you log in.</small></span>
           <input type="checkbox" role="switch" checked={prefs?.open_at_login ?? false} onchange={(e) => setPref("open_at_login", (e.currentTarget as HTMLInputElement).checked)} /></label>
-        <label class="row"><span>Show in menu bar<small>The model’s state and memory at a glance.</small></span>
+        <label class="row"><span>Show in menu bar<small>The model’s state and memory at a glance. Closing the window keeps mrun there; Quit ejects the model it started.</small></span>
           <input type="checkbox" role="switch" checked={prefs?.menu_bar ?? true} onchange={(e) => setPref("menu_bar", (e.currentTarget as HTMLInputElement).checked)} /></label>
         <label class="row"><span>Keep chats on this Mac<small>Saved in ~/.mrun/chats, never anywhere else.</small></span>
           <input type="checkbox" role="switch" checked={prefs?.keep_chats === true} onchange={(e) => setPref("keep_chats", (e.currentTarget as HTMLInputElement).checked)} /></label>
@@ -146,7 +146,7 @@
       </section>
       <div class="buttons">
         <button class="btn" onclick={() => host.open("config")}>Edit config.toml…</button>
-        <button class="btn" onclick={() => host.open("log")}>Show Server Log</button>
+        <button class="btn" onclick={() => host.open("log")}>Open Server Log</button>
         <button class="btn primary" disabled={!live.app?.server.running || jobs.running("use", live.status?.model?.id ?? "")} onclick={() => live.status?.model && jobs.run("use", live.status.model.id, true)}>Restart Server</button>
       </div>
       <p class="muted small">mrun reads settings from defaults, then {config?.path ?? "~/.mrun/config.toml"}{config && !config.exists ? " (not created yet)" : ""}, then MRUN_* variables, then flags. The window shows them; it never writes the file.</p>

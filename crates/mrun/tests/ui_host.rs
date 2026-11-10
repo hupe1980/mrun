@@ -715,3 +715,19 @@ async fn the_cloud_section_and_the_key_on_stdin() {
     assert!(argv.lines().any(|l| l == "cloud login"));
     assert!(!argv.contains("rpa_SECRET123"));
 }
+
+/// Quitting ejects the model the window started (`mrun stop`), never one started elsewhere.
+#[cfg(unix)]
+#[tokio::test]
+async fn quitting_ejects_only_the_model_the_window_started() {
+    use mrun::ui::host::StartedBy;
+    let dir = tempfile::tempdir().unwrap();
+    let (_, host) = host_with(dir.path(), 8484, Some(fake_cli(dir.path()))).await;
+    let log = || std::fs::read_to_string(dir.path().join("argv.log")).unwrap_or_default();
+    *host.started.lock().unwrap() = Some(StartedBy::Other);
+    host.stop_own_server();
+    assert_eq!(log(), "", "a terminal's server keeps serving");
+    *host.started.lock().unwrap() = Some(StartedBy::Ui);
+    host.stop_own_server();
+    assert_eq!(log().trim(), "stop --port 8484");
+}
