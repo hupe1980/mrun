@@ -33,6 +33,10 @@
   ];
 
   let place = $state<Place>("now");
+  let chatOpened = $state(false);
+  $effect(() => {
+    if (place === "chat") chatOpened = true;
+  });
   let settings = $state(false);
   let palette = $state<{ query: string } | null>(null);
   let firstRunDismissed = $state(false);
@@ -215,12 +219,14 @@
         </div>
       </header>
       <div class="scroll" class:flush={place === "chat" || place === "sessions"}>
+        <!-- Chat stays mounted once opened: its chats, draft and a streaming reply live in it, and
+             unsaved chats (Keep chats off) would be lost when the place changes. -->
+        {#if chatOpened}<div class="keep" hidden={place !== "chat"}><Chat active={place === "chat" && !settings && !palette} /></div>{/if}
         {#if place === "now"}<Now onAction={action} onshow={(id) => ((focus = id), (place = "sessions"))} />
-        {:else if place === "chat"}<Chat active={place === "chat" && !settings && !palette} />
         {:else if place === "sessions"}<Sessions {focus} onfocused={() => (focus = null)} />
         {:else if place === "pool"}<Pool onError={notify} />
         {:else if place === "models"}<Models onError={notify} onstarted={() => (place = "now")} onpool={() => (place = "pool")} />
-        {:else}<Agents onError={notify} />{/if}
+        {:else if place === "agents"}<Agents onError={notify} />{/if}
       </div>
     </main>
   </div>
@@ -368,6 +374,12 @@
   .place-title {
     margin: 0;
     font: 650 15px var(--display);
+  }
+  .keep {
+    display: contents;
+  }
+  .keep[hidden] {
+    display: none;
   }
   .chipbar {
     display: flex;
