@@ -61,7 +61,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
       - name: Tests
+        timeout-minutes: 12
         run: |
+          echo "building tests"
           cargo test --locked --workspace --no-default-features --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .executable != null) | .executable' > bins.txt
           status=0
@@ -73,6 +75,11 @@ jobs:
             [ $code -ne 0 ] && status=1
           done < bins.txt
           exit $status
+      - name: Diagnose
+        if: always()
+        run: |
+          ps -eo pid,ppid,stat,etime,wchan:32,cmd --forest | grep -v "\[" | head -80
+          tail -60 out.txt || true
       # The formula renders one archive with its checksum (Ruby is on the image).
       - name: Release tooling tests
         run: scripts/release/test.sh
