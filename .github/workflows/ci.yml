@@ -60,8 +60,9 @@ jobs:
       # The engine-agnostic parts (the Linux agent): `--no-default-features` leaves out the engine.
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
+      # A hanging test fails the step (with its log, naming the test) before the job's limit.
       - name: Tests
-        run: cargo test --locked --workspace --no-default-features
+        run: timeout 20m cargo test --locked --workspace --no-default-features
       # The formula renders one archive with its checksum (Ruby is on the image).
       - name: Release tooling tests
         run: scripts/release/test.sh
