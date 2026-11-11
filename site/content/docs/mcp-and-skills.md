@@ -68,9 +68,10 @@ times; then it stops and says so. In `mrun run` the question is `[y]es / [a]lway
 DIR`, `mrun mcp serve fetch`), so any agent can use them.
 
 **Sandboxed by default.** Local servers run in a [procage](https://github.com/hupe1980/procage)
-sandbox (Seatbelt): their folder (`cwd`, else your home) read-only, secrets and startup files
-denied, network only to npm, PyPI and GitHub so `npx` and `uvx` servers can start. A `sandbox`
-block widens it:
+sandbox (Seatbelt on macOS, Landlock on Linux): their folder (`cwd`, else your home) read-only,
+secrets and startup files denied, network only to npm, PyPI and GitHub so `npx` and `uvx` servers
+can start. Where the system cannot sandbox (Linux without Landlock), a sandboxed server does not
+start; the error says so. A `sandbox` block widens it:
 
 ```json
 {"mcpServers": {"notes": {"command": "npx", "args": ["-y", "notes-mcp"],

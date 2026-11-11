@@ -1,6 +1,6 @@
-//! The sandbox local MCP servers run in (028, FR-009): procage's Seatbelt cage on macOS, from
-//! the server's `sandbox` block. Without a block: its folder read-only, network only through the
-//! cage's proxy to package registries; secrets and persistence locations stay denied by
+//! The sandbox local MCP servers run in (028, FR-009): procage (Seatbelt on macOS, Landlock on
+//! Linux) from the server's `sandbox` block. Without a block: its folder read-only, network only
+//! through the cage's proxy to package registries; secrets and persistence locations stay denied by
 //! procage's base profile. Denials come back with procage's suggested change for one-click allow.
 
 use super::config::{Allowed, Sandbox};
@@ -58,7 +58,7 @@ impl Fix {
 /// A started server process: caged, or uncaged when its block says `"sandbox": false`.
 #[derive(Debug)]
 pub enum Proc {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     Caged(
         Box<procage::native::AsyncChild>,
         Box<procage::policy::Policy>,
@@ -69,7 +69,7 @@ pub enum Proc {
 impl Proc {
     pub fn child(&mut self) -> &mut tokio::process::Child {
         match self {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             Proc::Caged(child, _) => child,
             Proc::Open(child) => child,
         }
@@ -78,7 +78,7 @@ impl Proc {
     /// The denials so far, each once, with a fix where one exists.
     pub fn denials(&mut self) -> Vec<Denial> {
         match self {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             Proc::Caged(child, policy) => {
                 let mut out: Vec<Denial> = Vec::new();
                 for v in child.violations().iter() {
@@ -99,7 +99,7 @@ impl Proc {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn fix(policy: &procage::policy::Policy, v: &procage::Violation) -> Option<Fix> {
     use procage::policy::{Access, FsTarget};
     if v.denied_by == procage::DeniedBy::Allowlist {
@@ -130,7 +130,6 @@ fn fix(policy: &procage::policy::Policy, v: &procage::Violation) -> Option<Fix> 
 }
 
 /// Package-manager caches a launcher needs to write (`npx -y …` installs into `~/.npm`).
-#[cfg(target_os = "macos")]
 fn caches(program: &Path) -> Vec<PathBuf> {
     let Some(home) = std::env::home_dir() else {
         return Vec::new();
@@ -145,7 +144,7 @@ fn caches(program: &Path) -> Vec<PathBuf> {
 
 /// The policy of a block: the folder read-only (or writable), the program itself runnable, the
 /// env names passed, the network through the proxy when hosts are listed.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn policy(
     sandbox: &Sandbox,
     program: &Path,
@@ -222,11 +221,22 @@ pub fn spawn(
     if !available() {
         return Err(format!("this system cannot sandbox it; {UNCAGED_HINT}"));
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         use procage::native::{Cage, CageOptions, Grants};
         let policy = policy(sandbox, program, env_names)?;
         let mut options = CageOptions::default().with_violations();
+        // Landlock matches the program's own file and the trust-handoff paths as they are at
+        // spawn; accept that (macOS enforces both exactly).
+        #[cfg(target_os = "linux")]
+        {
+            use procage::policy::{Construct, LowerOptions};
+            options = options.with_lower(
+                LowerOptions::default()
+                    .allow(Construct::FsLiteral)
+                    .accept_spawn_snapshot(),
+            );
+        }
         if !sandbox.hosts.is_empty() {
             let allow =
                 procage::proxy::Allowlist::new(&sandbox.hosts).map_err(|e| e.to_string())?;
@@ -240,7 +250,7 @@ pub fn spawn(
             .map_err(|e| format!("sandbox: {e}"))?;
         Ok(Proc::Caged(Box::new(child), Box::new(policy)))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (sandbox, program, env_names);
         Err("no sandbox on this system; set \"sandbox\": false to run this server uncaged".into())
@@ -251,8 +261,9 @@ pub fn spawn(
 const UNCAGED_HINT: &str =
     "set \"sandbox\": false for this server in mcp.json to run it unconfined";
 
-/// Whether this process can cage children, found once: macOS, and not sandboxed itself. Other
-/// systems have no cage; their local servers run only with `"sandbox": false`.
+/// Whether this process can cage children, found once: it must not be sandboxed itself (macOS),
+/// and a caged `/bin/true` must run (Linux: Landlock, and user namespaces that work; where they
+/// are half-blocked a spawn could wait forever, so the probe gets 5 s on its own thread).
 pub fn available() -> bool {
     static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(|| {
@@ -260,14 +271,45 @@ pub fn available() -> bool {
         {
             matches!(procage::native::is_sandboxed(), Ok(false))
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(probe().unwrap_or(false));
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap_or(false)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             false
         }
     })
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn probe() -> Option<bool> {
+    use procage::native::{Cage, CageOptions, Grants};
+    use procage::policy::{AbsPath, Construct, LowerOptions, presets::agent_workspace};
+    let dir = std::env::temp_dir().canonicalize().ok()?;
+    let root = AbsPath::new(dir.to_string_lossy().as_bytes()).ok()?;
+    let options = CageOptions::default().with_lower(
+        LowerOptions::default()
+            .allow(Construct::FsLiteral)
+            .accept_spawn_snapshot(),
+    );
+    let cage = Cage::with_options(&agent_workspace::v3(&root), &options).ok()?;
+    let mut command = std::process::Command::new("/bin/true");
+    command
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut child = cage.spawn(&mut command, &Grants::new()).ok()?;
+    Some(child.wait().ok()?.success())
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
