@@ -339,12 +339,9 @@ async fn bash(root: &Path, command: &str, limit: Duration) -> Result<String, Str
         .map_err(|e| e.to_string())?;
     let pid = child.id();
     // The whole group: the command and what it started (killed while its leader is unreaped).
-    let kill_group = || {
+    let end_group = || {
         if let Some(pid) = pid {
-            let _ = std::process::Command::new("/bin/kill")
-                .args(["-9", &format!("-{pid}")])
-                .stderr(std::process::Stdio::null())
-                .status();
+            kill_group(pid);
         }
     };
     let drain = |pipe: Option<Box<dyn tokio::io::AsyncRead + Unpin + Send>>| {
@@ -362,7 +359,7 @@ async fn bash(root: &Path, command: &str, limit: Duration) -> Result<String, Str
         Ok(Ok(status)) => Some(status),
         Ok(Err(e)) => return Err(e.to_string()),
         Err(_) => {
-            kill_group();
+            end_group();
             let _ = child.wait().await;
             None
         }
@@ -373,7 +370,7 @@ async fn bash(root: &Path, command: &str, limit: Duration) -> Result<String, Str
     let (stdout, stderr) = match tokio::time::timeout(Duration::from_secs(2), &mut both).await {
         Ok(output) => output,
         Err(_) => {
-            kill_group();
+            end_group();
             both.await
         }
     };
@@ -394,6 +391,27 @@ async fn bash(root: &Path, command: &str, limit: Duration) -> Result<String, Str
             } else {
                 Err(text)
             }
+        }
+    }
+}
+
+/// SIGKILL to the process group `pgid` leads, through `killpg`. Never a `kill` command: on Ubuntu,
+/// procps' `kill -9 -<pid>` killed every process of the user (the CI runner's agent with it). A
+/// group id of 0 or 1 (this group, everything) is never signalled.
+#[allow(unsafe_code)]
+fn kill_group(pgid: u32) {
+    use std::ffi::c_int;
+    unsafe extern "C" {
+        fn killpg(pgrp: c_int, sig: c_int) -> c_int;
+    }
+    const SIGKILL: c_int = 9;
+    let Ok(pgid) = c_int::try_from(pgid) else {
+        return;
+    };
+    if pgid > 1 {
+        // SAFETY: killpg only sends a signal, to the group of the command this function started.
+        unsafe {
+            killpg(pgid, SIGKILL);
         }
     }
 }
