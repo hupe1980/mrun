@@ -426,3 +426,57 @@ describe("Settings › Tools (028 US2, US4)", () => {
     expect(await violations()).toEqual([]);
   });
 });
+
+describe("tools: Stop never leaves a call waiting (028)", () => {
+  it("a call that comes back blocked after Stop ends the turn instead of asking", async () => {
+    let finish: (r: unknown) => void = () => {};
+    const frame = (e: object) => `event: x\ndata: ${JSON.stringify(e)}`;
+    const toolReply = [
+      frame({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_9", name: "workspace__read", input: {} } }),
+      frame({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"path":"a"}' } }),
+      frame({ type: "message_delta", delta: { stop_reason: "tool_use" } }),
+      "",
+    ].join("\n\n");
+    const list = { path: "/x/mcp.json", errors: [], servers: [{ name: "workspace", kind: "stdio", command: "mrun mcp serve workspace --root /w", sandbox: { workspace: "/w", write: true, hosts: [], allow: [] }, tools: [{ name: "read", qualified: "workspace__read", description: "", input_schema: {} }] }] };
+    let replies = 0;
+    const { tools } = await import("../src/lib/tools.svelte");
+    tools.list = null;
+    vi.stubGlobal("fetch", async (url: string) => {
+      const ok = (b: unknown, t = "application/json") => new Response(typeof b === "string" ? b : JSON.stringify(b), { status: 200, headers: { "content-type": t } });
+      if (url.startsWith("/app/state")) return ok(app(false));
+      if (url.startsWith("/v1/messages/count_tokens")) return ok({ input_tokens: 1 });
+      if (url.startsWith("/v1/messages")) return (replies += 1), ok(toolReply, "text/event-stream");
+      if (url.startsWith("/app/mcp/call")) return new Promise((r) => (finish = (b) => r(ok(b))));
+      if (url.startsWith("/app/mcp")) return ok(list);
+      return ok({ defaults: {} });
+    });
+    live.app = app(false);
+    live.status = { model: { id: "qwen3.6" }, requests: [] } as any;
+    live.reachable = true;
+    const { target } = render(Chat, { active: true });
+    const doc = target.ownerDocument;
+    const until = async (ok: () => boolean) => {
+      for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+    };
+    const button = (label: string) => [...doc.querySelectorAll("button")].find((b) => b.textContent?.trim() === label || b.getAttribute("aria-label") === label);
+    target.querySelector<HTMLButtonElement>("button[aria-label^=Tools]")!.click();
+    await until(() => Boolean(doc.querySelector("[aria-label='Tools for this chat'] input[role=switch]:not([disabled])")));
+    doc.querySelector<HTMLInputElement>("[aria-label='Tools for this chat'] input[role=switch]:not([disabled])")!.click();
+    doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flushSync();
+    const composer = target.querySelector<HTMLTextAreaElement>("textarea[aria-label=Message]")!;
+    composer.value = "read a";
+    composer.dispatchEvent(new Event("input"));
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await until(() => Boolean(button("Allow")));
+    button("Allow")!.click();
+    await until(() => target.textContent!.includes("Running…"));
+    button("Stop (Esc)")!.click();
+    finish({ text: "denied", is_error: true, denials: [{ text: "denied write /x", fix: { access: "write", path: "/x" }, label: "Allow writing /x" }] });
+    await until(() => !button("Stop (Esc)"));
+    expect(doc.querySelector(".card.blocked")).toBeNull();
+    expect(button("Stop (Esc)")).toBeUndefined();
+    expect(replies).toBe(1);
+  });
+});

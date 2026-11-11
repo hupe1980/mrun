@@ -283,6 +283,8 @@
 
   /** Waits for the card's buttons (or the keyboard) on one call. */
   function decide(call: ToolCall, state: "asking" | "blocked"): Promise<Decision> {
+    // Stopped meanwhile: nobody will answer, so the answer is no.
+    if (!toolsBusy) return Promise.resolve("deny");
     call.state = state;
     void scrollDown();
     return new Promise((resolve) => decisions.set(call.id, resolve));
@@ -333,6 +335,7 @@
           call.result = r.text;
           call.denials = r.denials;
           call.state = r.is_error ? "failed" : "done";
+          if (!toolsBusy) return false;
           if (!r.denials?.some((x) => x.fix)) break;
           d = await decide(call, "blocked");
           if (!toolsBusy) return false;
@@ -449,11 +452,9 @@
 
   function stop() {
     streaming?.abort();
-    if (toolsBusy) {
-      // Stop while tools wait: deny what is asked and end the turn.
-      toolsBusy = false;
-      for (const id of [...decisions.keys()]) onDecide(id, "deny");
-    }
+    // Stop while tools wait or run: deny what is asked and end the turn.
+    toolsBusy = false;
+    for (const id of [...decisions.keys()]) onDecide(id, "deny");
   }
 
   /** Stops a running reply (as Stop does) and waits until it has settled. */

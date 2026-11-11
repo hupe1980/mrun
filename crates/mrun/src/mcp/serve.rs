@@ -326,7 +326,7 @@ fn cut(mut text: String) -> String {
 }
 
 async fn bash(root: &Path, command: &str, limit: Duration) -> Result<String, String> {
-    let child = tokio::process::Command::new("/bin/sh")
+    let mut child = tokio::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(command)
         .current_dir(root)
@@ -338,31 +338,62 @@ async fn bash(root: &Path, command: &str, limit: Duration) -> Result<String, Str
         .spawn()
         .map_err(|e| e.to_string())?;
     let pid = child.id();
-    match tokio::time::timeout(limit, child.wait_with_output()).await {
-        Ok(Ok(out)) => {
-            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            let code = out
-                .status
+    // The whole group: the command and what it started (killed while its leader is unreaped).
+    let kill_group = || {
+        if let Some(pid) = pid {
+            let _ = std::process::Command::new("/bin/kill")
+                .args(["-9", &format!("-{pid}")])
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    };
+    let drain = |pipe: Option<Box<dyn tokio::io::AsyncRead + Unpin + Send>>| {
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut bytes).await;
+            }
+            bytes
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let status = match tokio::time::timeout(limit, child.wait()).await {
+        Ok(Ok(status)) => Some(status),
+        Ok(Err(e)) => return Err(e.to_string()),
+        Err(_) => {
+            kill_group();
+            let _ = child.wait().await;
+            None
+        }
+    };
+    // A job left in the background keeps the pipes open: a moment, then it ends too.
+    let both = async { (out.await.unwrap_or_default(), err.await.unwrap_or_default()) };
+    tokio::pin!(both);
+    let (stdout, stderr) = match tokio::time::timeout(Duration::from_secs(2), &mut both).await {
+        Ok(output) => output,
+        Err(_) => {
+            kill_group();
+            both.await
+        }
+    };
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&stderr));
+    let text = cut(text).trim_end().to_string();
+    match status {
+        None => Err(format!("{text}\n[stopped after {} s]", limit.as_secs())
+            .trim_start()
+            .to_string()),
+        Some(status) => {
+            let code = status
                 .code()
                 .map_or("a signal".to_string(), |c| c.to_string());
-            let text = format!("{}\n[exit {code}]", cut(text).trim_end());
-            if out.status.success() {
+            let text = format!("{text}\n[exit {code}]");
+            if status.success() {
                 Ok(text)
             } else {
                 Err(text)
             }
-        }
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(_) => {
-            if let Some(pid) = pid {
-                // The whole group: the command and what it started.
-                let _ = std::process::Command::new("/bin/kill")
-                    .args(["-9", &format!("-{pid}")])
-                    .stderr(std::process::Stdio::null())
-                    .status();
-            }
-            Err(format!("stopped after {} s", limit.as_secs()))
         }
     }
 }
@@ -648,10 +679,21 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(failed, "no\n[exit 3]");
-        let slow = bash(dir.path(), "sleep 5", Duration::from_millis(200))
+        let slow = bash(
+            dir.path(),
+            "echo started; sleep 5",
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(slow, "started\n[stopped after 0 s]");
+        // A background job does not hold the result back.
+        let started = std::time::Instant::now();
+        let bg = bash(dir.path(), "sleep 30 & echo done", BASH_TIMEOUT)
             .await
-            .unwrap_err();
-        assert!(slow.starts_with("stopped after"));
+            .unwrap();
+        assert_eq!(bg, "done\n[exit 0]");
+        assert!(started.elapsed() < Duration::from_secs(10));
         let long = kit
             .call("bash", &json!({"command": "yes | head -c 100000"}))
             .await

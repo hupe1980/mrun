@@ -14,7 +14,10 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout};
 
+/// How long the protocol's own requests wait.
 pub const TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a tool call waits: past mrun's own `bash` limit (120 s).
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(150);
 const PROTOCOL: &str = "2025-06-18";
 
 /// A tool as the server lists it.
@@ -148,7 +151,7 @@ impl Client {
                 headers: headers.clone(),
                 session: None,
                 http: reqwest::Client::builder()
-                    .timeout(TIMEOUT)
+                    .timeout(CALL_TIMEOUT)
                     .build()
                     .map_err(|e| e.to_string())?,
             },
@@ -225,8 +228,10 @@ impl Client {
     }
 
     async fn notify(&mut self, method: &str) -> Result<(), String> {
-        self.send(json!({"jsonrpc": "2.0", "method": method}), None)
+        let message = json!({"jsonrpc": "2.0", "method": method});
+        tokio::time::timeout(TIMEOUT, self.send(message, None))
             .await
+            .map_err(|_| format!("{method}: not accepted in {} s", TIMEOUT.as_secs()))?
             .map(|_| ())
     }
 
@@ -234,9 +239,14 @@ impl Client {
         self.next += 1;
         let id = self.next;
         let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        let reply = tokio::time::timeout(TIMEOUT, self.send(message, Some(id)))
+        let limit = if method == "tools/call" {
+            CALL_TIMEOUT
+        } else {
+            TIMEOUT
+        };
+        let reply = tokio::time::timeout(limit, self.send(message, Some(id)))
             .await
-            .map_err(|_| format!("{method}: no answer in {} s", TIMEOUT.as_secs()))??
+            .map_err(|_| format!("{method}: no answer in {} s", limit.as_secs()))??
             .ok_or_else(|| format!("{method}: no answer"))?;
         if let Some(err) = reply.get("error") {
             return Err(err["message"].as_str().unwrap_or("error").to_string());

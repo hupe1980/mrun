@@ -12,7 +12,7 @@ All notable changes to mrun are documented here. The format follows
 
 - Tools in mrun's own chats: the window's Chat and `mrun run --mcp` use MCP servers from
   `~/.mrun/mcp.json` (stdio and streamable HTTP), and every call waits for Allow, Always or Deny.
-- Local MCP servers run sandboxed by default (procage: Seatbelt, Landlock); a denial offers
+- Local MCP servers run sandboxed by default (procage's Seatbelt cage); a denial offers
   *Allow …*, also as `mrun mcp allow`.
 - mrun's own tools as MCP servers: `workspace` (read, write, edit, glob, grep, bash in one folder)
   and `fetch`.

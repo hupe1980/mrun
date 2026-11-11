@@ -53,11 +53,9 @@ mdns-sd = "0.21.7"
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "crypto", "pem"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "logging"] }
 
-# Cages the local MCP servers mrun's chats start (028): Seatbelt on macOS, Landlock on Linux.
-[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
-procage = { version = "=0.7.1", features = ["tokio", "proxy"] }
-
 [target.'cfg(target_os = "macos")'.dependencies]
+# Cages the local MCP servers mrun's chats start (028): Seatbelt.
+procage = { version = "=0.7.1", features = ["tokio", "proxy"] }
 tao = { version = "0.37.2", optional = true }
 wry = { version = "0.57.1", optional = true }
 tray-icon = { version = "0.26.1", optional = true }

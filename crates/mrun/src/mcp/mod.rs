@@ -7,7 +7,7 @@ pub mod client;
 pub mod config;
 pub mod serve;
 
-use client::{Client, Outcome};
+use client::{Client, Outcome, Tool};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,11 +17,19 @@ use tokio::sync::Mutex;
 /// The model sees `<server>__<tool>`.
 pub const SEPARATOR: &str = "__";
 
-/// The started servers of one process.
+/// A started server: its tools (listed without waiting for a running call) and its client.
+#[derive(Debug)]
+struct Started {
+    tools: Vec<Tool>,
+    client: Mutex<Client>,
+}
+
+/// The started servers of one process. Locks are held only to look up or insert, never across a
+/// start or a call; one server's calls run one after another on its own client lock.
 #[derive(Debug)]
 pub struct Registry {
     home: PathBuf,
-    running: Mutex<HashMap<String, Arc<Mutex<Client>>>>,
+    running: Mutex<HashMap<String, Arc<Started>>>,
 }
 
 impl Registry {
@@ -37,21 +45,24 @@ impl Registry {
     }
 
     /// Server `name`, started if it is not yet.
-    async fn client(&self, name: &str) -> Result<Arc<Mutex<Client>>, String> {
-        if let Some(c) = self.running.lock().await.get(name) {
-            return Ok(c.clone());
+    async fn client(&self, name: &str) -> Result<Arc<Started>, String> {
+        let running = self.running.lock().await.get(name).cloned();
+        if let Some(c) = running {
+            return Ok(c);
         }
         let (servers, _) = config::load(&self.home);
         let server = servers
             .iter()
             .find(|s| s.name == name)
             .ok_or_else(|| format!("no server {name} in mcp.json"))?;
-        let client = Arc::new(Mutex::new(Client::start(server).await?));
-        self.running
-            .lock()
-            .await
-            .insert(name.into(), client.clone());
-        Ok(client)
+        let client = Client::start(server).await?;
+        let started = Arc::new(Started {
+            tools: client.tools.clone(),
+            client: Mutex::new(client),
+        });
+        // Two first uses at once: the first one started stays, the other is dropped (stopped).
+        let mut running = self.running.lock().await;
+        Ok(running.entry(name.into()).or_insert(started).clone())
     }
 
     /// Stops every server (the next use starts them again with the file as it is then).
@@ -77,7 +88,6 @@ impl Registry {
             };
             match client {
                 Some(Ok(c)) => {
-                    let c = c.lock().await;
                     view["tools"] = json!(
                         c.tools
                             .iter()
@@ -109,7 +119,7 @@ impl Registry {
             Ok(c) => c,
             Err(e) => return Outcome::error(e),
         };
-        let outcome = client.lock().await.call(tool, arguments).await;
+        let outcome = client.client.lock().await.call(tool, arguments).await;
         if outcome.is_error && outcome.text.starts_with("the server stopped") {
             self.stop(Some(server)).await;
         }
