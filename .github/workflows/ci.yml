@@ -66,6 +66,19 @@ jobs:
       - name: Release tooling tests
         run: scripts/release/test.sh
 
+  mcp-bisect:
+    name: "MCP bisect: ${{ matrix.group }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ["--lib mcp::cage", "--lib mcp::serve", "--lib mcp::client", "--lib mcp::config", "--lib cli::mcp", "--lib each_tool_call", "--test mcp", "--test ui_host tools_list"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: "cargo test --locked -p mrun --no-default-features ${{ matrix.group }} -- --nocapture --test-threads 1"
+
   package:
     name: Package (cargo package dry runs)
     # Every crate must stay publishable (D026): no files outside the crate directories, complete
