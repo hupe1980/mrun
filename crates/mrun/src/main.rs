@@ -89,6 +89,7 @@ fn main() -> ExitCode {
         Command::Bench(args) => ExitCode::from(mrun::bench::run(args)),
         Command::Cloud(command) => ExitCode::from(cloud::run(command)),
         Command::Pool(command) => ExitCode::from(mrun::cli::pool::run(command)),
+        Command::Mcp(command) => ExitCode::from(mrun::cli::mcp::run(command)),
         Command::Config(command) => ExitCode::from(mrun::cli::config::run(command, &resolved)),
         Command::Agent(args) => ExitCode::from(agent::run(args)),
         Command::Ui(args) => ExitCode::from(mrun::ui::run(args)),

@@ -74,7 +74,7 @@
       </article>
       <article class="card">
         <h3>Private by default</h3>
-        <p>Loopback only, no telemetry, no prompt logging, offline after <code>mrun pull</code>. A model too big for your Mac can run across your Macs or on a rented GPU: opt-in, and the window says where prompts go.</p>
+        <p>Loopback only, no telemetry, no prompt logging, offline after <code>mrun pull</code>. A model too big for your Mac can run across your Macs or on a rented GPU: opt-in, and the window says where prompts go. Tool servers in mrun's own chats run sandboxed.</p>
       </article>
     </div>
   </div>
@@ -83,7 +83,7 @@
 <section class="section alt">
   <div class="wrap">
     <h2 class="section-title">See what the cache does</h2>
-    <p class="section-lead"><code>mrun ui</code> opens a window and a menu bar item: the memory budget, every request's reuse and why any part was recomputed, each agent session's requests, a chat with the local model, models that fit your Mac or your pool, and one-click agent setup.</p>
+    <p class="section-lead"><code>mrun ui</code> opens a window and a menu bar item: the memory budget, every request's reuse and why any part was recomputed, each agent session's requests, a chat with the local model that can call tools (sandboxed, each call asked first), models that fit your Mac or your pool, and one-click agent setup.</p>
     {%- set shots = [
       ["now.png", "Now: the memory budget, a prompt being read, and the reuse of recent requests"],
       ["chat.png", "Chat: each reply's reuse, time to first token and speed"],

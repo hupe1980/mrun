@@ -78,17 +78,20 @@ const server = createServer(async (req, res) => {
   if (path.startsWith("/v1/models/")) return json(res, data.modelInfo);
   if (path === "/app/plan") return json(res, data.plan);
   if (path === "/app/apps") return json(res, data.apps);
+  if (path === "/app/mcp") return json(res, data.mcpList);
+  if (path === "/app/mcp/call") return json(res, data.testRun);
   if (path === "/v1/messages/count_tokens") {
     let body = "";
     for await (const chunk of req) body += chunk;
-    return json(res, { input_tokens: Math.ceil(JSON.stringify(JSON.parse(body).messages).length / 3.6) });
+    const counted = JSON.parse(body);
+    return json(res, { input_tokens: Math.ceil(JSON.stringify([counted.messages, counted.tools ?? []]).length / 3.6) });
   }
   if (path === "/v1/messages") {
     let body = "";
     for await (const chunk of req) body += chunk;
     const last = JSON.parse(body).messages.at(-1)?.content ?? "";
     res.writeHead(200, { "content-type": "text/event-stream" });
-    const frames = last.includes("think") ? data.thinking() : data.reply();
+    const frames = typeof last === "string" && last.includes("tests") ? data.toolUse() : last.includes("think") ? data.thinking() : data.reply();
     // Paced like a real stream, so times and rates read as they would.
     for (const f of frames) {
       res.write(f);
@@ -147,6 +150,20 @@ try {
     await pause(1500);
     await shot("3-chat-thinking");
     await page.click("button[aria-label='Stop (Esc)']");
+    // Tools (028): the picker, then a call waiting for Allow.
+    await page.keyboard.down("Meta");
+    await page.keyboard.press("n");
+    await page.keyboard.up("Meta");
+    await page.click("button[aria-label^=Tools]");
+    await page.waitForSelector("[aria-label='Tools for this chat'] input[role=switch]", { timeout: 5000 });
+    await page.click("[aria-label='Tools for this chat'] input[role=switch]");
+    await shot("4b-chat-tools");
+    await page.keyboard.press("Escape");
+    await ask("Why do the parser tests fail?");
+    await page.waitForSelector(".card.asking", { timeout: 10000 });
+    await shot("4c-chat-tool-call");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".card.failed", { timeout: 10000 });
     await (await page.$("input[type=file]")).uploadFile(attach);
     await page.waitForSelector(".attachments .chip", { timeout: 5000 });
     await page.type("textarea[aria-label=Message]", "Why does this panic on empty input?");
@@ -177,6 +194,8 @@ try {
     await shot("9-settings");
     await page.evaluate(() => [...document.querySelectorAll("[role=tab]")].find((t) => t.textContent?.includes("Server"))?.click());
     await shot("9-settings-server");
+    await page.evaluate(() => [...document.querySelectorAll("[role=tab]")].find((t) => t.textContent?.includes("Tools"))?.click());
+    await shot("9-settings-tools");
     await page.keyboard.press("Escape");
     await page.keyboard.down("Meta");
     await page.keyboard.press("k");

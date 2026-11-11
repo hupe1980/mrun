@@ -7,6 +7,7 @@
 
 use super::actions::{self, Jobs, Kind, State as JobState};
 use super::store::Store;
+use super::tools;
 use crate::api::is_loopback_host;
 use axum::Router;
 use axum::body::Body;
@@ -47,6 +48,8 @@ pub struct Host {
     pub downloads: Arc<std::path::PathBuf>,
     /// Whether a saved export is shown in Finder (`open -R`); tests turn it off.
     pub reveal: bool,
+    /// The tool servers the window's chats use (028), started on first use, stopped with it.
+    pub mcp: Arc<crate::mcp::Registry>,
     listings: Arc<Listings>,
     client: reqwest::Client,
 }
@@ -131,6 +134,7 @@ impl Host {
                     .join("Downloads"),
             ),
             reveal: true,
+            mcp: Arc::new(crate::mcp::Registry::new(crate::cli::mrun_home())),
             listings: Arc::new(Listings::default()),
             client: reqwest::Client::builder()
                 .no_proxy()
@@ -176,6 +180,12 @@ pub fn router(host: Host) -> Router {
         )
         .route("/app/prefs", axum::routing::put(prefs))
         .route("/app/open", post(open))
+        .route("/app/mcp", get(tools::list))
+        .route("/app/mcp/call", post(tools::call))
+        .route("/app/mcp/allow", post(tools::allow))
+        .route("/app/mcp/import", post(tools::import))
+        .route("/app/mcp/add", post(tools::add))
+        .route("/app/mcp/choose", post(tools::choose))
         .route("/app/focus", post(focus))
         .route("/app/quit", post(quit))
         .route("/health", get(proxy))
@@ -261,7 +271,7 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
             == 0
 }
 
-fn error(status: StatusCode, message: &str) -> Response {
+pub(super) fn error(status: StatusCode, message: &str) -> Response {
     (status, axum::Json(json!({"error": message}))).into_response()
 }
 
@@ -783,7 +793,7 @@ struct OpenBody {
     url: Option<String>,
 }
 
-/// Opens the config file in the default editor, the log or the chats in Finder, or an
+/// Opens the config file or mcp.json in the default editor, the log or the chats in Finder, or an
 /// `https://` link in the default browser.
 async fn open(axum::Json(body): axum::Json<OpenBody>) -> Response {
     let home = crate::cli::mrun_home();
@@ -802,6 +812,13 @@ async fn open(axum::Json(body): axum::Json<OpenBody>) -> Response {
             home.join("server.log").display().to_string(),
         ],
         "chats" => vec![home.join("chats").display().to_string()],
+        "mcp" => {
+            let file = crate::mcp::config::path(&home);
+            if crate::mcp::config::ensure(&home).is_err() {
+                return error(StatusCode::INTERNAL_SERVER_ERROR, "cannot create mcp.json");
+            }
+            vec!["-t".into(), file.display().to_string()]
+        }
         "url" => match body.url {
             Some(url) if url.starts_with("https://") && !url.contains(char::is_whitespace) => {
                 vec![url]

@@ -23,6 +23,7 @@ variables.
 | `mrun ps` | Show the running server: model, budget, requests, cache and the last miss |
 | `mrun doctor` | Check this Mac, the server and the clients; prints a fix for each problem |
 | `mrun pool` | `start [--unencrypted]`, `ls`, `join <pool>`, `confirm <code>`, `admit [<mac>]`, `decline <mac>`, `leave`, `remove <mac>`, `plan <model>`, `serve <model>`, `rejoin`, `replan`; `--json`, `--port`. A member's part of a model shows in `mrun ls` as `layers a–b · for pools`. See [Mac pool](@/docs/pool.md) |
+| `mrun mcp` | `ls [--json]`, `import <claude-code\|claude-desktop>`, `add <workspace [DIR]\|fetch>`, `allow <server> --read\|--write\|--exec <PATH>` or `--host <HOST>`, `serve <workspace --root DIR\|fetch>`: tools for mrun's own chats; see [Tools in mrun's chats](@/docs/mcp-and-skills.md#tools-in-mrun-s-chats) |
 | `mrun stop` | Stop a server started with `mrun serve --detach`, also while it generates; exits 0 when nothing runs |
 | `mrun logs` | Show the log of servers started in the background |
 | `mrun cache clear` | Drop all cached state of the running server, the live conversation included (after the running request) |
@@ -60,6 +61,7 @@ mrun run [OPTIONS] [MODEL]
 | `--context <TOKENS>` | The most that fits | Memory for this many tokens of context, `64K` or `65536` (`MRUN_CONTEXT`); not with `--budget-gib` |
 | `--speculation <auto\|off>` | `auto` | Speculative decoding, as for `serve` |
 | `--info` | off | Print the memory budget breakdown after loading and exit |
+| `--mcp <NAMES>` | — | Tool servers of `~/.mrun/mcp.json` the model may call (`workspace,fetch`); each call asks `[y]es / [a]lways / [n]o` |
 
 In an interactive session, `/clear` starts a new conversation, `/info` prints the memory budget
 and `/exit` (or `/quit`, `/bye`) quits. Turns reuse the prefix cache.

@@ -7,13 +7,15 @@
   import Inspector from "../components/Inspector.svelte";
   import Message from "../components/Message.svelte";
   import Symbol from "../components/Symbol.svelte";
+  import ToolsPicker from "../components/ToolsPicker.svelte";
   import { content, estimate, fence, readAttachment } from "../lib/attach";
   import { countTokens, host, streamMessages } from "../lib/api";
   import { exportMarkdown, searchHit, tokens } from "../lib/format";
   import { copyText } from "../lib/clipboard";
   import { live } from "../lib/live.svelte";
   import { contextMenu } from "../lib/native.svelte";
-  import type { Attachment, Chat, Message as Msg, Sampling, Stats } from "../lib/types";
+  import { tools } from "../lib/tools.svelte";
+  import type { Attachment, Chat, Message as Msg, Sampling, Stats, ToolCall } from "../lib/types";
 
   let { active }: { active: boolean } = $props();
 
@@ -51,6 +53,13 @@
   let defaults = $state<Record<string, any>>({ temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0 });
   let thinkingFamily = $state(false);
   let scroller: HTMLElement | undefined = $state();
+  /** Tools (028): the picker, the calls waiting for the user, and whether a reply's tools run. */
+  let toolsOpen = $state(false);
+  let toolsBusy = $state(false);
+  const decisions = new Map<string, (d: Decision) => void>();
+  type Decision = "once" | "always" | "deny" | "retry" | "continue";
+  /** The most tool rounds one reply may take (FR-005). */
+  const ROUNDS = 20;
   let composer: HTMLTextAreaElement | undefined = $state();
 
   const current = $derived(chats.find((c) => c.id === currentId) ?? chats[0]!);
@@ -65,6 +74,14 @@
   const keep = $derived(live.app?.prefs?.keep_chats ?? null);
   const ask = $derived(keep === null && current.messages.length === 0 && chats.length === 1);
   const ready = $derived(live.state !== "stopped" && live.state !== "loading" && model !== null);
+  const toolsOn = $derived(current.tools ?? []);
+  // The privacy line names the remote hosts this chat's tools reach (FR-008).
+  $effect(() => {
+    tools.hosts = toolsOn.map((n) => tools.server(n)).filter((s) => s?.kind === "http" && s.host).map((s) => s!.host!);
+  });
+  $effect(() => {
+    if (toolsOn.length && !tools.list) void tools.load("start");
+  });
 
   onMount(async () => {
     if (live.app?.prefs?.keep_chats) {
@@ -116,10 +133,10 @@
     const body: Record<string, unknown> = {
       model,
       max_tokens: sampling.max_tokens ?? 8192,
-      messages: chat.messages
-        .filter((m) => !m.error || m.text)
-        .map((m) => ({ role: m.role, content: m.role === "user" ? content(m) : m.text })),
+      messages: chat.messages.filter((m) => !m.error || m.text || m.tools?.length).flatMap(turn),
     };
+    const defs = tools.definitions(chat.tools ?? []);
+    if (defs.length) body.tools = defs;
     if (chat.system) body.system = chat.system;
     for (const k of ["temperature", "top_p", "top_k", "min_p", "repetition_penalty", "seed"] as const) {
       if (sampling[k] !== undefined) body[k] = sampling[k];
@@ -128,8 +145,29 @@
     return body;
   }
 
+  /** A message as the API's turns: a reply that called tools is followed by their results. */
+  function turn(m: Msg): Record<string, unknown>[] {
+    if (m.role === "user") return [{ role: "user", content: content(m) }];
+    if (!m.tools?.length) return [{ role: "assistant", content: m.text }];
+    return [
+      {
+        role: "assistant",
+        content: [...(m.text ? [{ type: "text", text: m.text }] : []), ...m.tools.map((t) => ({ type: "tool_use", id: t.id, name: t.name, input: t.input }))],
+      },
+      {
+        role: "user",
+        content: m.tools.map((t) => ({
+          type: "tool_result",
+          tool_use_id: t.id,
+          content: t.result ?? "The call did not run.",
+          is_error: t.state !== "done",
+        })),
+      },
+    ];
+  }
+
   async function send(text = draft.trim()) {
-    if ((!text && !pending.length) || streaming || !ready) return;
+    if ((!text && !pending.length) || streaming || toolsBusy || !ready) return;
     const chat = current;
     const files = pending;
     draft = "";
@@ -225,11 +263,92 @@
   }
 
   function reply(chat: Chat): Promise<void> {
-    running = replyNow(chat).finally(() => (running = null));
+    running = converse(chat).finally(() => (running = null));
     return running;
   }
 
-  async function replyNow(chat: Chat) {
+  /** Replies, runs the tools a reply calls (each allowed first), and replies again (FR-005). */
+  async function converse(chat: Chat) {
+    for (let round = 1; ; round++) {
+      const msg = await replyNow(chat);
+      if (!msg.tools?.length || msg.error || msg.stats?.stop === "stopped") return;
+      if (!(await runTools(chat, msg))) return;
+      await persist(chat);
+      if (round >= ROUNDS) {
+        msg.error = `Stopped after ${ROUNDS} tool rounds. Send a message to continue.`;
+        return;
+      }
+    }
+  }
+
+  /** Waits for the card's buttons (or the keyboard) on one call. */
+  function decide(call: ToolCall, state: "asking" | "blocked"): Promise<Decision> {
+    call.state = state;
+    void scrollDown();
+    return new Promise((resolve) => decisions.set(call.id, resolve));
+  }
+
+  function onDecide(id: string, d: Decision) {
+    decisions.get(id)?.(d);
+    decisions.delete(id);
+  }
+
+  /** "Allow …" on a denial: the server's block gains it; Run Again then uses it. */
+  async function onAllow(id: string, index: number) {
+    const call = current.messages.flatMap((m) => m.tools ?? []).find((t) => t.id === id);
+    const found = call && tools.resolve(call.name, toolsOn);
+    const den = call?.denials?.[index];
+    if (!call || !found || !den?.fix) return;
+    try {
+      await host.mcpAllow(found.server.name, den.fix);
+      call.denials = call.denials!.map((d, i) => (i === index ? { text: `Allowed: ${d.label?.replace(/^Allow /, "")}`, fix: undefined } : d));
+    } catch (e) {
+      call.denials = [...call.denials!, { text: (e as Error).message }];
+    }
+  }
+
+  /** Runs a reply's calls in order; false when the user stopped. */
+  async function runTools(chat: Chat, msg: Msg): Promise<boolean> {
+    toolsBusy = true;
+    try {
+      for (const call of msg.tools!) {
+        const found = tools.resolve(call.name, chat.tools ?? []);
+        if (!found) {
+          call.state = "failed";
+          call.result = `No tool ${call.name} is on in this chat.`;
+          continue;
+        }
+        let d: Decision = (chat.always ?? []).includes(call.name) ? "once" : await decide(call, "asking");
+        if (!toolsBusy) return false;
+        call.auto = d === "once" && (chat.always ?? []).includes(call.name);
+        if (d === "deny") {
+          call.state = "denied";
+          call.result = "The user declined this call.";
+          continue;
+        }
+        if (d === "always") chat.always = [...(chat.always ?? []), call.name];
+        for (;;) {
+          call.state = "running";
+          const r = await host.mcpCall(found.server.name, found.tool, call.input).catch((e) => ({ text: String((e as Error).message), is_error: true, denials: [] }));
+          call.result = r.text;
+          call.denials = r.denials;
+          call.state = r.is_error ? "failed" : "done";
+          if (!r.denials?.some((x) => x.fix)) break;
+          d = await decide(call, "blocked");
+          if (!toolsBusy) return false;
+          if (d !== "retry") {
+            call.state = r.is_error ? "failed" : "done";
+            break;
+          }
+        }
+      }
+      return true;
+    } finally {
+      toolsBusy = false;
+    }
+  }
+
+  async function replyNow(chat: Chat): Promise<Msg> {
     const body = request(chat);
     chat.messages.push({ role: "assistant", text: "" });
     const msg = chat.messages[chat.messages.length - 1] as Msg;
@@ -239,6 +358,7 @@
     let first: number | null = null;
     let thinkStart: number | null = null;
     let output = 0;
+    const calls = new Map<number, ToolCall>();
     const stats: Stats = { prompt_tokens: 0, cached_tokens: 0, ttft_ms: null, decode_tps: null, stop: "end" };
     void scrollDown();
     try {
@@ -273,7 +393,7 @@
             output = ev.tokens;
             break;
           case "stop":
-            stats.stop = ev.reason === "max_tokens" ? "length" : "end";
+            stats.stop = ev.reason === "max_tokens" ? "length" : ev.reason === "tool_use" ? "tools" : "end";
             break;
           case "speculation":
             stats.speculation = ev.speculation;
@@ -282,6 +402,18 @@
             msg.error = ev.message;
             stats.stop = "error";
             break;
+          case "tool_start": {
+            first ??= performance.now();
+            msg.tools = [...(msg.tools ?? []), { id: ev.id, name: ev.name, input: {}, raw: "", state: "pending" }];
+            calls.set(ev.index, msg.tools[msg.tools.length - 1]!);
+            void scrollDown();
+            break;
+          }
+          case "tool_args": {
+            const c = calls.get(ev.index);
+            if (c) c.raw = (c.raw ?? "") + ev.json;
+            break;
+          }
         }
       }
     } catch (e) {
@@ -297,20 +429,37 @@
       if (output > 1 && end > first) stats.decode_tps = (output - 1) / ((end - first) / 1000);
     }
     if (thinkStart !== null && msg.reasoning_ms === undefined) msg.reasoning_ms = end - thinkStart;
+    for (const c of msg.tools ?? []) {
+      try {
+        c.input = c.raw ? JSON.parse(c.raw) : {};
+      } catch {
+        c.state = "failed";
+        c.result = "The model's arguments were not valid JSON.";
+      }
+      delete c.raw;
+    }
+    // A stopped reply's calls never run.
+    if (stats.stop === "stopped") msg.tools = msg.tools?.filter((c) => c.state !== "pending");
     msg.stats = stats;
     streaming = null;
     chat.updated = new Date().toISOString();
     await persist(chat);
+    return msg;
   }
 
   function stop() {
     streaming?.abort();
+    if (toolsBusy) {
+      // Stop while tools wait: deny what is asked and end the turn.
+      toolsBusy = false;
+      for (const id of [...decisions.keys()]) onDecide(id, "deny");
+    }
   }
 
   /** Stops a running reply (as Stop does) and waits until it has settled. */
   async function settle() {
-    if (!streaming) return;
-    streaming.abort();
+    if (!streaming && !toolsBusy) return;
+    stop();
     await running;
   }
 
@@ -372,7 +521,7 @@
   function onKey(e: KeyboardEvent) {
     if (!active) return;
     const cmd = e.metaKey || e.ctrlKey;
-    if ((e.key === "Escape" || (cmd && e.key === ".")) && streaming) {
+    if ((e.key === "Escape" || (cmd && e.key === ".")) && (streaming || toolsBusy)) {
       e.preventDefault();
       stop();
     } else if (cmd && e.key.toLowerCase() === "n" && !e.shiftKey) {
@@ -471,6 +620,9 @@
               oncommit={(text) => void commitEdit(i, text)}
               oncancel={() => ((editing = null), composer?.focus())}
               onregenerate={() => void regenerate()}
+              tools={toolsOn}
+              ondecide={onDecide}
+              onallow={(id, i) => void onAllow(id, i)}
             />
           {/each}
         </div>
@@ -502,10 +654,24 @@
         onpaste={onPaste}
         disabled={!ready}
       ></textarea>
+      <span class="tools-anchor">
+        <button type="button" class="btn plain icon" class:on={toolsOn.length > 0} onclick={() => (toolsOpen = !toolsOpen)} aria-label="Tools ({toolsOn.length} on)" aria-expanded={toolsOpen} title="Tools">
+          <Symbol name="tool" size={16} />
+          {#if toolsOn.length}<i class="badge num">{toolsOn.length}</i>{/if}
+        </button>
+        {#if toolsOpen}
+          <ToolsPicker
+            bind:on={() => toolsOn, (v) => (current.tools = v)}
+            {model}
+            onclose={() => (toolsOpen = false)}
+            onmanage={() => ((toolsOpen = false), window.dispatchEvent(new CustomEvent("mrun:menu", { detail: { item: "settings", target: "tools" } })))}
+          />
+        {/if}
+      </span>
       <button type="button" class="btn plain icon" class:on={inspector} onclick={() => (inspector = !inspector)} aria-label="Chat settings (⌥⌘I)" title="Chat Settings (⌥⌘I)">
         <Symbol name="inspector" size={16} />
       </button>
-      {#if streaming}
+      {#if streaming || toolsBusy}
         <button type="button" class="send stop" onclick={stop} aria-label="Stop (Esc)" title="Stop (Esc)"><Symbol name="stop" size={12} /></button>
       {:else}
         <button type="submit" class="send" disabled={(!draft.trim() && !pending.length) || !ready} aria-label="Send (Return)"><Symbol name="send" size={15} weight={2} /></button>
@@ -688,6 +854,24 @@
   }
   .icon.on {
     color: var(--accent-ink);
+  }
+  .tools-anchor {
+    position: relative;
+    display: inline-flex;
+  }
+  .badge {
+    position: absolute;
+    top: 1px;
+    right: 0;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--accent);
+    color: #fff;
+    font: 600 9px/14px var(--font);
+    font-style: normal;
+    text-align: center;
   }
   .send {
     width: 30px;

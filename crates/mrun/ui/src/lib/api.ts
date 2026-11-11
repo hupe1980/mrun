@@ -2,7 +2,7 @@
 // per-start token, which arrives in the URL fragment (never sent to a server) and lives in this
 // tab's sessionStorage (contracts/ui-host.md §Security).
 
-import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, ConfigView, Excerpt, Job, Miss, ModelEntry, Offer, Plan, PoolPlan, PoolView, Prefs, Sessions, Speculation, Status } from "./types";
+import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, ConfigView, Denial, Excerpt, Job, McpList, Miss, ModelEntry, Offer, Plan, PoolPlan, PoolView, Prefs, Sessions, Speculation, Status } from "./types";
 
 const KEY = "mrun.token";
 
@@ -106,8 +106,16 @@ export const host = {
   plan: (repo: string) => call<Plan>(`/app/plan?model=${encodeURIComponent(repo)}`),
   apps: () => call<AppEntry[]>("/app/apps"),
   exportChat: (name: string, text: string) => call<{ path: string }>("/app/export", json("POST", { name, text })),
-  open: (what: "config" | "log" | "chats" | "url", url?: string) =>
+  open: (what: "config" | "log" | "chats" | "mcp" | "url", url?: string) =>
     call<void>("/app/open", json("POST", { what, url })),
+  /** Tools (028): the servers of mcp.json; `start` lists their tools, `refresh` rereads the file. */
+  mcp: (mode: "" | "start" | "refresh" = "") => call<McpList>(mode ? `/app/mcp?${mode}=true` : "/app/mcp"),
+  mcpCall: (server: string, tool: string, args: unknown) =>
+    call<{ text: string; is_error: boolean; denials?: Denial[] }>("/app/mcp/call", json("POST", { server, tool, arguments: args })),
+  mcpAllow: (server: string, fix: NonNullable<Denial["fix"]>) => call<{ command: string }>("/app/mcp/allow", json("POST", { server, fix })),
+  mcpImport: (client: "claude-code" | "claude-desktop") => call<{ added: string[] }>("/app/mcp/import", json("POST", { client })),
+  mcpAdd: (kit: "workspace" | "fetch", dir?: string) => call<{ added: string[] }>("/app/mcp/add", json("POST", { kit, dir })),
+  mcpChoose: () => call<{ dir: string | null }>("/app/mcp/choose", { method: "POST" }),
 };
 
 /** Events of one streamed Messages reply. */
@@ -119,7 +127,9 @@ export type StreamEvent =
   | { type: "output"; tokens: number }
   | { type: "stop"; reason: string }
   | { type: "speculation"; speculation: Speculation }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "tool_start"; index: number; id: string; name: string }
+  | { type: "tool_args"; index: number; json: string };
 
 /**
  * Streams `POST /v1/messages` (the public API every agent uses, FR-007). Aborting `signal` drops
@@ -210,9 +220,14 @@ export function* parseFrame(frame: string): Generator<StreamEvent> {
       };
       break;
     }
+    case "content_block_start":
+      if (event.content_block?.type === "tool_use")
+        yield { type: "tool_start", index: event.index ?? 0, id: event.content_block.id ?? "", name: event.content_block.name ?? "" };
+      break;
     case "content_block_delta": {
       const d = event.delta ?? {};
-      if (d.type === "text_delta") yield { type: "text", text: d.text ?? "" };
+      if (d.type === "input_json_delta") yield { type: "tool_args", index: event.index ?? 0, json: d.partial_json ?? "" };
+      else if (d.type === "text_delta") yield { type: "text", text: d.text ?? "" };
       else if (d.type === "thinking_delta") yield { type: "thinking", text: d.thinking ?? "" };
       break;
     }

@@ -8,12 +8,35 @@
   import { host } from "../lib/api";
   import { live } from "../lib/live.svelte";
   import { jobs } from "../lib/jobs.svelte";
+  import { builtin, cageWords, tools } from "../lib/tools.svelte";
+  import { contextMenu } from "../lib/native.svelte";
   import type { ConfigView } from "../lib/types";
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { onclose, pane: initial }: { onclose: () => void; pane?: string } = $props();
 
-  type Pane = "general" | "server" | "about";
-  let pane = $state<Pane>("general");
+  type Pane = "general" | "server" | "tools" | "about";
+  // svelte-ignore state_referenced_locally
+  let pane = $state<Pane>((initial as Pane) ?? "general");
+  let toolNote = $state<string | null>(null);
+  let toolBusy = $state(false);
+  $effect(() => {
+    if (pane === "tools" && !tools.list?.servers.some((s) => s.tools || s.error)) void tools.load("start");
+  });
+
+  /** Runs an add or import and says what changed. */
+  async function toolAction(f: () => Promise<string | string[] | null>, what: string) {
+    toolBusy = true;
+    toolNote = null;
+    try {
+      const got = await f();
+      const names = Array.isArray(got) ? got : got ? [got] : null;
+      if (names) toolNote = names.length ? `Added ${names.join(", ")}. Turn ${names.length === 1 ? "it" : "them"} on in a chat with the tools button.` : `Nothing new from ${what}.`;
+    } catch (e) {
+      toolNote = (e as Error).message;
+    } finally {
+      toolBusy = false;
+    }
+  }
   let config = $state<ConfigView | null>(null);
   let configFailed = $state(false);
   let deleted = $state<number | null>(null);
@@ -98,7 +121,7 @@
 <div class="sheet glass" role="dialog" aria-modal="true" aria-label="Settings">
   <header>
     <div class="tabs" role="tablist">
-      {#each [["general", "General", "settings"], ["server", "Server", "now"], ["about", "About", "bolt"]] as [id, label, icon] (id)}
+      {#each [["general", "General", "settings"], ["server", "Server", "now"], ["tools", "Tools", "tool"], ["about", "About", "bolt"]] as [id, label, icon] (id)}
         <button role="tab" aria-selected={pane === id} class:sel={pane === id} onclick={() => (pane = id as Pane)}>
           <Symbol name={icon!} size={18} /><span>{label}</span>
         </button>
@@ -151,6 +174,39 @@
         <button class="btn primary" disabled={!live.app?.server.running || jobs.running("use", live.status?.model?.id ?? "")} onclick={() => live.status?.model && jobs.run("use", live.status.model.id, true)}>Restart Server</button>
       </div>
       <p class="muted small">mrun reads settings from defaults, then {config?.path ?? "~/.mrun/config.toml"}{config && !config.exists ? " (not created yet)" : ""}, then MRUN_* variables, then flags. The window shows them; it never writes the file.</p>
+    {:else if pane === "tools"}
+      <section class="form">
+        {#each tools.list?.servers ?? [] as s (s.name)}
+          <div class="row tool">
+            <span>
+              <b>{s.name}</b>
+              <small class="cage" class:remote={s.kind === "http"} class:open={s.kind === "stdio" && s.sandbox === false && !builtin(s)}>{cageWords(s)}</small>
+              {#if s.error}
+                <small class="err" role="alert">{s.error}</small>
+              {:else if s.tools}
+                <span class="chips">{#each s.tools as t (t.name)}<code title={t.description}>{t.name}</code>{/each}</span>
+              {:else}
+                <small>{tools.loading ? "Starting…" : "Not started yet."}</small>
+              {/if}
+            </span>
+            <code class="cmd" title={s.command ?? s.host}>{s.kind === "http" ? s.host : s.command}</code>
+          </div>
+        {:else}
+          <p class="muted pad">{tools.loading ? "Starting the servers…" : tools.error ?? "No tool servers yet. Add mrun’s own, or import the ones Claude Code has."}</p>
+        {/each}
+      </section>
+      <div class="buttons wrap">
+        <button class="btn" disabled={toolBusy} onclick={() => toolAction(() => tools.addWorkspace(), "")} title="mrun mcp add workspace <folder>">Add Workspace…</button>
+        <button class="btn" disabled={toolBusy || Boolean(tools.server("fetch"))} onclick={() => toolAction(() => tools.addFetch(), "")} title="mrun mcp add fetch">Add Fetch</button>
+        <button class="btn" disabled={toolBusy} aria-haspopup="menu" onclick={(e) => void contextMenu(e, [{ id: "claude-code", title: "From Claude Code" }, { id: "claude-desktop", title: "From Claude Desktop" }]).then((id) => {
+          if (id === "claude-code" || id === "claude-desktop") void toolAction(() => tools.importFrom(id), id === "claude-code" ? "Claude Code" : "Claude Desktop");
+        })} title="mrun mcp import claude-code | claude-desktop">Import…</button>
+        <span class="grow"></span>
+        <button class="btn plain" onclick={() => host.open("mcp").then(() => tools.load(""))}>Edit…</button>
+        <button class="btn plain" disabled={tools.loading} onclick={() => tools.load("refresh")} title="mrun mcp ls"><Symbol name="reload" size={13} /> Refresh</button>
+      </div>
+      {#if toolNote}<p class="small note" role="status">{toolNote}</p>{/if}
+      <p class="muted small">Your chats call these tools; mrun’s server never does. Each call asks first. Local servers run sandboxed to their folder unless their entry in {tools.list?.path ?? "~/.mrun/mcp.json"} says <code>"sandbox": false</code>.</p>
     {:else}
       <section class="about">
         <div class="mark" aria-hidden="true"><Symbol name="bolt" size={26} weight={1.8} /></div>
@@ -276,6 +332,58 @@
   }
   .small {
     font-size: 11px;
+  }
+  .tool {
+    align-items: flex-start;
+  }
+  .tool > span {
+    min-width: 0;
+  }
+  .cage {
+    color: var(--muted);
+  }
+  .cage.remote {
+    color: var(--remote) !important;
+  }
+  .cage.open {
+    color: var(--warn) !important;
+  }
+  .err {
+    color: var(--failed) !important;
+    overflow-wrap: anywhere;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .chips code {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--fill);
+  }
+  .cmd {
+    max-width: 45%;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--muted);
+  }
+  .pad {
+    padding: var(--s3) 0;
+    margin: 0;
+  }
+  .buttons.wrap {
+    flex-wrap: wrap;
+  }
+  .grow {
+    flex: 1;
+  }
+  .note {
+    margin: var(--s2) 0 0;
   }
   .about {
     text-align: center;

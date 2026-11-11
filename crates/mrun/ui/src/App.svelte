@@ -13,6 +13,7 @@
   import { bytes, stateWord } from "./lib/format";
   import { jobs } from "./lib/jobs.svelte";
   import { live } from "./lib/live.svelte";
+  import { tools } from "./lib/tools.svelte";
   import { isNative, post } from "./lib/native.svelte";
   import Agents from "./places/Agents.svelte";
   import Chat from "./places/Chat.svelte";
@@ -38,6 +39,7 @@
     if (place === "chat") chatOpened = true;
   });
   let settings = $state(false);
+  let settingsPane = $state<string | undefined>(undefined);
   let palette = $state<{ query: string } | null>(null);
   let firstRunDismissed = $state(false);
   let toast = $state<string | null>(null);
@@ -102,7 +104,7 @@
     else if (detail.item === "quit") {
       void ask("Quit mrun?", "Quit", { detail: "A download is still running; it resumes next time." }).then((yes) => { if (yes) void host.quit(); });
     }
-    else if (detail.item === "settings") settings = true;
+    else if (detail.item === "settings") ((settingsPane = detail.target), (settings = true));
     else if (detail.item === "stop") void action("stop");
     else if (detail.item === "place" && detail.target) place = detail.target as Place;
   }
@@ -188,12 +190,14 @@
       </ul>
       <div class="spacer"></div>
       <button class="side-settings" onclick={() => (settings = true)} title="Settings (⌘,)"><Symbol name="settings" size={16} /> Settings</button>
-      <div class="privacy" class:remote={live.remote || pooled}>
-        <Symbol name={live.remote ? "cloud" : pooled ? "pool" : "lock"} size={13} />
+      <div class="privacy" class:remote={live.remote || pooled || tools.hosts.length > 0}>
+        <Symbol name={live.remote ? "cloud" : pooled ? "pool" : tools.hosts.length ? "globe" : "lock"} size={13} />
         {#if pooled}
           <button class="privacy-link" onclick={() => (place = "pool")}>{poolLine}</button>
         {:else if live.remote}
           <span>Remote: prompts go to your RunPod pod{live.status?.pod?.cost_per_hr ? ` · $${live.status.pod.cost_per_hr.toFixed(2)}/h` : ""}</span>
+        {:else if tools.hosts.length}
+          <span>Tools: {tools.hosts.join(", ")}</span>
         {:else}
           <span>Runs on this Mac. Nothing leaves it.</span>
         {/if}
@@ -234,7 +238,7 @@
   {#if firstRun}
     <FirstRun ondone={() => ((firstRunDismissed = true), (place = "now"))} onchoose={() => ((firstRunDismissed = true), (place = "models"))} />
   {/if}
-  {#if settings}<Settings onclose={() => (settings = false)} />{/if}
+  {#if settings}<Settings pane={settingsPane} onclose={() => ((settings = false), (settingsPane = undefined))} />{/if}
   {#if palette}<Palette {commands} query={palette.query} onclose={() => (palette = null)} />{/if}
   <Ask />
   <ContextMenu />

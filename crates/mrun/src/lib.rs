@@ -10,6 +10,7 @@ pub mod config;
 pub mod errors;
 pub mod hub;
 pub mod keychain;
+pub mod mcp;
 pub mod pool;
 pub mod remote;
 pub mod runtime;
