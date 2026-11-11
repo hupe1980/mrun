@@ -15,8 +15,15 @@ fn write_config(home: &Path, servers: Value) {
     .unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_workspace_tools_run_caged_in_their_folder() {
+    // A sandbox that does not answer fails the test instead of hanging CI.
+    tokio::time::timeout(std::time::Duration::from_secs(90), workspace_tools())
+        .await
+        .expect("the caged workspace server did not answer in 90 s");
+}
+
+async fn workspace_tools() {
     if !cage::available() {
         eprintln!("skipped: this process is sandboxed, so it cannot cage children");
         return;

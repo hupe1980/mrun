@@ -223,6 +223,17 @@ pub fn spawn(
         use procage::native::{Cage, CageOptions, Grants};
         let policy = policy(sandbox, program, env_names)?;
         let mut options = CageOptions::default().with_violations();
+        // Landlock matches the program's own file and the trust-handoff paths as they are at
+        // spawn; accept that (macOS enforces both exactly).
+        #[cfg(target_os = "linux")]
+        {
+            use procage::policy::{Construct, LowerOptions};
+            options = options.with_lower(
+                LowerOptions::default()
+                    .allow(Construct::FsLiteral)
+                    .accept_spawn_snapshot(),
+            );
+        }
         if !sandbox.hosts.is_empty() {
             let allow =
                 procage::proxy::Allowlist::new(&sandbox.hosts).map_err(|e| e.to_string())?;
@@ -264,7 +275,17 @@ mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
 
+    /// Runs a script, failing (not hanging) when the sandbox does not answer in 30 s.
     async fn run(sandbox: Option<&Sandbox>, script: &str) -> (String, Proc) {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_inner(sandbox, script),
+        )
+        .await
+        .expect("the caged script did not finish in 30 s")
+    }
+
+    async fn run_inner(sandbox: Option<&Sandbox>, script: &str) -> (String, Proc) {
         let mut cmd = tokio::process::Command::new("/bin/sh");
         cmd.arg("-c")
             .arg(script)
@@ -284,7 +305,7 @@ mod tests {
         (out, proc)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_caged_server_writes_only_in_its_workspace() {
         if !available() {
             eprintln!("skipped: this process is sandboxed, so it cannot cage children");
@@ -332,7 +353,7 @@ mod tests {
         assert_eq!(out.trim(), "open", "\"sandbox\": false runs uncaged");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn the_proxy_refuses_hosts_off_the_list_and_offers_them() {
         if !available() {
             eprintln!("skipped: this process is sandboxed, so it cannot cage children");
