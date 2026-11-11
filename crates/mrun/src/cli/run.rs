@@ -2,11 +2,15 @@
 //! same renderer as the APIs and generated through the engine handle with `Session` reuse, so a
 //! follow-up only processes the new tokens.
 
-use crate::api::model::{ApiKind, AssistantPart, ChatRequest, Message, ReasoningCtl};
+use crate::api::model::{
+    ApiKind, AssistantPart, ChatRequest, GenEvent, Message, ReasoningCtl, ToolDef, ToolResult,
+};
 use crate::chat::limits::MAX_PROMPT_BYTES;
 use crate::chat::render::{RenderContext, render};
 use crate::chat::splice::{self, Reply, ReplyParts};
 use crate::chat::stop::StopMatcher;
+use crate::chat::syntax::registry::ChatSyntax;
+use crate::chat::syntax::{NO_TOKEN, ParseEnd, ParseOut, ParserConfig, Specials};
 use crate::cli::model::{self, OpenModel};
 use crate::cli::serve::Speculation;
 use crate::errors::{CliError, Exit};
@@ -14,7 +18,7 @@ use crate::hub::human_bytes;
 use crate::runtime::generate::{Event, FinishReason, Finished, GenerateRequest};
 use crate::runtime::handle::{EngineHandle, Ticket};
 use mrun_engine::{MemoryBudget, ModelInfo, Sampling};
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -68,6 +72,10 @@ pub struct RunArgs {
     /// Print the memory budget breakdown after loading and exit.
     #[arg(long)]
     pub info: bool,
+    /// Tool servers of ~/.mrun/mcp.json the model may call (`workspace,fetch`); each call asks
+    /// first (028).
+    #[arg(long, value_delimiter = ',')]
+    pub mcp: Vec<String>,
 }
 
 impl RunArgs {
@@ -157,6 +165,18 @@ pub fn run(args: RunArgs) -> u8 {
         return 0;
     }
     let mut chat = Chat::new(&model, &handle, &args, sampling);
+    if !args.mcp.is_empty() {
+        match Tools::start(&args.mcp) {
+            Ok((tools, defs)) => {
+                chat.request.tools = defs;
+                chat.tools = Some(tools);
+            }
+            Err(error) => {
+                eprintln!("error: {error}");
+                return Exit::Usage as u8;
+            }
+        }
+    }
     chat.interrupt = Interrupt::install();
     match &args.prompt {
         Some(prompt) => chat.turn(prompt),
@@ -372,6 +392,168 @@ impl Interrupt {
     }
 }
 
+/// The most tool rounds one turn may take (028 FR-005).
+const ROUNDS: usize = 20;
+
+/// The terminal chat's tool servers (028): started now, stopped with the chat.
+struct Tools {
+    runtime: tokio::runtime::Runtime,
+    registry: crate::mcp::Registry,
+    /// Qualified name → (server, tool).
+    names: std::collections::HashMap<String, (String, String)>,
+    /// Tools the user answered "always" for.
+    always: std::collections::HashSet<String>,
+    next: u32,
+    /// Where answers come from: stdin (tests script them).
+    answer: fn() -> Option<String>,
+}
+
+impl Tools {
+    fn start(servers: &[String]) -> Result<(Tools, Vec<ToolDef>), String> {
+        Self::start_in(crate::cli::mrun_home(), servers)
+    }
+
+    fn start_in(
+        home: std::path::PathBuf,
+        servers: &[String],
+    ) -> Result<(Tools, Vec<ToolDef>), String> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let registry = crate::mcp::Registry::new(home);
+        let list = runtime.block_on(registry.list(true));
+        let mut names = std::collections::HashMap::new();
+        let mut defs = Vec::new();
+        let mut shown = Vec::new();
+        for name in servers {
+            let Some(s) = list["servers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|s| s["name"] == name.as_str())
+            else {
+                return Err(format!(
+                    "no server {name} in {}; `mrun mcp ls` lists them",
+                    list["path"].as_str().unwrap_or("mcp.json")
+                ));
+            };
+            if let Some(e) = s["error"].as_str() {
+                return Err(format!("{name}: {e}"));
+            }
+            let tools = s["tools"].as_array().cloned().unwrap_or_default();
+            for t in &tools {
+                let (Some(q), Some(tool)) = (t["qualified"].as_str(), t["name"].as_str()) else {
+                    continue;
+                };
+                names.insert(q.to_string(), (name.clone(), tool.to_string()));
+                defs.push(ToolDef {
+                    name: q.into(),
+                    description: t["description"].as_str().unwrap_or("").into(),
+                    schema: t["input_schema"].clone(),
+                    strict: false,
+                    deferred: false,
+                    namespace: None,
+                });
+            }
+            let host = s["host"]
+                .as_str()
+                .map(|h| format!(", calls go to {h}"))
+                .unwrap_or_default();
+            shown.push(format!("{name} ({} tools{host})", tools.len()));
+        }
+        eprintln!("tools: {}; each call asks first", shown.join(", "));
+        Ok((
+            Tools {
+                runtime,
+                registry,
+                names,
+                always: Default::default(),
+                next: 0,
+                answer: read_line,
+            },
+            defs,
+        ))
+    }
+
+    /// Asks, runs and returns one call's result (as the model gets it).
+    fn run(&mut self, name: &str, raw_args: &str) -> (String, bool) {
+        let Some((server, tool)) = self.names.get(name).cloned() else {
+            return (format!("No tool {name} is on in this chat."), true);
+        };
+        let args: serde_json::Value = match serde_json::from_str(if raw_args.trim().is_empty() {
+            "{}"
+        } else {
+            raw_args
+        }) {
+            Ok(v) => v,
+            Err(_) => return ("The arguments were not valid JSON.".into(), true),
+        };
+        eprintln!(
+            "\n  ⚙ {server} › {tool}  {}",
+            one_line(&args.to_string(), 200)
+        );
+        if !self.always.contains(name) {
+            eprint!("  Run it? [y]es / [a]lways / [n]o: ");
+            let _ = std::io::stderr().flush();
+            match (self.answer)().as_deref().map(str::trim) {
+                Some("y" | "Y" | "yes") => {}
+                Some("a" | "A" | "always") => {
+                    self.always.insert(name.to_string());
+                }
+                _ => {
+                    eprintln!("  ✗ denied");
+                    return ("The user declined this call.".into(), true);
+                }
+            }
+        }
+        let outcome = self
+            .runtime
+            .block_on(self.registry.call(&server, &tool, args));
+        let lines = outcome.text.lines().count();
+        if outcome.is_error {
+            eprintln!("  ✗ {}", one_line(&outcome.text, 160));
+        } else {
+            eprintln!("  ✓ {lines} {}", if lines == 1 { "line" } else { "lines" });
+        }
+        // A denial matters when it can be allowed or the call failed (a probe is noise).
+        for d in outcome
+            .denials
+            .iter()
+            .filter(|d| d.fix.is_some() || outcome.is_error)
+        {
+            match &d.fix {
+                Some(fix) => eprintln!(
+                    "  sandbox: {} · to allow it: {}",
+                    d.text,
+                    fix.command(&server)
+                ),
+                None => eprintln!("  sandbox: {}", d.text),
+            }
+        }
+        (outcome.text, outcome.is_error)
+    }
+}
+
+fn one_line(text: &str, max: usize) -> String {
+    let line = text.lines().next().unwrap_or("");
+    if line.chars().count() > max {
+        format!("{}…", line.chars().take(max).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
+/// One line of stdin (the chat's messages and the answers to tool questions alike).
+fn read_line() -> Option<String> {
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line),
+    }
+}
+
 struct Chat<'a> {
     model: &'a OpenModel,
     handle: &'a EngineHandle,
@@ -380,6 +562,7 @@ struct Chat<'a> {
     max_tokens: u32,
     stop: Vec<String>,
     interrupt: Interrupt,
+    tools: Option<Tools>,
 }
 
 impl<'a> Chat<'a> {
@@ -402,6 +585,7 @@ impl<'a> Chat<'a> {
             max_tokens: args.max_tokens,
             stop: args.stop.clone(),
             interrupt: Interrupt::default(),
+            tools: None,
         }
     }
 
@@ -410,14 +594,12 @@ impl<'a> Chat<'a> {
         if interactive {
             eprintln!("Type a message; /clear starts over, /info shows the budget, /exit quits.");
         }
-        let stdin = std::io::stdin();
-        let mut lines = stdin.lock().lines();
         loop {
             if interactive {
                 print!(">>> ");
                 let _ = std::io::stdout().flush();
             }
-            let Some(Ok(line)) = lines.next() else {
+            let Some(line) = read_line() else {
                 return 0;
             };
             let line = line.trim();
@@ -446,9 +628,39 @@ impl<'a> Chat<'a> {
         }
     }
 
-    /// One user turn: render, generate, stream the reply and print the stats line.
+    /// One user turn: the reply, and while it calls tools, each call (asked first) and the
+    /// reply that follows (028, at most 20 rounds).
     fn turn(&mut self, text: &str) -> u8 {
+        let start = self.request.messages.len();
         self.request.messages.push(Message::user_text(text));
+        for _ in 0..ROUNDS {
+            let calls = match self.reply(start) {
+                Ok(calls) => calls,
+                Err(code) => return code,
+            };
+            if calls.is_empty() {
+                return 0;
+            }
+            let Some(tools) = self.tools.as_mut() else {
+                return 0;
+            };
+            for (id, name, raw_args) in calls {
+                let (content, is_error) = tools.run(&name, &raw_args);
+                self.request.messages.push(Message::Tool(ToolResult {
+                    call_id: id,
+                    content,
+                    is_error,
+                    images_omitted: 0,
+                }));
+            }
+        }
+        eprintln!("(stopped after {ROUNDS} tool rounds; send a message to continue)");
+        0
+    }
+
+    /// Renders, generates and streams one reply; returns the tool calls it made. On failure the
+    /// turn's messages (from `start`) are dropped.
+    fn reply(&mut self, start: usize) -> Result<Vec<(String, String, String)>, u8> {
         let ctx = RenderContext {
             template: &self.model.template,
             tokenizer: &self.model.tokenizer,
@@ -458,9 +670,9 @@ impl<'a> Chat<'a> {
         let mut rendered = match render(&self.request, &ctx) {
             Ok(rendered) => rendered,
             Err(error) => {
-                self.request.messages.pop();
+                self.request.messages.truncate(start);
                 eprintln!("error: {}", error.message);
-                return 1;
+                return Err(1);
             }
         };
         // D051: the current turn's replies come back as the ids the model generated.
@@ -487,45 +699,107 @@ impl<'a> Chat<'a> {
         let generation = match self.handle.generate(request) {
             Ok(generation) => generation,
             Err(error) => {
-                self.request.messages.pop();
+                self.request.messages.truncate(start);
                 eprintln!("error: {error}");
-                return 1;
+                return Err(1);
             }
         };
         self.interrupt.running(Some(generation.ticket.clone()));
         let mut reply = String::new();
         let mut generated = Vec::new();
         let mut out = std::io::stdout();
-        for event in generation.events.iter() {
-            let text = match event {
-                Event::Token { id, text, .. } => {
-                    generated.push(id);
-                    text
+        // With tools, the server's own parser splits text from calls (as for agents).
+        let mut parser = self.tools.as_ref().map(|_| {
+            ChatSyntax::get(self.model.syntax()).new_parser(&ParserConfig {
+                tools: self.request.tools.clone(),
+                reasoning_open: rendered.reasoning_open,
+                buffer_args: true,
+                specials: Some(Arc::new(Specials::new(self.model.tokenizer.added_tokens()))),
+            })
+        });
+        let mut calls: Vec<(String, String)> = Vec::new();
+        let mut parsed = ParseOut::default();
+        let show =
+            |parsed: &mut ParseOut, reply: &mut String, calls: &mut Vec<(String, String)>| {
+                for event in parsed.events.drain(..) {
+                    match event {
+                        GenEvent::TextDelta(text) | GenEvent::ReasoningDelta(text) => {
+                            let mut out = std::io::stdout();
+                            let _ = out.write_all(text.as_bytes());
+                            let _ = out.flush();
+                            reply.push_str(&text);
+                        }
+                        GenEvent::ToolStart { name, .. } => calls.push((name, String::new())),
+                        GenEvent::ToolEnd { raw_args, .. } => {
+                            if let Some(last) = calls.last_mut() {
+                                last.1 = raw_args;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
-                Event::Flush { text } => text,
+            };
+        for event in generation.events.iter() {
+            let (id, text, held) = match event {
+                Event::Token { id, text, held } => {
+                    generated.push(id);
+                    (id, text, held)
+                }
+                Event::Flush { text } => (NO_TOKEN, text, 0),
                 _ => continue,
             };
-            reply.push_str(&text);
-            let _ = out.write_all(text.as_bytes());
-            let _ = out.flush();
+            match parser.as_mut() {
+                Some(p) => {
+                    p.feed(id, &text, held, &mut parsed);
+                    show(&mut parsed, &mut reply, &mut calls);
+                }
+                None => {
+                    reply.push_str(&text);
+                    let _ = out.write_all(text.as_bytes());
+                    let _ = out.flush();
+                }
+            }
         }
         let finished = generation.finished.recv();
         self.interrupt.running(None);
         let Ok(finished) = finished else {
             eprintln!("\nerror: the engine thread has stopped");
-            return 1;
+            return Err(1);
         };
+        if let Some(p) = parser.as_mut() {
+            let end = if matches!(finished.reason, FinishReason::Length) {
+                ParseEnd::Length
+            } else {
+                ParseEnd::Stop
+            };
+            p.finish(end, &mut parsed);
+            show(&mut parsed, &mut reply, &mut calls);
+        }
         if !reply.ends_with('\n') {
             println!();
         }
         eprintln!("{}", stats_line(&finished));
         match finished.reason {
             FinishReason::Rejected(_) | FinishReason::Error(_) => {
-                self.request.messages.pop();
-                1
+                self.request.messages.truncate(start);
+                Err(1)
             }
             reason => {
-                let parts = vec![AssistantPart::Text(reply)];
+                let cancelled = matches!(reason, FinishReason::Cancelled | FinishReason::Length);
+                let mut parts = vec![AssistantPart::Text(reply)];
+                let mut made = Vec::new();
+                if !cancelled && let Some(tools) = self.tools.as_mut() {
+                    for (name, raw_args) in calls {
+                        tools.next += 1;
+                        let id = format!("call_{}", tools.next);
+                        parts.push(AssistantPart::ToolCall {
+                            id: id.clone(),
+                            name: name.clone(),
+                            raw_args: raw_args.clone(),
+                        });
+                        made.push((id, name, raw_args));
+                    }
+                }
                 if let FinishReason::Stop {
                     stop: None,
                     eos_token: Some(eos),
@@ -545,7 +819,7 @@ impl<'a> Chat<'a> {
                         });
                 }
                 self.request.messages.push(Message::Assistant(parts));
-                0
+                Ok(made)
             }
         }
     }
@@ -594,6 +868,57 @@ mod tests {
         Cli::try_parse_from(std::iter::once("run").chain(argv.iter().copied()))
             .unwrap()
             .run
+    }
+
+    #[test]
+    fn each_tool_call_asks_yes_always_or_no() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static ANSWER: AtomicUsize = AtomicUsize::new(0);
+        fn scripted() -> Option<String> {
+            let answers = ["n", "y", "a"];
+            answers
+                .get(ANSWER.fetch_add(1, Ordering::SeqCst))
+                .map(|a| (*a).to_string())
+        }
+        let home = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.txt"), "hi").unwrap();
+        // The workspace tools of this test binary's sibling `mrun` are not built here: a
+        // shell server answers the protocol instead.
+        let server = r#"while read -r l; do id=$(printf %s "$l" | sed -n 's/.*"id":\([0-9]*\).*/\1/p'); [ -z "$id" ] && continue; case "$l" in *initialize*) r='{"protocolVersion":"2025-06-18","capabilities":{}}';; *tools/list*) r='{"tools":[{"name":"read","inputSchema":{"type":"object"}}]}';; *) echo call >> calls; r='{"content":[{"type":"text","text":"hi"}]}';; esac; printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$r"; done"#;
+        std::fs::write(
+            home.path().join("mcp.json"),
+            serde_json::json!({"mcpServers": {"ws": {"command": "/bin/sh", "args": ["-c", server], "cwd": root.path(), "sandbox": false}}}).to_string(),
+        )
+        .unwrap();
+        let (mut tools, defs) = Tools::start_in(home.path().into(), &["ws".into()]).unwrap();
+        assert_eq!(defs[0].name, "ws__read");
+        tools.answer = scripted;
+        let calls = || {
+            std::fs::read_to_string(root.path().join("calls"))
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        assert_eq!(
+            tools.run("ws__read", "{}"),
+            ("The user declined this call.".into(), true)
+        );
+        assert_eq!(calls(), 0, "no call before yes");
+        assert_eq!(tools.run("ws__read", "{}"), ("hi".into(), false));
+        assert_eq!(tools.run("ws__read", "{}"), ("hi".into(), false));
+        assert_eq!(
+            tools.run("ws__read", "{}"),
+            ("hi".into(), false),
+            "always: no question"
+        );
+        assert_eq!(ANSWER.load(Ordering::SeqCst), 3);
+        assert_eq!(calls(), 3);
+        assert!(tools.run("other__x", "{}").1);
+        let missing = Tools::start_in(home.path().into(), &["nope".into()])
+            .err()
+            .unwrap_or_default();
+        assert!(missing.contains("no server nope"), "{missing}");
     }
 
     #[test]

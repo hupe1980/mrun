@@ -73,7 +73,8 @@ No. mrun runs MLX-format models from Hugging Face, such as those published by ml
 
 ## Do MCP servers and skills work?
 
-Yes. They run in your agent, which sends their tools and instructions to mrun like any others. See
+Yes. They run in your agent, which sends their tools and instructions to mrun like any others.
+mrun's own chats can call MCP servers too, sandboxed and asking before each call. See
 [MCP and skills](@/docs/mcp-and-skills.md).
 
 ## Does it run on Linux, Windows or NVIDIA GPUs?

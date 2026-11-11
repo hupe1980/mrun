@@ -151,6 +151,9 @@ export function stopWord(stop: string): string {
       return "reached the length limit";
     case "stopped":
       return "stopped by you";
+    case "tools":
+    case "tool_use":
+      return "used tools";
     case "error":
       return "failed";
     default:

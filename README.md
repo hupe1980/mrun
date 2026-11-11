@@ -80,7 +80,7 @@ machine, the server and the clients.
 
 `mrun ui` opens a native window and a menu bar item (`--browser`: in a browser): what the server
 is doing, each agent session with every miss and the text that changed, the Mac pool, a chat
-that takes files, models with a fit verdict (any repo by name), one-click agent setup and code
+that takes files and calls tools (sandboxed MCP servers, each call asked first), models with a fit verdict (any repo by name), one-click agent setup and code
 for your own apps. Every action is an `mrun` command; Copy as Command shows it. See
 [The mrun window](https://hupe1980.github.io/mrun/docs/ui/).
 

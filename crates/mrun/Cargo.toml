@@ -37,10 +37,12 @@ sha2.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokenizers.workspace = true
-tokio = { version = "1.53", features = ["rt-multi-thread", "net", "signal", "macros", "sync", "time", "process", "io-util"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "net", "signal", "macros", "sync", "time", "process", "io-util", "io-std"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy", "stream"] }
 sha1 = "0.11"
+# The built-in `grep` tool (028); already in the tree through tokenizers.
+regex = "1.13"
 tempfile.workspace = true
 toml.workspace = true
 llguidance = { version = "1.9.1", default-features = false, features = ["lark"] }
@@ -50,6 +52,10 @@ indicatif = { version = "0.18", default-features = false }
 mdns-sd = "0.21.7"
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "crypto", "pem"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "logging"] }
+
+# Cages the local MCP servers mrun's chats start (028): Seatbelt on macOS, Landlock on Linux.
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+procage = { version = "=0.7.1", features = ["tokio", "proxy"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tao = { version = "0.37.2", optional = true }

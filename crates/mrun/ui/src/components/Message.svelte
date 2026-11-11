@@ -10,6 +10,7 @@
   import Markdown from "./Markdown.svelte";
   import ReuseRibbon from "./ReuseRibbon.svelte";
   import Symbol from "./Symbol.svelte";
+  import ToolCard from "./ToolCard.svelte";
 
   let {
     message,
@@ -20,6 +21,9 @@
     oncommit,
     oncancel,
     onregenerate,
+    tools = [],
+    ondecide,
+    onallow,
   }: {
     message: Message;
     streaming?: boolean;
@@ -30,6 +34,10 @@
     oncommit?: (text: string) => void;
     oncancel?: () => void;
     onregenerate?: () => void;
+    /** The tool servers on in this chat (028). */
+    tools?: string[];
+    ondecide?: (id: string, decision: "once" | "always" | "deny" | "retry" | "continue") => void;
+    onallow?: (id: string, index: number) => void;
   } = $props();
 
   let showRibbon = $state(false);
@@ -165,7 +173,12 @@
     {#if message.error}
       <div class="error" role="alert"><Symbol name="warning" size={14} />{message.error}</div>
     {/if}
-    {#if message.text}<Markdown text={message.text} />{:else if streaming && !message.reasoning}<span class="caret" aria-label="Waiting for the reply"></span>{/if}
+    {#if message.text}<Markdown text={message.text} />{:else if streaming && !message.reasoning && !message.tools?.length}<span class="caret" aria-label="Waiting for the reply"></span>{/if}
+    {#if message.tools?.length}
+      <div class="calls">
+        {#each message.tools as call (call.id)}<ToolCard {call} on={tools} {ondecide} {onallow} />{/each}
+      </div>
+    {/if}
     {#if st && !streaming}
       <div class="foot">
         <button class="stats num" onclick={() => (showRibbon = !showRibbon)} aria-expanded={showRibbon}>
@@ -188,6 +201,11 @@
 {/if}
 
 <style>
+  .calls {
+    display: grid;
+    gap: 6px;
+    margin: 6px 0;
+  }
   .user {
     display: flex;
     justify-content: flex-end;

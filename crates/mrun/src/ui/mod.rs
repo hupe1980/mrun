@@ -8,6 +8,7 @@ pub mod host;
 #[cfg(all(feature = "app", target_os = "macos"))]
 mod shell;
 pub mod store;
+mod tools;
 
 use crate::cli::server;
 use std::io::Read;

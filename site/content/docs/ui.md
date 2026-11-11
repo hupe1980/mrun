@@ -56,6 +56,9 @@ Hover over a message, or right-click it, for its actions:
   <kbd>Return</kbd> sends it, the chat continues from there, and the replies after it are
   dropped. The new reply shows that everything before your edit was reused.
 
+**Tools**: the tools button turns MCP servers on for this chat. Each call shows what it will do
+and waits for Allow; see [Tools in mrun's chats](@/docs/mcp-and-skills.md#tools-in-mrun-s-chats).
+
 The inspector (<kbd>⌥⌘I</kbd>) holds the system prompt, the thinking switch and the sampling
 settings (temperature, top-p, top-k, min-p, repetition penalty, reply length, seed), each with the
 model's default; Reset restores them.
@@ -129,7 +132,9 @@ settings for Zed and Crush, as `mrun connect zed` prints them.
 Every action in the window is an `mrun` command. The … menu and the context menu of a model,
 chat or agent (or <kbd>⇧F10</kbd>) have **Copy as Command**, for example `mrun pull qwen3.6`.
 Settings › Server shows the server's settings with their sources, opens `config.toml` and opens
-the server log in Console, which follows it live (`mrun logs -f` in a terminal).
+the server log in Console, which follows it live (`mrun logs -f` in a terminal). Settings › Tools
+lists the chats' MCP servers with their tools and sandbox, adds mrun's own and imports Claude
+Code's or Claude Desktop's (`mrun mcp ls`, `add`, `import`).
 
 <figure class="screenshot"><a href="../../screenshots/settings-server.png" title="Open full size"><img src="../../screenshots/settings-server.png" alt="Settings, Server: each setting with where it comes from" width="1100" height="720" loading="lazy" decoding="async"></a><figcaption>Settings › Server: each setting with where it comes from</figcaption></figure>
 

@@ -263,3 +263,42 @@ export const configView = {
   ],
   warnings: [],
 };
+
+// Tools (028): mrun's own workspace tools caged to a project, fetch, and a remote server.
+export const mcpList = {
+  path: "/Users/you/.mrun/mcp.json",
+  errors: [],
+  servers: [
+    {
+      name: "workspace",
+      kind: "stdio",
+      command: "mrun mcp serve workspace --root /Users/you/code/parser",
+      env: [],
+      sandbox: { workspace: "/Users/you/code/parser", write: true, hosts: [], allow: [] },
+      tools: ["read", "write", "edit", "glob", "grep", "bash"].map((name) => ({ name, qualified: `workspace__${name}`, description: `${name} in the workspace`, input_schema: { type: "object" } })),
+    },
+    { name: "fetch", kind: "stdio", command: "mrun mcp serve fetch", env: [], sandbox: false, tools: [{ name: "fetch", qualified: "fetch__fetch", description: "Fetch a web page", input_schema: { type: "object" } }] },
+    {
+      name: "github",
+      kind: "http",
+      host: "api.githubcopilot.com",
+      headers: ["Authorization"],
+      sandbox: false,
+      tools: ["get_issue", "list_pull_requests", "create_pull_request"].map((name) => ({ name, qualified: `github__${name}`, description: name, input_schema: { type: "object" } })),
+    },
+  ],
+};
+
+/** A reply that runs the tests through the workspace's bash tool. */
+export function toolUse() {
+  return [
+    frame("message_start", { type: "message_start", message: { usage: { input_tokens: 412, cache_read_input_tokens: 2300, output_tokens: 0 } } }),
+    ...["I’ll ", "run ", "the ", "parser’s ", "tests ", "first."].map((text) => frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } })),
+    frame("content_block_start", { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "workspace__bash", input: {} } }),
+    frame("content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"command":"cargo test -p parser"}' } }),
+    frame("message_delta", { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 24 } }),
+    frame("message_stop", { type: "message_stop" }),
+  ];
+}
+
+export const testRun = { text: "running 14 tests\ntest empty_input ... FAILED\n\nfailures:\n  index out of bounds: the len is 0 but the index is 0\n[exit 101]", is_error: true };

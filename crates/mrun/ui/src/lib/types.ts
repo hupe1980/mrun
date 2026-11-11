@@ -393,7 +393,7 @@ export interface Stats {
   cached_tokens: number;
   ttft_ms: number | null;
   decode_tps: number | null;
-  stop: "end" | "length" | "stopped" | "error";
+  stop: "end" | "length" | "stopped" | "error" | "tools";
   miss?: Miss;
   speculation?: Speculation;
 }
@@ -419,6 +419,49 @@ export interface Message {
   reasoning_tokens?: number;
   stats?: Stats;
   error?: string;
+  /** The tools this reply called (028), in order; their results go back with the next request. */
+  tools?: ToolCall[];
+}
+
+/** A denial a sandbox reported, with what "Allow …" adds to the server's block (028 FR-009). */
+export interface Denial {
+  text: string;
+  fix?: { access: string; path: string } | { host: string };
+  label?: string;
+}
+
+/** One tool call of a reply (028). */
+export interface ToolCall {
+  id: string;
+  /** `<server>__<tool>`, as the model named it. */
+  name: string;
+  input: Record<string, unknown>;
+  /** The streamed JSON of the input, until the reply ends. */
+  raw?: string;
+  state: "pending" | "asking" | "running" | "blocked" | "done" | "failed" | "denied";
+  result?: string;
+  denials?: Denial[];
+  /** Ran without asking: this tool is always allowed in this chat. */
+  auto?: boolean;
+}
+
+/** A server of `~/.mrun/mcp.json`, as `GET /app/mcp` shows it: never env values or headers. */
+export interface McpServer {
+  name: string;
+  kind: "stdio" | "http";
+  command?: string;
+  host?: string;
+  env?: string[];
+  headers?: string[];
+  sandbox: false | { workspace: string | null; write: boolean; hosts: string[]; allow: { access: string; path: string }[] };
+  tools?: { name: string; qualified: string | null; description: string; input_schema: Record<string, unknown> }[];
+  error?: string;
+}
+
+export interface McpList {
+  path: string;
+  servers: McpServer[];
+  errors: string[];
 }
 
 export interface Chat {
@@ -431,6 +474,9 @@ export interface Chat {
   sampling: Sampling;
   thinking: boolean | null;
   messages: Message[];
+  /** The tool servers on in this chat (028), and the tools it always allows. */
+  tools?: string[];
+  always?: string[];
 }
 
 /** `mrun config show --json` (017): every setting with its value and where it comes from. */

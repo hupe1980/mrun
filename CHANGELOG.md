@@ -6,6 +6,18 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-11
+
+### Added
+
+- Tools in mrun's own chats: the window's Chat and `mrun run --mcp` use MCP servers from
+  `~/.mrun/mcp.json` (stdio and streamable HTTP), and every call waits for Allow, Always or Deny.
+- Local MCP servers run sandboxed by default (procage: Seatbelt on macOS, Landlock on Linux); a denial offers
+  *Allow …*, also as `mrun mcp allow`.
+- mrun's own tools as MCP servers: `workspace` (read, write, edit, glob, grep, bash in one folder)
+  and `fetch`.
+- `mrun mcp ls|import|add|allow|serve` and Settings › Tools.
+
 ## [0.4.3] - 2026-11-11
 
 ### Fixed
@@ -141,7 +153,8 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/hupe1980/mrun/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/hupe1980/mrun/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/hupe1980/mrun/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/hupe1980/mrun/compare/v0.4.0...v0.4.1

@@ -2624,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "mrun"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2641,7 +2641,9 @@ dependencies = [
  "mrun-engine",
  "mrun-runpod",
  "muda",
+ "procage",
  "rcgen",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -2661,7 +2663,7 @@ dependencies = [
 
 [[package]]
 name = "mrun-engine"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "nuvec",
  "nuvec-kernels",
@@ -2675,7 +2677,7 @@ dependencies = [
 
 [[package]]
 name = "mrun-runpod"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "axum",
  "reqwest",
@@ -3556,6 +3558,37 @@ checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "procage"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "099cba75e1939290afdf2f67cb3a9c8939af30d8a67c55601f517ced52ba16bc"
+dependencies = [
+ "futures-core",
+ "libc",
+ "procage-policy",
+ "procage-proxy",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tokio",
+]
+
+[[package]]
+name = "procage-policy"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9b42dae0f6553b1ced44ce19d88f2f8d15cb2633dc9e7d7e970237118ab6b0b"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "procage-proxy"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93a791d1ad6b698d283d8d45667d62ec85463b8298d9ac8cb2d21eef19bd80e2"
 
 [[package]]
 name = "pulp"

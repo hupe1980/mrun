@@ -157,6 +157,7 @@ mrun also reads the Hugging Face variables `HF_HOME`, `HF_HUB_CACHE`, `HF_ENDPOI
 | `~/.mrun/config.toml` | The optional config file (read only; mrun never writes it) | `MRUN_CONFIG`, `MRUN_HOME` |
 | `~/.mrun/manifests` | One manifest per pulled model: pinned revision and file hashes | `MRUN_HOME` |
 | `~/.mrun/models/<org>--<name>/<revision>/` | The model's files, weights aligned to be mapped from disk | `MRUN_HOME` |
+| `~/.mrun/mcp.json` | Tool servers of mrun's chats (mode 0600); mrun writes it only for `mcp import`, `add` and `allow` | `MRUN_HOME` |
 | `~/.mrun/server.log` | Log of background servers (all ports), moved to `server.log.1` at 10 MB | `MRUN_HOME` |
 | `~/.mrun/server-<port>.pid` | Pid of the background server on that port | `MRUN_HOME` |
 | `~/.mrun/claude/settings.json` | Claude Code settings file suggested or written by `connect` | `MRUN_HOME` |

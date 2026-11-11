@@ -125,6 +125,13 @@ pub enum Command {
         after_help = "Examples:\n  mrun pool start\n  mrun pool ls\n  mrun pool join \"Ben's pool\"\n  mrun pool admit\n  mrun pool leave"
     )]
     Pool(crate::cli::pool::PoolCommand),
+    /// Tools for mrun's own chats (the window, `mrun run`): MCP servers in ~/.mrun/mcp.json,
+    /// sandboxed, each call asked first; and mrun's own tools as MCP servers.
+    #[command(
+        subcommand,
+        after_help = "Examples:\n  mrun mcp add workspace          read, edit and run in this folder\n  mrun mcp add fetch\n  mrun mcp import claude-code\n  mrun mcp ls\n  mrun mcp allow github --host api.github.com\n  mrun run qwen3.6 --mcp workspace"
+    )]
+    Mcp(crate::cli::mcp::McpCommand),
     /// The config file: where it is, every setting in force with its source, and its schema.
     #[command(
         subcommand,

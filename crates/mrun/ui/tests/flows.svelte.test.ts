@@ -276,3 +276,207 @@ describe("places keep their state", () => {
     expect(target.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Explain the prefix cache");
   });
 });
+
+describe("tools in the chat (028 US1)", () => {
+  it("runs a call only after Allow, sends Deny back as an error, and Always stops asking (SC-001)", async () => {
+    const bodies: any[] = [];
+    const calls: any[] = [];
+    let n = 0;
+    const frame = (e: object) => `event: x\ndata: ${JSON.stringify(e)}`;
+    const toolReply = (id: string) =>
+      [
+        frame({ type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 0 } } }),
+        frame({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id, name: "workspace__read", input: {} } }),
+        frame({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"path":' } }),
+        frame({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '"src/a.rs"}' } }),
+        frame({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 5 } }),
+        "",
+      ].join("\n\n");
+    const textReply = (t: string) =>
+      [frame({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } }), frame({ type: "message_delta", delta: { stop_reason: "end_turn" } }), ""].join("\n\n");
+    const list = {
+      path: "/Users/me/.mrun/mcp.json",
+      errors: [],
+      servers: [
+        {
+          name: "workspace",
+          kind: "stdio",
+          command: "mrun mcp serve workspace --root /Users/me/app",
+          env: [],
+          sandbox: { workspace: "/Users/me/app", write: true, hosts: [], allow: [] },
+          tools: [{ name: "read", qualified: "workspace__read", description: "Read a file", input_schema: { type: "object" } }],
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const ok = (body: unknown, type = "application/json") => new Response(typeof body === "string" ? body : JSON.stringify(body), { status: 200, headers: { "content-type": type } });
+      if (url.startsWith("/app/state")) return ok(app(false));
+      if (url.startsWith("/v1/messages/count_tokens")) return ok({ input_tokens: JSON.parse(String(init?.body)).tools ? 140 : 10 });
+      if (url.startsWith("/v1/messages")) {
+        bodies.push(JSON.parse(String(init?.body)));
+        n += 1;
+        return ok(n % 2 ? toolReply(`toolu_${n}`) : textReply(`Answer ${n}`), "text/event-stream");
+      }
+      if (url.startsWith("/app/mcp/call")) {
+        calls.push(JSON.parse(String(init?.body)));
+        return ok({ text: "fn a() {}", is_error: false });
+      }
+      if (url.startsWith("/app/mcp")) return ok(list);
+      return ok(url.startsWith("/v1/models") ? { defaults: {} } : {});
+    });
+    live.app = app(false);
+    live.status = { model: { id: "qwen3.6" }, requests: [] } as any;
+    live.reachable = true;
+    const { target } = render(Chat, { active: true });
+    const doc = target.ownerDocument;
+    const until = async (ok: () => boolean) => {
+      for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+    };
+    const button = (label: string) => [...doc.querySelectorAll("button")].find((b) => b.textContent?.trim() === label);
+
+    // Turn the server on in the picker: tool count and the tokens its definitions add.
+    target.querySelector<HTMLButtonElement>("button[aria-label^=Tools]")!.click();
+    await until(() => doc.body.textContent!.includes("130 tokens"));
+    expect(doc.body.textContent).toContain("Sandboxed · writes ~/app · no network");
+    expect(doc.body.textContent).toContain("1 tool · 130 tokens");
+    doc.querySelector<HTMLInputElement>("[role=dialog][aria-label='Tools for this chat'] input[role=switch]")!.click();
+    flushSync();
+    doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flushSync();
+
+    const composer = target.querySelector<HTMLTextAreaElement>("textarea[aria-label=Message]")!;
+    const say = async (text: string) => {
+      composer.value = text;
+      composer.dispatchEvent(new Event("input"));
+      composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      const before = bodies.length;
+      await until(() => bodies.length > before && (Boolean(button("Allow")) || target.textContent!.includes(`Answer ${before + 2}`)));
+    };
+
+    await say("What is in a.rs?");
+    expect(bodies[0].tools).toEqual([{ name: "workspace__read", description: "Read a file", input_schema: { type: "object" } }]);
+    expect(target.textContent).toContain("Read");
+    expect(target.textContent).toContain("src/a.rs");
+    expect(target.textContent).toContain("Waiting for you");
+    expect(calls).toEqual([]);
+    button("Deny")!.click();
+    await until(() => target.textContent!.includes("Answer 2"));
+    expect(calls).toEqual([]);
+    const denied = bodies[1].messages.at(-1).content[0];
+    expect(denied).toMatchObject({ type: "tool_result", tool_use_id: "toolu_1", is_error: true, content: "The user declined this call." });
+    expect(target.textContent).toContain("Answer 2");
+
+    await say("Again, please");
+    button("Allow")!.click();
+    await until(() => target.textContent!.includes("Answer 4"));
+    expect(calls).toEqual([{ server: "workspace", tool: "read", arguments: { path: "src/a.rs" } }]);
+    expect(bodies[3].messages.at(-1).content[0]).toMatchObject({ tool_use_id: "toolu_3", is_error: false, content: "fn a() {}" });
+
+    await say("And once more");
+    button("Always Allow")!.click();
+    await until(() => target.textContent!.includes("Answer 6"));
+    await say("Last time");
+    expect(calls.length).toBe(3);
+    expect(target.textContent).not.toContain("Waiting for you");
+    expect(await violations()).toEqual([]);
+  });
+});
+
+describe("Settings › Tools (028 US2, US4)", () => {
+  it("lists each server with its sandbox and tools, never a secret, and adds mrun's own tools", async () => {
+    const { default: Settings } = await import("../src/places/Settings.svelte");
+    const { tools } = await import("../src/lib/tools.svelte");
+    tools.list = null;
+    const posts: string[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") posts.push(`${url} ${init.body ?? ""}`);
+      const body = url.startsWith("/app/state")
+        ? app(false)
+        : url.startsWith("/app/mcp/choose")
+        ? { dir: "/Users/me/app" }
+        : url.startsWith("/app/mcp/add")
+          ? { added: ["workspace"] }
+          : url.startsWith("/app/mcp")
+            ? {
+                path: "/Users/me/.mrun/mcp.json",
+                errors: [],
+                servers: [
+                  { name: "github", kind: "http", host: "api.example.com", headers: ["Authorization"], sandbox: false, error: "api.example.com: HTTP 401" },
+                  { name: "notes", kind: "stdio", command: "npx -y notes-mcp", env: ["NOTES_TOKEN"], sandbox: { workspace: null, write: false, hosts: ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "github.com"], allow: [] }, tools: [{ name: "search", qualified: "notes__search", description: "", input_schema: {} }] },
+                ],
+              }
+            : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const { target } = render(Settings, { onclose: () => {}, pane: "tools" } as any);
+    const doc = target.ownerDocument;
+    for (let i = 0; i < 50 && !doc.body.textContent!.includes("notes"); i++) await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    const text = doc.body.textContent!;
+    expect(text).toContain("Remote · api.example.com");
+    expect(text).toContain("api.example.com: HTTP 401");
+    expect(text).toContain("Sandboxed · reads ~ · package registries");
+    expect(text).toContain("search");
+    [...doc.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Add Workspace…")!.click();
+    for (let i = 0; i < 50 && !doc.body.textContent!.includes("Added workspace"); i++) await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    expect(posts.some((p) => p.includes("/app/mcp/add") && p.includes('"dir":"/Users/me/app"'))).toBe(true);
+    expect(doc.body.textContent).toContain("Added workspace.");
+    expect(await violations()).toEqual([]);
+  });
+});
+
+describe("tools: Stop never leaves a call waiting (028)", () => {
+  it("a call that comes back blocked after Stop ends the turn instead of asking", async () => {
+    let finish: (r: unknown) => void = () => {};
+    const frame = (e: object) => `event: x\ndata: ${JSON.stringify(e)}`;
+    const toolReply = [
+      frame({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_9", name: "workspace__read", input: {} } }),
+      frame({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"path":"a"}' } }),
+      frame({ type: "message_delta", delta: { stop_reason: "tool_use" } }),
+      "",
+    ].join("\n\n");
+    const list = { path: "/x/mcp.json", errors: [], servers: [{ name: "workspace", kind: "stdio", command: "mrun mcp serve workspace --root /w", sandbox: { workspace: "/w", write: true, hosts: [], allow: [] }, tools: [{ name: "read", qualified: "workspace__read", description: "", input_schema: {} }] }] };
+    let replies = 0;
+    const { tools } = await import("../src/lib/tools.svelte");
+    tools.list = null;
+    vi.stubGlobal("fetch", async (url: string) => {
+      const ok = (b: unknown, t = "application/json") => new Response(typeof b === "string" ? b : JSON.stringify(b), { status: 200, headers: { "content-type": t } });
+      if (url.startsWith("/app/state")) return ok(app(false));
+      if (url.startsWith("/v1/messages/count_tokens")) return ok({ input_tokens: 1 });
+      if (url.startsWith("/v1/messages")) return (replies += 1), ok(toolReply, "text/event-stream");
+      if (url.startsWith("/app/mcp/call")) return new Promise((r) => (finish = (b) => r(ok(b))));
+      if (url.startsWith("/app/mcp")) return ok(list);
+      return ok({ defaults: {} });
+    });
+    live.app = app(false);
+    live.status = { model: { id: "qwen3.6" }, requests: [] } as any;
+    live.reachable = true;
+    const { target } = render(Chat, { active: true });
+    const doc = target.ownerDocument;
+    const until = async (ok: () => boolean) => {
+      for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 0));
+      flushSync();
+    };
+    const button = (label: string) => [...doc.querySelectorAll("button")].find((b) => b.textContent?.trim() === label || b.getAttribute("aria-label") === label);
+    target.querySelector<HTMLButtonElement>("button[aria-label^=Tools]")!.click();
+    await until(() => Boolean(doc.querySelector("[aria-label='Tools for this chat'] input[role=switch]:not([disabled])")));
+    doc.querySelector<HTMLInputElement>("[aria-label='Tools for this chat'] input[role=switch]:not([disabled])")!.click();
+    doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flushSync();
+    const composer = target.querySelector<HTMLTextAreaElement>("textarea[aria-label=Message]")!;
+    composer.value = "read a";
+    composer.dispatchEvent(new Event("input"));
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await until(() => Boolean(button("Allow")));
+    button("Allow")!.click();
+    await until(() => target.textContent!.includes("Running…"));
+    button("Stop (Esc)")!.click();
+    finish({ text: "denied", is_error: true, denials: [{ text: "denied write /x", fix: { access: "write", path: "/x" }, label: "Allow writing /x" }] });
+    await until(() => !button("Stop (Esc)"));
+    expect(doc.querySelector(".card.blocked")).toBeNull();
+    expect(button("Stop (Esc)")).toBeUndefined();
+    expect(replies).toBe(1);
+  });
+});

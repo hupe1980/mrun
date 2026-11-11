@@ -36,6 +36,7 @@ async fn host_with(
     }
     host.downloads = std::sync::Arc::new(dir.join("Downloads"));
     host.reveal = false;
+    host.mcp = std::sync::Arc::new(mrun::mcp::Registry::new(dir.to_path_buf()));
     let app = router(host.clone());
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
@@ -730,4 +731,90 @@ async fn quitting_ejects_only_the_model_the_window_started() {
     *host.started.lock().unwrap() = Some(StartedBy::Ui);
     host.stop_own_server();
     assert_eq!(log().trim(), "stop --port 8484");
+}
+
+#[tokio::test]
+async fn tools_list_without_secrets_call_and_allow() {
+    // 028: the window's tool routes.
+    let dir = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("a.txt"), "hello").unwrap();
+    std::fs::write(
+        dir.path().join("mcp.json"),
+        serde_json::json!({"mcpServers": {"workspace": {
+            "command": env!("CARGO_BIN_EXE_mrun"),
+            "args": ["mcp", "serve", "workspace", "--root", root.path()],
+            "env": {"API_KEY": "s3cret-value"},
+            "sandbox": false,
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    let (port, _host) = host(dir.path(), 9).await;
+    let url = |p: &str| format!("http://127.0.0.1:{port}{p}");
+    let denied = client().get(url("/app/mcp")).send().await.unwrap();
+    assert_eq!(denied.status(), 401, "the key is needed");
+
+    let list = get_with(port, "/app/mcp?start=true", Some(TOKEN))
+        .send()
+        .await
+        .unwrap();
+    let text = list.text().await.unwrap();
+    assert!(!text.contains("s3cret"), "{text}");
+    let list: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(list["servers"][0]["env"], serde_json::json!(["API_KEY"]));
+    assert_eq!(list["servers"][0]["tools"].as_array().unwrap().len(), 6);
+
+    let call: serde_json::Value = client()
+        .post(url("/app/mcp/call"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({"server": "workspace", "tool": "read", "arguments": {"path": "a.txt"}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(call["text"], "     1\thello");
+    assert_eq!(call["is_error"], false);
+
+    let added: serde_json::Value = client()
+        .post(url("/app/mcp/add"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({"kit": "fetch"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(added["added"], serde_json::json!(["fetch"]));
+    let again = client()
+        .post(url("/app/mcp/add"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({"kit": "fetch"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 409);
+
+    let allowed: serde_json::Value = client()
+        .post(url("/app/mcp/allow"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({"server": "fetch", "fix": {"host": "example.com"}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        allowed["error"].is_string(),
+        "fetch runs uncaged: nothing to allow: {allowed}"
+    );
+    let file = std::fs::read_to_string(dir.path().join("mcp.json")).unwrap();
+    assert!(
+        file.contains("s3cret-value"),
+        "the secret stays in the file"
+    );
 }
