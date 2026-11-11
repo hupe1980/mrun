@@ -218,6 +218,9 @@ pub fn spawn(
     let Some(sandbox) = sandbox else {
         return command.spawn().map(Proc::Open).map_err(|e| e.to_string());
     };
+    if !available() {
+        return Err(format!("this system cannot sandbox it; {UNCAGED_HINT}"));
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         use procage::native::{Cage, CageOptions, Grants};
@@ -239,7 +242,8 @@ pub fn spawn(
                 procage::proxy::Allowlist::new(&sandbox.hosts).map_err(|e| e.to_string())?;
             options = options.with_proxy(procage::proxy::Proxy::new(allow));
         }
-        let cage = Cage::with_options(&policy, &options).map_err(|e| format!("sandbox: {e}"))?;
+        let cage = Cage::with_options(&policy, &options)
+            .map_err(|e| format!("sandbox: {e} ({UNCAGED_HINT})"))?;
         command.current_dir(workspace(sandbox)?);
         let child = cage
             .spawn_async(command, &Grants::new())
@@ -253,21 +257,56 @@ pub fn spawn(
     }
 }
 
-/// Whether this process can cage children (it must not be sandboxed itself).
+/// What a refused cage tells the user to do.
+const UNCAGED_HINT: &str =
+    "set \"sandbox\": false for this server in mcp.json to run it unconfined";
+
+/// Whether this process can cage children, found once: it must not be sandboxed itself (macOS),
+/// and a caged `/bin/true` must run (Linux: Landlock, and user namespaces that work; where they
+/// are half-blocked a spawn could wait forever, so the probe gets 5 s on its own thread).
 pub fn available() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        matches!(procage::native::is_sandboxed(), Ok(false))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        // Landlock must be there and enabled: build a cage to find out.
-        procage::native::Cage::new(&procage::policy::presets::minimal::v3()).is_ok()
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        false
-    }
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        #[cfg(target_os = "macos")]
+        {
+            matches!(procage::native::is_sandboxed(), Ok(false))
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(probe().unwrap_or(false));
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap_or(false)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            false
+        }
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn probe() -> Option<bool> {
+    use procage::native::{Cage, CageOptions, Grants};
+    use procage::policy::{AbsPath, Construct, LowerOptions, presets::agent_workspace};
+    let dir = std::env::temp_dir().canonicalize().ok()?;
+    let root = AbsPath::new(dir.to_string_lossy().as_bytes()).ok()?;
+    let options = CageOptions::default().with_lower(
+        LowerOptions::default()
+            .allow(Construct::FsLiteral)
+            .accept_spawn_snapshot(),
+    );
+    let cage = Cage::with_options(&agent_workspace::v3(&root), &options).ok()?;
+    let mut command = std::process::Command::new("/bin/true");
+    command
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut child = cage.spawn(&mut command, &Grants::new()).ok()?;
+    Some(child.wait().ok()?.success())
 }
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
@@ -291,7 +330,17 @@ mod tests {
             .arg(script)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
-        let mut proc = spawn(&mut cmd, sandbox, Path::new("/bin/sh"), &[]).unwrap();
+        let mut proc = match spawn(&mut cmd, sandbox, Path::new("/bin/sh"), &[]) {
+            Ok(p) => p,
+            Err(e) if e.contains("capability gaps") => {
+                eprintln!("skipped: {e}");
+                return (
+                    String::from("skipped"),
+                    Proc::Open(tokio::process::Command::new("/bin/true").spawn().unwrap()),
+                );
+            }
+            Err(e) => panic!("{e}"),
+        };
         let mut out = String::new();
         let child = proc.child();
         child
@@ -308,7 +357,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_caged_server_writes_only_in_its_workspace() {
         if !available() {
-            eprintln!("skipped: this process is sandboxed, so it cannot cage children");
+            eprintln!("skipped: this system cannot cage children");
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -326,6 +375,9 @@ mod tests {
             outside.display()
         );
         let (out, _) = run(Some(&sandbox), &script).await;
+        if out == "skipped" {
+            return;
+        }
         assert_eq!(out.trim(), "ok");
         assert!(root.join("a").exists());
         assert!(!outside.join("b").exists());
@@ -356,7 +408,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn the_proxy_refuses_hosts_off_the_list_and_offers_them() {
         if !available() {
-            eprintln!("skipped: this process is sandboxed, so it cannot cage children");
+            eprintln!("skipped: this system cannot cage children");
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -370,6 +422,9 @@ mod tests {
             "/usr/bin/curl -s -o /dev/null -w '%{http_code}' https://example.com/ || echo refused",
         )
         .await;
+        if out == "skipped" {
+            return;
+        }
         assert!(out.contains("refused") || out.starts_with("000"), "{out}");
         let denials = proc.denials();
         assert!(
