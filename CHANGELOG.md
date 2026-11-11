@@ -6,6 +6,13 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-11
+
+### Fixed
+
+- A chat that was not kept on disk was gone after switching to another place and back; Chat now
+  keeps its chats, draft and a streaming reply while you look elsewhere.
+
 ## [0.4.2] - 2026-11-10
 
 ### Fixed
@@ -134,7 +141,8 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/hupe1980/mrun/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/hupe1980/mrun/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/hupe1980/mrun/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/hupe1980/mrun/compare/v0.3.0...v0.4.0

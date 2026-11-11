@@ -248,3 +248,31 @@ describe("add a model and your code (020 US2, US3)", () => {
     expect(await violations()).toEqual([]);
   });
 });
+
+describe("places keep their state", () => {
+  it("a chat survives switching to Sessions and back, unsaved", async () => {
+    const { default: App } = await import("../src/App.svelte");
+    stubFetch({ "/app/state": app(false), "/app/models": [], "/app/agents": [], "/app/apps": [], "/app/chats": [], "/v1/models": { defaults: {}, thinking: true }, "/mrun/sessions": { kept: 0, dropped: 0, remote: false, sessions: [], requests: [] } });
+    live.app = app(false);
+    live.status = { model: { id: "qwen3.6" }, requests: [] } as any;
+    live.reachable = true;
+    live.models = [];
+    sessionStorage.setItem("mrun.token", "0".repeat(64));
+    const { target } = render(App, {});
+    await settle();
+    const go = (name: string) =>
+      [...target.querySelectorAll<HTMLButtonElement>("li > button")].find((b) => b.textContent?.trim().startsWith(name))!.click();
+    go("Chat");
+    await settle();
+    const field = target.querySelector<HTMLTextAreaElement>("textarea")!;
+    field.value = "Explain the prefix cache";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    go("Sessions");
+    await settle();
+    expect(target.querySelector<HTMLElement>(".keep")?.hidden).toBe(true);
+    go("Chat");
+    await settle();
+    expect(target.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Explain the prefix cache");
+  });
+});
