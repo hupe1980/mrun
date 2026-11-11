@@ -61,16 +61,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
       - name: Tests
-        run: |
-          (cargo test --locked --workspace --no-default-features > test.log 2>&1; echo "EXIT $?" >> test.log) &
-          for i in $(seq 1 36); do
-            sleep 20
-            echo "--- $((i*20)) s"; grep -E "Running|test result|FAILED|has been running" test.log | tail -3
-            grep -q "^EXIT" test.log && break
-          done
-          ps -eo pid,ppid,user,stat,etime,cmd --forest | grep -v "\[" | tail -50
-          tail -60 test.log
-          grep -q "^EXIT 0" test.log
+        run: cargo test --locked --workspace --no-default-features
       # The formula renders one archive with its checksum (Ruby is on the image).
       - name: Release tooling tests
         run: scripts/release/test.sh
