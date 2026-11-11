@@ -61,7 +61,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
       - name: Tests
-        run: cargo test --locked --workspace --no-default-features -- --skip mcp:: --skip each_tool_call --skip tools_list_without_secrets --skip the_workspace_tools --skip a_remote_server --skip a_server_that_cannot_start
+        run: "cargo test --locked --workspace --no-default-features -- --skip mcp:: --skip each_tool_call --skip tools_list_without_secrets --skip the_workspace_tools --skip a_remote_server --skip a_server_that_cannot_start"
       # The formula renders one archive with its checksum (Ruby is on the image).
       - name: Release tooling tests
         run: scripts/release/test.sh
