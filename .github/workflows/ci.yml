@@ -67,17 +67,17 @@ jobs:
         run: scripts/release/test.sh
 
   mcp-bisect:
-    name: "MCP bisect without ${{ matrix.group }}"
+    name: "MCP full suite ${{ matrix.group }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
-        group: ["mcp::cage", "mcp::serve", "mcp::client", "mcp::config", "cli::mcp", "each_tool_call", "the_workspace_tools", "a_remote_server", "a_server_that_cannot_start", "tools_list_without_secrets"]
+        group: ["1", "2", "3", "4", "5"]
     steps:
       - uses: actions/checkout@v4
       - run: rustup show active-toolchain || rustup toolchain install
-      - run: "cargo test --locked --workspace --no-default-features -- --skip ${{ matrix.group }}"
+      - run: cargo test --locked --workspace --no-default-features
 
   package:
     name: Package (cargo package dry runs)
