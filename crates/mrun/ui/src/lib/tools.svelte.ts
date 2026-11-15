@@ -39,6 +39,10 @@ class Tools {
     return this.added(await host.mcpAdd("fetch"));
   }
 
+  async addBrowser(): Promise<string | null> {
+    return this.added(await host.mcpAdd("browser"));
+  }
+
   /** Copies another client's servers; the names added. */
   async importFrom(client: "claude-code" | "claude-desktop"): Promise<string[]> {
     const { added } = await host.mcpImport(client);
@@ -143,6 +147,8 @@ export function describe(call: ToolCall, server: McpServer | undefined, tool: st
       case "fetch":
         return { verb: "Fetch", subject: str(i.url), reaches: hostOf(str(i.url)) };
     }
+    const browsed = browsing(tool, i);
+    if (browsed) return browsed;
   }
   const words = tool.replace(/[_-]+/g, " ").trim();
   const verb = words.charAt(0).toUpperCase() + words.slice(1);
@@ -156,10 +162,68 @@ export function describe(call: ToolCall, server: McpServer | undefined, tool: st
   };
 }
 
+/** A `browser` call (pageon) as a sentence; refs like `e12` name what the model saw. */
+function browsing(tool: string, i: Record<string, unknown>): Described | null {
+  const on = (ref: unknown) => (ref ? str(ref) : "the page");
+  switch (tool) {
+    case "browser_open":
+      return { verb: "Open", subject: str(i.url), reaches: hostOf(str(i.url)) };
+    case "browser_observe":
+      return { verb: "Look at", subject: "the page" };
+    case "browser_view":
+      return { verb: "Read", subject: `the page as ${str(i.kind) || "markdown"}` };
+    case "browser_screenshot":
+      return { verb: "Screenshot", subject: on(i.ref) };
+    case "browser_click":
+      return { verb: "Click", subject: str(i.ref) };
+    case "browser_hover":
+      return { verb: "Point at", subject: str(i.ref) };
+    case "browser_type":
+      return { verb: i.submit ? "Type and submit" : "Type", subject: `into ${str(i.ref)}`, body: { kind: "code", text: str(i.text) } };
+    case "browser_press":
+      return { verb: "Press", subject: str(i.key) };
+    case "browser_select":
+      return { verb: "Choose", subject: `${(Array.isArray(i.values) ? i.values : [i.values]).map(str).join(", ")} in ${str(i.ref)}` };
+    case "browser_upload":
+      return { verb: "Upload", subject: `${(Array.isArray(i.files) ? i.files : [i.files]).map(str).join(", ")} to ${str(i.ref)}` };
+    case "browser_drag":
+      return { verb: "Drag", subject: `${str(i.ref)} to ${str(i.to)}` };
+    case "browser_scroll":
+      return { verb: "Scroll", subject: [str(i.direction) || "down", i.ref ? `in ${str(i.ref)}` : ""].filter(Boolean).join(" ") };
+    case "browser_wait":
+      return { verb: "Wait", subject: i.ms ? `${str(i.ms)} ms` : "for the page" };
+    case "browser_back":
+      return { verb: "Go back", subject: "" };
+    case "browser_forward":
+      return { verb: "Go forward", subject: "" };
+    case "browser_tabs":
+      return i.action === "new"
+        ? { verb: "Open a tab", subject: str(i.url), reaches: i.url ? hostOf(str(i.url)) : undefined }
+        : { verb: i.action === "close" ? "Close tab" : i.action === "select" ? "Switch to tab" : "List tabs", subject: str(i.tab) };
+    case "browser_reset":
+      return { verb: "Rewind", subject: i.step === undefined ? "one step" : `to step ${str(i.step)}` };
+    case "browser_lookahead":
+      return { verb: "Try first", subject: (Array.isArray(i.actions) ? i.actions : []).map(str).join(", ") };
+    case "browser_takeover":
+      return { verb: "Hand the page to you", subject: str(i.reason) };
+    case "browser_call_tool":
+      return { verb: "Call the page’s tool", subject: str(i.name), body: { kind: "json", text: JSON.stringify(i.arguments ?? {}, null, 2) } };
+    case "browser_workflow_save":
+      return { verb: "Save as a workflow", subject: "" };
+    case "browser_workflow_run":
+      return { verb: "Run workflow", subject: str(i.workflow) };
+  }
+  return null;
+}
+
 /** The sandbox line of a server, as Settings and the picker show it. */
 export function cageWords(s: McpServer): string {
   if (s.kind === "http") return `Remote · ${s.host}`;
-  if (s.sandbox === false) return s.command === "mrun mcp serve fetch" ? "Reads the web · each call names the site" : "Not sandboxed";
+  if (s.sandbox === false) {
+    if (s.command === "mrun mcp serve fetch") return "Reads the web · each call names the site";
+    if (s.command === "mrun mcp serve browser") return "Uses websites · pages sandboxed";
+    return "Not sandboxed";
+  }
   const where = s.sandbox.workspace ? s.sandbox.workspace.replace(/^\/Users\/[^/]+/, "~") : "~";
   const h = s.sandbox.hosts;
   const net = !h.length ? "no network" : h.includes("registry.npmjs.org") && h.length === 4 ? "package registries" : `${h.length} ${h.length === 1 ? "host" : "hosts"}`;

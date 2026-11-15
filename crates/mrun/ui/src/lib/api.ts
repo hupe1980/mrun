@@ -114,7 +114,7 @@ export const host = {
     call<{ text: string; is_error: boolean; denials?: Denial[] }>("/app/mcp/call", json("POST", { server, tool, arguments: args })),
   mcpAllow: (server: string, fix: NonNullable<Denial["fix"]>) => call<{ command: string }>("/app/mcp/allow", json("POST", { server, fix })),
   mcpImport: (client: "claude-code" | "claude-desktop") => call<{ added: string[] }>("/app/mcp/import", json("POST", { client })),
-  mcpAdd: (kit: "workspace" | "fetch", dir?: string) => call<{ added: string[] }>("/app/mcp/add", json("POST", { kit, dir })),
+  mcpAdd: (kit: "workspace" | "fetch" | "browser", dir?: string) => call<{ added: string[] }>("/app/mcp/add", json("POST", { kit, dir })),
   mcpChoose: () => call<{ dir: string | null }>("/app/mcp/choose", { method: "POST" }),
 };
 

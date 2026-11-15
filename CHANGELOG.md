@@ -6,6 +6,14 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A browser for mrun's chats: `mrun mcp add browser` (or *Add Browser* in Settings › Tools)
+  adds [pageon](https://github.com/hupe1980/pageon) in the binary. The model opens websites,
+  reads them as compact element lists, clicks, types, scrolls and uses tabs; pages run in
+  pageon's sandbox (no files, network or programs) and each call asks first. Any MCP client can
+  start it: `mrun mcp serve browser`.
+
 ## [0.6.0] - 2026-11-15
 
 ### Added

@@ -18,6 +18,12 @@ use mrun::cli::verify;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // pageon's caged content process (the `browser` tools start it as `mrun content`): before
+    // anything else runs, since its cage allows no files.
+    #[cfg(feature = "browser")]
+    if std::env::args().skip(1).eq(["content"]) {
+        return mrun::mcp::browser::content();
+    }
     for warning in mrun::config::unknown_variables(std::env::vars().map(|(name, _)| name)) {
         eprintln!("{warning}");
     }

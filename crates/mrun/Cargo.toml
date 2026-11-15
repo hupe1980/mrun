@@ -14,7 +14,7 @@ authors.workspace = true
 exclude = ["bench/traces"]
 
 [features]
-default = ["engine", "app"]
+default = ["engine", "app", "browser"]
 # `ScriptedEngine` and test fixtures for the integration tests.
 test-support = []
 # The engine and what needs it (serve, run, doctor's GPU checks). `--no-default-features` builds
@@ -22,6 +22,8 @@ test-support = []
 engine = ["mrun-engine/engine"]
 # `mrun ui`'s native window and menu bar item (macOS); without it `mrun ui` opens the browser.
 app = ["dep:tao", "dep:wry", "dep:tray-icon", "dep:muda"]
+# The built-in `browser` tools (pageon, with V8): `mrun mcp serve browser`.
+browser = ["dep:pageon"]
 
 [dependencies]
 axum = "0.8"
@@ -56,6 +58,7 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_
 # Cages the local MCP servers mrun's chats start (028): Seatbelt on macOS, Landlock on Linux.
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 procage = { version = "=0.7.1", features = ["tokio", "proxy"] }
+pageon = { version = "=0.1.0", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tao = { version = "0.37.2", optional = true }

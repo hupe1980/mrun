@@ -12,8 +12,8 @@ pub enum McpCommand {
     Ls(LsArgs),
     /// Copy another client's servers into mcp.json (names it already has are kept).
     Import(ImportArgs),
-    /// Add mrun's own tools: `workspace` (read, write, edit, glob, grep, bash in a folder) or
-    /// `fetch` (web pages).
+    /// Add mrun's own tools: `workspace` (read, write, edit, glob, grep, bash in a folder),
+    /// `fetch` (web pages as text) or `browser` (a sandboxed browser: open, click, type, look).
     Add(AddArgs),
     /// Let a caged server read, write or run a path, or reach a host.
     Allow(AllowArgs),
@@ -37,8 +37,8 @@ pub struct ImportArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct AddArgs {
-    /// `workspace` or `fetch`.
-    #[arg(value_parser = ["workspace", "fetch"])]
+    /// `workspace`, `fetch` or `browser`.
+    #[arg(value_parser = ["workspace", "fetch", "browser"])]
     pub kit: String,
     /// The workspace's folder (default: the current one).
     pub dir: Option<PathBuf>,
@@ -65,8 +65,8 @@ pub struct AllowArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct ServeArgs {
-    /// `workspace` or `fetch`.
-    #[arg(value_parser = ["workspace", "fetch"])]
+    /// `workspace`, `fetch` or `browser`.
+    #[arg(value_parser = ["workspace", "fetch", "browser"])]
     pub kit: String,
     /// The workspace's folder; every path stays inside it.
     #[arg(long, required_if_eq("kit", "workspace"))]
@@ -127,7 +127,7 @@ pub fn render(list: &Value) -> String {
     let mut out = String::new();
     if servers.is_empty() {
         out.push_str(&format!(
-            "No tool servers in {path}.\n\n  mrun mcp add workspace      read, edit and run in this folder\n  mrun mcp add fetch          read web pages\n  mrun mcp import claude-code  the servers Claude Code has\n"
+            "No tool servers in {path}.\n\n  mrun mcp add workspace      read, edit and run in this folder\n  mrun mcp add fetch          read web pages\n  mrun mcp add browser        use websites in a sandboxed browser\n  mrun mcp import claude-code  the servers Claude Code has\n"
         ));
         return out;
     }
@@ -198,7 +198,7 @@ fn add(args: &AddArgs) -> Result<(), CliError> {
     let dir = dir
         .canonicalize()
         .map_err(|e| invalid(format!("{}: {e}", dir.display())))?;
-    let entry = config::builtin(&args.kit, Some(&dir)).ok_or_else(|| invalid("unknown tools"))?;
+    let entry = config::builtin(&args.kit, Some(&dir)).ok_or_else(|| without(&args.kit))?;
     let name = entry.0.clone();
     let added = config::add(&home(), vec![entry]).map_err(invalid)?;
     if added.is_empty() {
@@ -211,7 +211,12 @@ fn add(args: &AddArgs) -> Result<(), CliError> {
             "Added workspace: read, write, edit, glob, grep and bash in {}. Turn it on in a chat; each call asks first.",
             tilde(&dir.to_string_lossy())
         ),
-        _ => println!("Added fetch: web pages as text. Each call names its host and asks first."),
+        "fetch" => {
+            println!("Added fetch: web pages as text. Each call names its host and asks first.")
+        }
+        _ => println!(
+            "Added browser: open, read and use websites; pages run sandboxed (no files, no programs). Each call asks first."
+        ),
     }
     Ok(())
 }
@@ -239,7 +244,18 @@ fn allow(args: &AllowArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The tools this build leaves out (`browser` without the feature).
+fn without(kit: &str) -> CliError {
+    invalid(format!("this mrun was built without the {kit} tools"))
+}
+
 fn serve_kit(args: &ServeArgs) -> Result<(), CliError> {
+    if args.kit == "browser" {
+        #[cfg(feature = "browser")]
+        return crate::mcp::browser::serve().map_err(|e| CliError::new(Code::Internal, e));
+        #[cfg(not(feature = "browser"))]
+        return Err(without("browser"));
+    }
     let kit = match (args.kit.as_str(), &args.root) {
         ("workspace", Some(root)) => serve::Kit::Workspace(
             root.canonicalize()
