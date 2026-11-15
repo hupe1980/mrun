@@ -97,6 +97,8 @@ The live conversation is never evicted while it runs. Under memory pressure, bra
 
 A request served from the cache gets bit-identical output to recomputing its prompt from empty
 state. The chunk plan depends only on the prompt, never on what is cached or on other traffic.
+Requests running at once on several lanes get the output each gets alone: every row of a shared
+decode step keeps its single-request bits.
 
 `--no-cache` output can differ in the low bits: a cached conversation holds replies computed one
 token at a time, while `--no-cache` reads them back as a prompt, and decode and prefill kernels

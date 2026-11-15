@@ -40,9 +40,11 @@ Query strings such as `?beta=true` and `anthropic-beta` headers are accepted on 
   refused.
 - **Stateless Responses.** `previous_response_id`, `conversation` and item references are refused
   with 400; nothing is stored.
-- **Queueing.** One request runs at a time; up to 16 others wait (`--queue`). Streaming requests
-  wait as long as needed. A non-streaming request waits at most 240 seconds (`--queue-wait-s`) and
-  is refused at once when its estimated wait is longer.
+- **Queueing.** One request runs per lane (`--lanes`, two by default when they fit); up to 16
+  others wait (`--queue`). A request with `x-claude-code-request-class` other than `main` (Claude
+  Code's titles, summaries and memory recall) starts before waiting main turns. Streaming
+  requests wait as long as needed. A non-streaming request waits at most 240 seconds
+  (`--queue-wait-s`) and is refused at once when its estimated wait is longer.
 - **Keepalives.** Streams receive a keepalive after 10 seconds without a byte: Anthropic `ping`,
   Responses `response.in_progress`, Chat Completions an empty `chat.completion.chunk`
   (`"choices": []`).
@@ -126,12 +128,13 @@ the loop guard off, for benchmarks.
 
 `GET /mrun/status` returns the model, the memory budget (`budget`, `weights`, `scratch`,
 `kv_capacity_tokens`, `kv_bytes_per_token`, `binding`: what sets it, `working set`, `physical`,
-`available memory`, `--budget-gib` or `context`), the queue, the last miss report (`last`) and a `cache`
-object:
+`available memory`, `--budget-gib` or `context`), `lanes` (`configured`, `busy`), the running and
+waiting requests (`requests`, each with its `lane`, counted from 0, and `phase`), the queue, the
+last miss report (`last`) and a `cache` object:
 
 | Field | Meaning |
 | --- | --- |
-| `live_tokens` | Tokens of the live conversation |
+| `live_tokens` | Tokens of the live conversations, every lane's |
 | `branches`, `branch_tokens`, `buffer_bytes` | Conversations moved aside, their tokens and bytes |
 | `checkpoints`, `checkpoint_bytes` | Hybrid-model checkpoints and their bytes |
 | `prompt_tokens_total`, `cached_tokens_total` | Prompt tokens since start, and how many were reused |

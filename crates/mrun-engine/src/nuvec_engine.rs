@@ -30,8 +30,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::budget::{self, BudgetError, DeviceMemory, GIB, INITIAL_STATE_TOKENS, Overrides};
 use crate::calibration;
 use crate::engine::{
-    CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind, MemoryBudget, ModelInfo,
-    Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, chunk_len, verify_serially,
+    CancelToken, Checkpoint, CheckpointId, ChunkProgress, Engine, EngineError, LayerKind,
+    MAX_LANES, MIN_LANE_TOKENS, MemoryBudget, ModelInfo, Pick, Sampling, Segment, SegmentId, Step,
+    TimeLen, TokenMask, chunk_len, verify_serially,
 };
 use crate::identity::{self, IdentityError};
 use crate::ledger::Ledger;
@@ -63,6 +64,9 @@ pub struct LoadOptions {
     pub calibration: Option<PathBuf>,
     /// The layers to load (026: one Mac's part of a pool); `None` loads all of them.
     pub part: Option<Part>,
+    /// Lanes to run (011, 1–4); `None` decides from the context capacity. A part of a pool runs
+    /// one.
+    pub lanes: Option<usize>,
 }
 
 /// Where an injected failure strikes (test hook for FR-028/SC-012, [`NuvecEngine::fail_next`]).
@@ -95,6 +99,17 @@ pub enum NuvecLoadError {
     Config { path: String, message: String },
     #[error("the device reports no memory and none was given")]
     NoDevice,
+    #[error(
+        "{requested} lanes need {} tokens of context ({} each), but this budget holds {capacity}; {fits} {}",
+        u64::from(MIN_LANE_TOKENS) * *requested as u64,
+        MIN_LANE_TOKENS,
+        if *fits == 1 { "lane fits" } else { "lanes fit" }
+    )]
+    Lanes {
+        requested: usize,
+        capacity: u32,
+        fits: usize,
+    },
 }
 
 /// A step fed before the caller asked for it: its token, step id, logits and (hybrids) the
@@ -114,6 +129,30 @@ struct StoredSegment {
     recurrent: Option<RecurrentState>,
     /// The token ids of the segment's positions (for the repetition penalty).
     ids: Vec<u32>,
+}
+
+/// A lane's own state while another lane is selected (011); the ledger parks its live fields.
+#[derive(Debug)]
+struct LaneSlot {
+    seq: SeqState,
+    step: Option<(u64, Array)>,
+    draws: u64,
+    ids: Vec<u32>,
+    verified: Vec<RecurrentState>,
+}
+
+/// A prefill chunk run a few layers at a time (011): the hidden state between layers, the next
+/// layer, the layer still being awaited, and what undoes the chunk.
+#[derive(Debug)]
+struct InFlight {
+    lane: usize,
+    tokens: Vec<u32>,
+    x: Array,
+    next: usize,
+    offset: i32,
+    previous: Option<Array>,
+    capacity: u32,
+    start: Option<RecurrentState>,
 }
 
 pub struct NuvecEngine {
@@ -139,6 +178,14 @@ pub struct NuvecEngine {
     /// Hybrids after a verify (006): the recurrent state after each position from the verify's
     /// start (index 0: before `last`), for exact trims while the ledger's window is open.
     verified: Vec<RecurrentState>,
+    /// The selected lane (011); the fields above (`seq`, `step`, `draws`, `ids`, `verified`) are
+    /// its.
+    lane: usize,
+    /// Every lane's slot but the selected one's (`None` at the selected index).
+    parked: Vec<Option<LaneSlot>>,
+    /// The chunk in flight, if any.
+    /// Each lane's chunk in flight (011: a shorter prompt may take over between layers).
+    chunks: Vec<Option<InFlight>>,
 }
 
 impl std::fmt::Debug for NuvecEngine {
@@ -270,6 +317,9 @@ impl NuvecEngine {
             part,
             pipe: None,
             verified: Vec::new(),
+            lane: 0,
+            parked: vec![None],
+            chunks: vec![None],
         };
         let (weights, peak) = engine.warm_up()?;
         let scratch = |depth: u32| {
@@ -281,8 +331,50 @@ impl NuvecEngine {
             Some(context) => budget::for_context(plan, context, weights, &scratch, &engine.info)?,
             None => plan,
         };
-        let budget = budget::with_state_capacity(plan, weights, &scratch, &engine.info)?;
+        // Lanes (011): each beyond the first holds back its live position-bound state and adds a
+        // decode row and a paused chunk's hidden state to the scratch.
+        let budget_for = |lanes: usize| {
+            let rows = (lanes - 1) as u64;
+            // A paused chunk of another lane holds its hidden state between layers, and the lane
+            // two more recurrent states: one a pipelined step rolls back to, one its chunk does.
+            let paused = u64::from(chunk_len(0)) * engine.model.hidden() as u64 * 4
+                + 2 * engine.info.recurrent_bytes;
+            let scratch = |depth: u32| {
+                let row = engine.model.chunk_scratch(1, depth) + paused;
+                scratch(depth) + ((rows * row) as f64 * SCRATCH_MARGIN) as u64
+            };
+            budget::with_state_capacity(plan, weights, &scratch, &engine.info)
+                .map(|b| budget::with_lanes(b, lanes, &engine.info))
+        };
+        let whole = engine.part == Part::whole(engine.info.layers() as usize);
+        let fits = |b: &MemoryBudget, lanes: usize| {
+            lanes == 1 || b.kv_capacity_tokens as u64 >= lanes as u64 * u64::from(MIN_LANE_TOKENS)
+        };
+        let (lanes, budget) = match options.lanes.filter(|_| whole) {
+            Some(requested) => {
+                let requested = requested.clamp(1, MAX_LANES);
+                let budget = budget_for(requested)?;
+                if !fits(&budget, requested) {
+                    let fits = (1..requested)
+                        .rev()
+                        .find(|&n| budget_for(n).is_ok_and(|b| fits(&b, n)))
+                        .unwrap_or(1);
+                    return Err(NuvecLoadError::Lanes {
+                        requested,
+                        capacity: budget.kv_capacity_tokens,
+                        fits,
+                    });
+                }
+                (requested, budget)
+            }
+            None if whole => match budget_for(2) {
+                Ok(two) if fits(&two, 2) => (2, two),
+                _ => (1, budget_for(1)?),
+            },
+            None => (1, budget_for(1)?),
+        };
         engine.ledger.budget = budget;
+        engine.set_lanes(lanes);
         tensor::memory::set_memory_limit(budget.budget);
         // D062: wire the weights only when they fit what was available before the load;
         // wiring into a system already short of memory starves everything else.
@@ -409,6 +501,14 @@ impl NuvecEngine {
             .collect();
         tensor::memory::clear_cache();
         Ok(Some(checkpoints))
+    }
+
+    /// Runs `lanes` empty lanes whatever the capacity (tests: the tiny fixtures hold fewer than
+    /// [`MIN_LANE_TOKENS`] positions).
+    #[doc(hidden)]
+    pub fn force_lanes(&mut self, lanes: usize) {
+        self.reset_all();
+        self.set_lanes(lanes.clamp(1, MAX_LANES));
     }
 
     /// The arrays of checkpoint `id` as f32 values (conv tail, then delta state, per linear
@@ -554,6 +654,104 @@ impl NuvecEngine {
 
     fn hybrid(&self) -> bool {
         self.ledger.hybrid()
+    }
+
+    /// Gives the engine `lanes` lanes, all empty, lane 0 selected.
+    fn set_lanes(&mut self, lanes: usize) {
+        self.select_lane(0);
+        self.chunks = (0..lanes).map(|_| None).collect();
+        self.parked = (0..lanes)
+            .map(|i| {
+                (i != 0).then(|| LaneSlot {
+                    seq: self.seq.fresh(),
+                    step: None,
+                    draws: 0,
+                    ids: Vec::new(),
+                    verified: Vec::new(),
+                })
+            })
+            .collect();
+        self.ledger.set_lanes(lanes);
+    }
+
+    fn select_lane(&mut self, lane: usize) {
+        if lane == self.lane {
+            return;
+        }
+        let incoming = self.parked[lane].take().expect("a parked lane");
+        let outgoing = LaneSlot {
+            seq: std::mem::replace(&mut self.seq, incoming.seq),
+            step: std::mem::replace(&mut self.step, incoming.step),
+            draws: std::mem::replace(&mut self.draws, incoming.draws),
+            ids: std::mem::replace(&mut self.ids, incoming.ids),
+            verified: std::mem::replace(&mut self.verified, incoming.verified),
+        };
+        self.parked[self.lane] = Some(outgoing);
+        self.lane = lane;
+        self.ledger.select(lane);
+    }
+
+    /// Takes lane `lane`'s sequence state out (for a batched step); [`Self::put_seq`] returns it.
+    fn take_seq(&mut self, lane: usize) -> SeqState {
+        let fresh = self.seq.fresh();
+        if lane == self.lane {
+            std::mem::replace(&mut self.seq, fresh)
+        } else {
+            let slot = self.parked[lane].as_mut().expect("a parked lane");
+            std::mem::replace(&mut slot.seq, fresh)
+        }
+    }
+
+    fn put_seq(&mut self, lane: usize, seq: SeqState) {
+        if lane == self.lane {
+            self.seq = seq;
+        } else {
+            self.parked[lane].as_mut().expect("a parked lane").seq = seq;
+        }
+    }
+
+    /// One decode step of `lanes` (distinct), fed `ids` `[1, B]` at `offsets`: the logits of
+    /// every row `[B, vocab]`, each row as the lane's own step computes it.
+    fn feed_lanes(
+        &mut self,
+        lanes: &[usize],
+        ids: &Array,
+        offsets: &[i32],
+    ) -> Result<Array, EngineError> {
+        let mut seqs: Vec<SeqState> = lanes.iter().map(|&l| self.take_seq(l)).collect();
+        let first = self.part.first;
+        let model = &self.model;
+        let out = tensor::with_row_exact(|| {
+            let mut x = model.embed(ids)?;
+            for k in 0..seqs[0].layers.len() {
+                let mut states: Vec<&mut LayerState> =
+                    seqs.iter_mut().map(|s| &mut s.layers[k]).collect();
+                x = model.layer_lanes(first + k, &x, &mut states, offsets)?;
+            }
+            model.logits_rows(&x)
+        })
+        .map_err(backend);
+        for (&lane, seq) in lanes.iter().zip(seqs) {
+            self.put_seq(lane, seq);
+        }
+        out
+    }
+
+    /// Row `r` of `[B, vocab]` logits as `[1, vocab]`.
+    fn row(logits: &Array, r: i32) -> Result<Array, EngineError> {
+        let vocab = logits.dim(-1);
+        tensor::slice(logits, &[r, 0], &[r + 1, vocab]).map_err(backend)
+    }
+
+    /// Undoes the chunk in flight on its lane.
+    fn undo_chunk(&mut self, chunk: InFlight) -> Result<(), EngineError> {
+        self.select_lane(chunk.lane);
+        if let Some(start) = chunk.start {
+            self.seq.set_recurrent(start);
+        }
+        let undone = self.shrink_back(chunk.capacity);
+        tensor::memory::clear_cache();
+        undone
     }
 
     /// Drops a pending step, un-feeding its token.
@@ -871,31 +1069,16 @@ impl Engine for NuvecEngine {
     }
 
     fn prefill_chunk(&mut self, tokens: &[u32], cancel: &CancelToken) -> Result<bool, EngineError> {
-        self.end_verify();
         if tokens.is_empty() {
+            self.end_verify();
             return Ok(true);
         }
-        let growth = self.ledger.plan_append(tokens.len() as u32)?;
-        let capacity = self.grow(growth)?;
-        self.step = None;
-        // The recurrent arrays from the chunk start stay alive until the chunk commits; on a
-        // cancel or an error they come back. Attention positions written past `len` are
-        // overwritten by the next prefill.
-        let start = self.hybrid().then(|| self.seq.recurrent());
-        let outcome = self.run_chunk(tokens, cancel, &[], &mut Vec::new());
-        if !matches!(outcome, Ok(true)) {
-            if let Some(start) = start {
-                self.seq.set_recurrent(start);
-            }
-            self.shrink_back(capacity)?;
-            tensor::memory::clear_cache();
-            return outcome;
+        self.begin_chunk(tokens)?;
+        match self.advance_chunk(usize::MAX, cancel)? {
+            ChunkProgress::Done => Ok(true),
+            ChunkProgress::Cancelled => Ok(false),
+            ChunkProgress::More => unreachable!("every layer ran"),
         }
-        let start = self.ledger.len();
-        self.ledger.advance(tokens.len() as u32);
-        self.record(start, tokens);
-        tensor::memory::clear_cache();
-        Ok(true)
     }
 
     fn forward(&mut self, last: u32) -> Result<Step, EngineError> {
@@ -1016,12 +1199,9 @@ impl Engine for NuvecEngine {
     }
 
     fn max_draft(&self) -> u32 {
-        // nuvec promises row-exact products on the GPU only (on the CPU a float32 product of two
-        // rows can differ from one row's in the last bits), and pools verify nothing.
-        if self.info.numerics.gpu_arch == "cpu"
-            || self.pipe.is_some()
-            || self.part != Part::whole(self.model.layers())
-        {
+        // Products and attention of up to `ROW_INDEPENDENT_ROWS` rows are row-exact on the GPU and
+        // the CPU (nuvec 0.9.0); pools verify nothing.
+        if self.pipe.is_some() || self.part != Part::whole(self.model.layers()) {
             return 0;
         }
         // nuvec keeps float32 attention at head sizes 192 and 256 serial-exact for 32 / gqa rows
@@ -1342,10 +1522,394 @@ impl Engine for NuvecEngine {
     }
 
     fn reset_all(&mut self) {
-        self.end_verify();
-        self.reset();
+        self.chunks.iter_mut().for_each(|c| *c = None);
+        for lane in 0..self.parked.len() {
+            self.select_lane(lane);
+            self.end_verify();
+            self.reset();
+            self.draws = 0;
+            self.verified.clear();
+        }
+        self.select_lane(0);
         self.ledger.reset_all();
         tensor::memory::clear_cache();
+    }
+
+    fn lanes(&self) -> usize {
+        self.parked.len()
+    }
+
+    fn lane(&self) -> usize {
+        self.lane
+    }
+
+    fn select(&mut self, lane: usize) {
+        self.select_lane(lane);
+    }
+
+    fn begin_chunk(&mut self, tokens: &[u32]) -> Result<(), EngineError> {
+        assert!(
+            self.chunks[self.lane].is_none(),
+            "one chunk in flight per lane"
+        );
+        self.end_verify();
+        let growth = self.ledger.plan_append(tokens.len() as u32)?;
+        let capacity = self.grow(growth)?;
+        self.step = None;
+        // The recurrent arrays from the chunk start stay alive until the chunk commits; on a
+        // cancel or an error they come back. Attention positions written past `len` are
+        // overwritten by the next prefill.
+        let start = self.hybrid().then(|| self.seq.recurrent());
+        let ids = Array::from_u32(tokens, &[1, tokens.len() as i32]);
+        let x = match self.input(&ids) {
+            Ok(x) => x,
+            Err(e) => {
+                if let Some(start) = start {
+                    self.seq.set_recurrent(start);
+                }
+                self.shrink_back(capacity)?;
+                return Err(e);
+            }
+        };
+        self.chunks[self.lane] = Some(InFlight {
+            lane: self.lane,
+            tokens: tokens.to_vec(),
+            x,
+            next: 0,
+            offset: self.ledger.len() as i32,
+            previous: None,
+            capacity,
+            start,
+        });
+        Ok(())
+    }
+
+    fn advance_chunk(
+        &mut self,
+        layers: usize,
+        cancel: &CancelToken,
+    ) -> Result<ChunkProgress, EngineError> {
+        let Some(mut chunk) = self.chunks[self.lane].take() else {
+            return Err(EngineError::Backend("no chunk in flight".into()));
+        };
+        // Another lane's chunk may still have its last layer running: let it finish first, so
+        // one chunk layer's activations are in flight at a time, as scratch counts them (an
+        // error there shows when that lane advances again).
+        for other in self.chunks.iter().flatten() {
+            if let Some(layer) = &other.previous {
+                let _ = layer.eval();
+            }
+        }
+        self.select_lane(chunk.lane);
+        let total = self.seq.layers.len();
+        let stop = chunk.next.saturating_add(layers).min(total);
+        while chunk.next < stop {
+            let k = chunk.next;
+            let i = self.part.first + k;
+            let layer = &mut self.seq.layers[k];
+            let ran = self
+                .model
+                .layer(i, &chunk.x, layer, chunk.offset)
+                .and_then(|x| {
+                    let mut outputs = layer.arrays();
+                    outputs.push(&x);
+                    tensor::async_eval(&outputs).map(|()| x)
+                })
+                .map_err(backend)
+                .and_then(|x| {
+                    if self.strikes(FailPoint::PrefillLayer(i)) {
+                        Err(injected())
+                    } else {
+                        Ok(x)
+                    }
+                });
+            let x = match ran {
+                Ok(x) => x,
+                Err(e) => {
+                    self.undo_chunk(chunk)?;
+                    return Err(e);
+                }
+            };
+            chunk.x = x;
+            chunk.next += 1;
+            // Layer k is queued; wait for layer k − 1, then check for cancellation.
+            if let Some(done) = chunk.previous.replace(chunk.x.clone()) {
+                if let Err(e) = done.eval() {
+                    self.undo_chunk(chunk)?;
+                    return Err(backend(e));
+                }
+                if cancel.is_cancelled() {
+                    self.undo_chunk(chunk)?;
+                    return Ok(ChunkProgress::Cancelled);
+                }
+            }
+        }
+        if chunk.next < total {
+            self.chunks[self.lane] = Some(chunk);
+            return Ok(ChunkProgress::More);
+        }
+        // A prefill chunk's hidden state goes on to the next part; the last part's is not needed.
+        let mut x = chunk.x.clone();
+        if let Some(pipe) = self.pipe.as_ref().filter(|p| !p.last()) {
+            x = match pipe.send(&x) {
+                Ok(x) => x,
+                Err(e) => {
+                    self.undo_chunk(chunk)?;
+                    return Err(backend(e));
+                }
+            };
+        }
+        if let Err(e) = x.eval() {
+            self.undo_chunk(chunk)?;
+            return Err(backend(e));
+        }
+        let start = self.ledger.len();
+        self.ledger.advance(chunk.tokens.len() as u32);
+        self.record(start, &chunk.tokens);
+        tensor::memory::clear_cache();
+        Ok(ChunkProgress::Done)
+    }
+
+    fn abort_chunk(&mut self) {
+        if let Some(chunk) = self.chunks[self.lane].take() {
+            let selected = self.lane;
+            let _ = self.undo_chunk(chunk);
+            self.select_lane(selected);
+        }
+    }
+
+    fn forward_lanes(&mut self, rows: &[(usize, u32)]) -> Result<Vec<Step>, (usize, EngineError)> {
+        let selected = self.lane;
+        if rows.len() == 1 || self.pipe.is_some() {
+            let mut steps = Vec::with_capacity(rows.len());
+            for (i, &(lane, last)) in rows.iter().enumerate() {
+                self.select_lane(lane);
+                match self.forward(last) {
+                    Ok(step) => steps.push(step),
+                    Err(e) => {
+                        self.select_lane(selected);
+                        return Err((i, e));
+                    }
+                }
+            }
+            self.select_lane(selected);
+            return Ok(steps);
+        }
+        // Each row: its pending step when it fed `last`, else growth for one more position.
+        struct Fresh {
+            row: usize,
+            lane: usize,
+            last: u32,
+            capacity: u32,
+            before: Option<RecurrentState>,
+            offset: i32,
+        }
+        let mut steps: Vec<Option<Step>> = (0..rows.len()).map(|_| None).collect();
+        let mut fresh: Vec<Fresh> = Vec::new();
+        let undo = |engine: &mut Self, fresh: Vec<Fresh>| {
+            for f in fresh {
+                engine.select_lane(f.lane);
+                if let Some(before) = f.before {
+                    engine.seq.set_recurrent(before);
+                }
+                let _ = engine.shrink_back(f.capacity);
+            }
+        };
+        for (i, &(lane, last)) in rows.iter().enumerate() {
+            self.select_lane(lane);
+            self.end_verify();
+            let planned = self.ledger.usable().and_then(|()| {
+                if let Some(pending) = self.ledger.reuse_pending(|p| p.token == last) {
+                    self.step = Some((pending.id, pending.logits));
+                    return Ok(None);
+                }
+                let growth = self.ledger.plan_append(1)?;
+                self.grow(growth).map(Some)
+            });
+            match planned {
+                Ok(None) => {
+                    let id = self.step.as_ref().expect("reused").0;
+                    steps[i] = Some(Step::new(id));
+                }
+                Ok(Some(capacity)) => {
+                    self.step = None;
+                    fresh.push(Fresh {
+                        row: i,
+                        lane,
+                        last,
+                        capacity,
+                        before: self.hybrid().then(|| self.seq.recurrent()),
+                        offset: self.ledger.len() as i32,
+                    });
+                }
+                Err(e) => {
+                    undo(self, fresh);
+                    self.select_lane(selected);
+                    return Err((i, e));
+                }
+            }
+        }
+        if !fresh.is_empty() {
+            let lanes: Vec<usize> = fresh.iter().map(|f| f.lane).collect();
+            let tokens: Vec<u32> = fresh.iter().map(|f| f.last).collect();
+            let offsets: Vec<i32> = fresh.iter().map(|f| f.offset).collect();
+            let ids = Array::from_u32(&tokens, &[1, tokens.len() as i32]);
+            let fed = self.feed_lanes(&lanes, &ids, &offsets).and_then(|logits| {
+                tensor::async_eval(&[&logits])
+                    .map_err(backend)
+                    .map(|()| logits)
+            });
+            let logits = match fed {
+                Ok(logits) => logits,
+                Err(e) => {
+                    let row = fresh[0].row;
+                    undo(self, fresh);
+                    self.select_lane(selected);
+                    return Err((row, e));
+                }
+            };
+            for (r, f) in fresh.iter().enumerate() {
+                self.select_lane(f.lane);
+                let row = match Self::row(&logits, r as i32) {
+                    Ok(row) => row,
+                    Err(e) => {
+                        self.select_lane(selected);
+                        return Err((f.row, e));
+                    }
+                };
+                self.ledger.advance(1);
+                self.record(self.ledger.len() - 1, &[f.last]);
+                self.after_decode_step();
+                let id = self.ledger.id();
+                self.step = Some((id, row));
+                steps[f.row] = Some(Step::new(id));
+            }
+        }
+        self.select_lane(selected);
+        Ok(steps.into_iter().map(|s| s.expect("every row")).collect())
+    }
+
+    fn sample_lanes(&mut self, picks: Vec<Pick<'_>>) -> Vec<Result<u32, EngineError>> {
+        let selected = self.lane;
+        if picks.len() == 1 || self.pipe.is_some() {
+            let out = picks
+                .into_iter()
+                .map(|p| {
+                    self.select_lane(p.lane);
+                    self.sample(p.step, p.sampling, p.mask)
+                })
+                .collect();
+            self.select_lane(selected);
+            return out;
+        }
+        // The tokens, lazily, each as `sample` draws it.
+        let mut tokens: Vec<Result<Array, EngineError>> = Vec::with_capacity(picks.len());
+        for p in &picks {
+            self.select_lane(p.lane);
+            let drawn = (|| {
+                self.ledger.usable()?;
+                let logits = self.current_logits(&p.step)?.clone();
+                if let Some(mask) = p.mask {
+                    mask.check_width(self.info.vocab)?;
+                }
+                self.step = None;
+                let mut key = if p.sampling.is_greedy() {
+                    None
+                } else {
+                    Some(self.key(p.sampling.seed).map_err(backend)?)
+                };
+                let recent = self.recent_ids(p.sampling);
+                sample::sample(&logits, p.sampling, p.mask, recent.as_ref(), || {
+                    key.take().ok_or_else(|| tensor::Error("no key".into()))
+                })
+                .map_err(backend)?
+                .ok_or(EngineError::EmptyMask)
+            })();
+            tokens.push(drawn);
+        }
+        let drawn: Vec<&Array> = tokens.iter().filter_map(|t| t.as_ref().ok()).collect();
+        if let Err(e) = tensor::async_eval(&drawn) {
+            self.select_lane(selected);
+            return picks.iter().map(|_| Err(backend(e.clone()))).collect();
+        }
+        // Pipeline: one batched step of the sampled tokens of every lane with room.
+        let mut fed: Vec<(usize, Option<RecurrentState>)> = Vec::new();
+        let mut offsets = Vec::new();
+        let mut ids = Vec::new();
+        for (i, p) in picks.iter().enumerate() {
+            let Ok(token) = &tokens[i] else { continue };
+            self.select_lane(p.lane);
+            if self.ledger.has_room() {
+                fed.push((i, self.hybrid().then(|| self.seq.recurrent())));
+                offsets.push(self.ledger.len() as i32);
+                ids.push(tensor::reshape(token, &[1, 1]));
+            }
+        }
+        let next = if fed.is_empty() {
+            None
+        } else {
+            let lanes: Vec<usize> = fed.iter().map(|&(i, _)| picks[i].lane).collect();
+            let batched = ids
+                .into_iter()
+                .collect::<tensor::Result<Vec<_>>>()
+                .and_then(|ids| tensor::concatenate(&ids.iter().collect::<Vec<_>>(), 1))
+                .map_err(backend)
+                .and_then(|ids| self.feed_lanes(&lanes, &ids, &offsets))
+                .and_then(|next| tensor::async_eval(&[&next]).map_err(backend).map(|()| next));
+            Some(batched)
+        };
+        let mut out = Vec::with_capacity(picks.len());
+        for (i, p) in picks.iter().enumerate() {
+            self.select_lane(p.lane);
+            let slot = fed.iter().position(|&(j, _)| j == i);
+            let value = match &tokens[i] {
+                Ok(token) if self.strikes(FailPoint::SampleReadback) => {
+                    let _ = token;
+                    Err(injected())
+                }
+                Ok(token) => token.item_u32().map_err(backend),
+                Err(e) => Err(e.clone()),
+            };
+            let before = slot.and_then(|s| fed[s].1.clone());
+            match (value, slot, &next) {
+                (Ok(value), Some(r), Some(Ok(logits))) => match Self::row(logits, r as i32) {
+                    Ok(row) => {
+                        let id = self.ledger.id();
+                        self.ledger.push_pending(Pending {
+                            token: value,
+                            id,
+                            logits: row,
+                            before,
+                        });
+                        self.record(self.ledger.len() - 1, &[value]);
+                        self.after_decode_step();
+                        out.push(Ok(value));
+                    }
+                    Err(e) => {
+                        if let Some(before) = before {
+                            self.seq.set_recurrent(before);
+                        }
+                        out.push(Err(e));
+                    }
+                },
+                (Ok(value), None, _) => out.push(Ok(value)),
+                (Ok(_), Some(_), Some(Err(e))) => {
+                    if let Some(before) = before {
+                        self.seq.set_recurrent(before);
+                    }
+                    out.push(Err(e.clone()));
+                }
+                (Err(e), _, _) => {
+                    if let Some(before) = before {
+                        self.seq.set_recurrent(before);
+                    }
+                    out.push(Err(e));
+                }
+                (Ok(_), Some(_), None) => unreachable!("fed rows have a step"),
+            }
+        }
+        self.select_lane(selected);
+        out
     }
 }
 

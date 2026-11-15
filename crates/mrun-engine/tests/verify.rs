@@ -95,18 +95,8 @@ fn verifies_as_serial_decoding(device: Device) {
 
             let (engine, _) = prompted(name, device, LIMIT);
             let vocab = engine.info().vocab;
-            // The CPU has no row-exact products: its verify is serial decoding (`max_draft` 0),
-            // still exact; the same drafts check it.
-            let max = match device {
-                Device::Gpu => {
-                    assert_eq!(engine.max_draft(), 7, "{name}: 8 row-exact rows");
-                    7
-                }
-                Device::Cpu => {
-                    assert_eq!(engine.max_draft(), 0, "{name}: no verify pass on the CPU");
-                    7
-                }
-            };
+            let max = 7;
+            assert_eq!(engine.max_draft(), 7, "{name} {device:?}: 8 row-exact rows");
 
             // Right drafts: all kept, plus the sample after them.
             for n in [1, max] {
@@ -191,9 +181,6 @@ fn verifies_as_serial_decoding(device: Device) {
 
         // Trims to each position of a verify pass leave serial decoding's state (greedy: a trim
         // does not rewind the draw count, so sampled decoding would draw on).
-        if device == Device::Cpu {
-            continue;
-        }
         let serial = serial(name, device, &Sampling::GREEDY);
         let max = 7;
         for j in 0..=max + 1 {

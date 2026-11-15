@@ -3,6 +3,7 @@
 pub mod draft;
 pub mod generate;
 pub mod handle;
+pub mod lanes;
 pub mod power;
 pub mod pressure;
 pub mod queue;

@@ -126,6 +126,13 @@ impl Branch {
     }
 }
 
+/// A path holding checkpoints: a lane's trunk or a branch (by index).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Path {
+    Lane(usize),
+    Branch(usize),
+}
+
 /// Lookup result.
 #[derive(Debug, Default)]
 struct Plan {
@@ -143,6 +150,21 @@ struct Dropped {
     points: Vec<(u32, u64)>,
 }
 
+/// A lane's trunk fields while another lane is selected (011).
+#[derive(Debug, Default)]
+struct Trunk {
+    tokens: Vec<u32>,
+    turns: u32,
+    continues: bool,
+    checkpoints: Vec<Checkpoint>,
+    schedule: Schedule,
+    planned: Option<(u32, Vec<u32>)>,
+    records: Vec<Record>,
+}
+
+/// Every lane has its own trunk (011): the selected lane's fields are in place (`trunk`,
+/// `turns`, `continues`, `checkpoints`, `schedule`, `planned`, `records`), the others parked.
+/// Branches belong to no lane and move between lanes.
 #[derive(Debug)]
 pub struct PrefixStore {
     mode: CacheMode,
@@ -168,6 +190,14 @@ pub struct PrefixStore {
     ledger: Arc<Mutex<Ledger>>,
     requests: u64,
     stats: CacheStats,
+    /// The selected lane.
+    lane: usize,
+    /// Every lane's trunk but the selected one's.
+    parked: Vec<Option<Trunk>>,
+    /// Lanes running a request (never evicted).
+    busy: Vec<bool>,
+    /// The request count when each lane was last used (idle lanes are shed least recent first).
+    used: Vec<u64>,
 }
 
 fn common(a: &[u32], b: &[u32]) -> u32 {
@@ -217,7 +247,100 @@ impl PrefixStore {
             ledger: Arc::new(Mutex::new(Ledger::default())),
             requests: 0,
             stats: CacheStats::default(),
+            lane: 0,
+            parked: vec![None],
+            busy: vec![false],
+            used: vec![0],
         }
+    }
+
+    /// Sets the number of lanes (before any request); lane 0 is selected.
+    pub fn set_lanes(&mut self, lanes: usize) {
+        let lanes = lanes.max(1);
+        self.lane = 0;
+        self.parked = (0..lanes).map(|i| (i != 0).then(Trunk::default)).collect();
+        self.busy = vec![false; lanes];
+        self.used = vec![0; lanes];
+    }
+
+    pub fn lanes(&self) -> usize {
+        self.parked.len()
+    }
+
+    /// The selected lane.
+    pub fn lane(&self) -> usize {
+        self.lane
+    }
+
+    /// Selects `lane` here and in the engine.
+    pub fn select(&mut self, engine: &mut dyn Engine, lane: usize) {
+        engine.select(lane);
+        if lane == self.lane {
+            return;
+        }
+        let incoming = self.parked[lane].take().expect("a parked lane");
+        let outgoing = Trunk {
+            tokens: std::mem::replace(&mut self.trunk, incoming.tokens),
+            turns: std::mem::replace(&mut self.turns, incoming.turns),
+            continues: std::mem::replace(&mut self.continues, incoming.continues),
+            checkpoints: std::mem::replace(&mut self.checkpoints, incoming.checkpoints),
+            schedule: std::mem::replace(&mut self.schedule, incoming.schedule),
+            planned: std::mem::replace(&mut self.planned, incoming.planned),
+            records: std::mem::replace(&mut self.records, incoming.records),
+        };
+        self.parked[self.lane] = Some(outgoing);
+        self.lane = lane;
+    }
+
+    /// Marks `lane` as running a request (or idle again).
+    pub fn set_busy(&mut self, lane: usize, busy: bool) {
+        self.busy[lane] = busy;
+        self.used[lane] = self.requests;
+    }
+
+    /// Every lane's trunk tokens, schedule, turns and checkpoints (the selected one's in place).
+    fn trunks(&self) -> impl Iterator<Item = (usize, &[u32], &Schedule, u32, &[Checkpoint])> {
+        self.parked.iter().enumerate().map(move |(i, t)| match t {
+            Some(t) => (i, &t.tokens[..], &t.schedule, t.turns, &t.checkpoints[..]),
+            None => (
+                i,
+                &self.trunk[..],
+                &self.schedule,
+                self.turns,
+                &self.checkpoints[..],
+            ),
+        })
+    }
+
+    /// The free lane to run `prompt` on (FR-020): the longest prefix it can reuse there (its own
+    /// trunk or a branch attachable on it); ties go to the lane cheapest to give up: an empty
+    /// one, then fewest turns, then least recently used.
+    pub fn best_lane(&self, prompt: &[u32], free: &[usize]) -> usize {
+        let holders: Vec<_> = self
+            .trunks()
+            .map(|(_, tokens, schedule, ..)| self.holders_on(tokens, schedule))
+            .collect();
+        *free
+            .iter()
+            .max_by_key(|&&lane| {
+                let (_, tokens, _, turns, _) = self.trunks().nth(lane).expect("a lane");
+                let plan = self.lookup_on(tokens, &holders[lane], prompt);
+                // A few shared tokens (a BOS) are worth no move.
+                let matched = if plan.matched < MIN_BRANCH {
+                    0
+                } else {
+                    plan.matched
+                };
+                let empty = tokens.is_empty();
+                (
+                    matched,
+                    empty,
+                    std::cmp::Reverse(turns),
+                    std::cmp::Reverse(self.used[lane]),
+                    std::cmp::Reverse(lane),
+                )
+            })
+            .expect("a free lane")
     }
 
     /// The reply records the api layer splices from (D051); shared with the renderer.
@@ -258,7 +381,7 @@ impl PrefixStore {
     pub fn assert_invariants(&self, engine: &dyn Engine) {
         let len = self.trunk.len() as u32;
         assert_eq!(engine.len(), len, "1: the store mirrors the live state");
-        let holders = self.holders();
+        let holders = self.reachable();
         let mut segments = Vec::new();
         for (b, chain) in self.branches.iter().zip(&holders) {
             let end = b.tokens.len() as u32;
@@ -298,12 +421,7 @@ impl PrefixStore {
         for c in &self.checkpoints {
             assert!(c.position <= len, "5: trunk checkpoints lie on the trunk");
         }
-        let checkpoint_bytes: u64 = self
-            .checkpoints
-            .iter()
-            .chain(self.branches.iter().flat_map(|b| &b.checkpoints))
-            .map(|c| c.bytes)
-            .sum();
+        let checkpoint_bytes = self.checkpoint_bytes();
         assert!(
             checkpoint_bytes <= engine.budget().state_capacity_bytes / CHECKPOINT_SHARE,
             "5: checkpoints within their budget"
@@ -338,6 +456,27 @@ impl PrefixStore {
     /// the trunk holds its prefix, else the shortest chain of a branch that holds it. `None` for
     /// an orphan. One pass in order of detach position (a holder detaches before what it holds).
     fn holders(&self) -> Vec<Option<Vec<u64>>> {
+        self.holders_on(&self.trunk, &self.schedule)
+    }
+
+    /// [`Self::holders`] over every lane's trunk: `Some` when some trunk leads to the branch.
+    fn reachable(&self) -> Vec<Option<Vec<u64>>> {
+        let mut out = self.holders();
+        for (lane, tokens, schedule, ..) in self.trunks() {
+            if lane == self.lane {
+                continue;
+            }
+            for (o, h) in out.iter_mut().zip(self.holders_on(tokens, schedule)) {
+                if o.is_none() {
+                    *o = h;
+                }
+            }
+        }
+        out
+    }
+
+    /// [`Self::holders`] against the trunk `trunk` (any lane's).
+    fn holders_on(&self, trunk: &[u32], trunk_schedule: &Schedule) -> Vec<Option<Vec<u64>>> {
         let mut order: Vec<usize> = (0..self.branches.len()).collect();
         order.sort_by_key(|&i| self.branches[i].at);
         let mut chains: Vec<Option<Vec<u64>>> = vec![None; self.branches.len()];
@@ -351,7 +490,7 @@ impl PrefixStore {
                     && tokens[..at] == branch.tokens[..at]
                     && schedule::prefix(sched, tokens, branch.at) == own
             };
-            chains[b] = if holds(&self.trunk, &self.schedule) {
+            chains[b] = if holds(trunk, trunk_schedule) {
                 Some(Vec::new())
             } else {
                 self.branches
@@ -372,13 +511,17 @@ impl PrefixStore {
     /// Longest exact match over the trunk and the branches (through their holders); an equal
     /// match keeps the shorter move (the trunk over any branch, fewer attaches over more).
     fn lookup(&self, prompt: &[u32]) -> Plan {
-        let t = common(&self.trunk, prompt);
+        self.lookup_on(&self.trunk, &self.holders(), prompt)
+    }
+
+    /// [`Self::lookup`] on the trunk `trunk` with its `holders`.
+    fn lookup_on(&self, trunk: &[u32], holders: &[Option<Vec<u64>>], prompt: &[u32]) -> Plan {
+        let t = common(trunk, prompt);
         let mut best = Plan {
             matched: t,
             chain: Vec::new(),
-            diverges: (t as usize) < self.trunk.len() && (t as usize) < prompt.len(),
+            diverges: (t as usize) < trunk.len() && (t as usize) < prompt.len(),
         };
-        let holders = self.holders();
         for (i, b) in self.branches.iter().enumerate() {
             let m = common(&b.tokens, prompt);
             if m <= b.at || m < best.matched {
@@ -465,8 +608,50 @@ impl PrefixStore {
         b.bytes()
     }
 
-    /// Drops branches (lowest rank first, never one in `keep`) until `bytes` are freed.
+    /// Drops branches (lowest rank first, never one in `keep`), then idle lanes' state (least
+    /// recently used first), until `bytes` are freed.
     fn evict_branches(&mut self, engine: &mut dyn Engine, bytes: u64, keep: &[u64]) -> u64 {
+        let mut freed = self.drop_branches(engine, bytes, keep);
+        if freed < bytes {
+            freed += self.evict_idle_lanes(engine, bytes - freed);
+        }
+        freed
+    }
+
+    /// Empties idle lanes other than the selected one, least recently used first, until `bytes`
+    /// are freed (011 FR-010: never a busy lane).
+    fn evict_idle_lanes(&mut self, engine: &mut dyn Engine, bytes: u64) -> u64 {
+        let selected = self.lane;
+        let mut idle: Vec<usize> = (0..self.lanes())
+            .filter(|&l| l != selected && !self.busy[l])
+            .filter(|&l| {
+                self.parked[l]
+                    .as_ref()
+                    .is_some_and(|t| !t.tokens.is_empty())
+            })
+            .collect();
+        idle.sort_by_key(|&l| self.used[l]);
+        let mut freed = 0;
+        for lane in idle {
+            if freed >= bytes {
+                break;
+            }
+            let before = engine.allocated();
+            self.select(engine, lane);
+            let tokens = self.trunk.clone();
+            self.reset_live(engine);
+            self.remember_dropped(&tokens, 0);
+            self.select(engine, selected);
+            freed += before.saturating_sub(engine.allocated());
+        }
+        if freed > 0 {
+            self.prune(engine);
+        }
+        freed
+    }
+
+    /// Drops branches (lowest rank first, never one in `keep`) until `bytes` are freed.
+    fn drop_branches(&mut self, engine: &mut dyn Engine, bytes: u64, keep: &[u64]) -> u64 {
         let mut freed = 0;
         while freed < bytes {
             let Some(index) = self
@@ -667,7 +852,7 @@ impl PrefixStore {
     /// entirely (their records then belong to the trunk).
     fn prune(&mut self, engine: &mut dyn Engine) {
         loop {
-            let holders = self.holders();
+            let holders = self.reachable();
             let doomed = (0..self.branches.len()).find_map(|i| {
                 let b = &self.branches[i];
                 let retraced = b.tokens.len() <= self.trunk.len()
@@ -762,16 +947,21 @@ impl PrefixStore {
 
     /// The checkpoint the budget drops next: unprotected ones by the smallest gap to their
     /// predecessor on their path; then protected ones, least recently used path first (the
-    /// trunk last), so the protected set shrinks to fit. `(branch, index)`; `None` = the trunk.
-    fn thinnest(&self, protected_too: bool) -> Option<(Option<usize>, usize)> {
-        let paths = std::iter::once((None, &self.checkpoints, u64::MAX)).chain(
-            self.branches
-                .iter()
-                .enumerate()
-                .map(|(i, b)| (Some(i), &b.checkpoints, b.last_used)),
-        );
-        // `((protected, path recency, gap), branch, index)`; the smallest key goes first.
-        type Candidate = ((bool, u64, u32), Option<usize>, usize);
+    /// selected trunk last), so the protected set shrinks to fit. `(path, index)`.
+    fn thinnest(&self, protected_too: bool) -> Option<(Path, usize)> {
+        let paths = std::iter::once((Path::Lane(self.lane), &self.checkpoints, u64::MAX))
+            .chain(self.parked.iter().enumerate().filter_map(|(l, t)| {
+                t.as_ref()
+                    .map(|t| (Path::Lane(l), &t.checkpoints, self.used[l]))
+            }))
+            .chain(
+                self.branches
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| (Path::Branch(i), &b.checkpoints, b.last_used)),
+            );
+        // `((protected, path recency, gap), path, index)`; the smallest key goes first.
+        type Candidate = ((bool, u64, u32), Path, usize);
         let mut best: Option<Candidate> = None;
         for (owner, checkpoints, recency) in paths {
             let protected = self.protected_on(checkpoints);
@@ -795,38 +985,47 @@ impl PrefixStore {
         best.map(|(_, owner, i)| (owner, i))
     }
 
+    /// Removes checkpoint `i` of `path` from the store (the caller drops it in the engine).
+    fn take_checkpoint(&mut self, path: Path, i: usize) -> Checkpoint {
+        match path {
+            Path::Lane(l) if l == self.lane => self.checkpoints.remove(i),
+            Path::Lane(l) => self.parked[l]
+                .as_mut()
+                .expect("a parked lane")
+                .checkpoints
+                .remove(i),
+            Path::Branch(b) => self.branches[b].checkpoints.remove(i),
+        }
+    }
+
     /// Keeps the checkpoints (trunk and branches) within [`CHECKPOINT_SHARE`] of the state
     /// capacity, dropping the thinnest first ([`Self::thinnest`]).
     fn budget_checkpoints(&mut self, engine: &mut dyn Engine) {
         let limit = engine.budget().state_capacity_bytes / CHECKPOINT_SHARE;
         loop {
-            let total: u64 = self
-                .checkpoints
-                .iter()
-                .chain(self.branches.iter().flat_map(|b| &b.checkpoints))
-                .map(|c| c.bytes)
-                .sum();
+            let total = self.checkpoint_bytes();
             if total <= limit {
                 break;
             }
-            let Some((owner, i)) = self.thinnest(true) else {
+            let Some((path, i)) = self.thinnest(true) else {
                 break;
             };
-            let c = match owner {
-                None => self.checkpoints.remove(i),
-                Some(b) => self.branches[b].checkpoints.remove(i),
-            };
+            let c = self.take_checkpoint(path, i);
             engine.drop_checkpoint(c.id);
         }
     }
 
-    /// Bytes of the stored checkpoints (trunk and branches).
-    fn checkpoint_bytes(&self) -> u64 {
+    /// Every stored checkpoint: every lane's trunk's and the branches'.
+    fn all_checkpoints(&self) -> impl Iterator<Item = &Checkpoint> {
         self.checkpoints
             .iter()
+            .chain(self.parked.iter().flatten().flat_map(|t| &t.checkpoints))
             .chain(self.branches.iter().flat_map(|b| &b.checkpoints))
-            .map(|c| c.bytes)
-            .sum()
+    }
+
+    /// Bytes of the stored checkpoints (every lane's and the branches').
+    fn checkpoint_bytes(&self) -> u64 {
+        self.all_checkpoints().map(|c| c.bytes).sum()
     }
 
     /// FR-004 before a capture: the planned captures (positions with their marks) that fit the
@@ -847,13 +1046,10 @@ impl PrefixStore {
         let mut admitted = Vec::new();
         for position in planned {
             while total + each > limit {
-                let Some((owner, i)) = self.thinnest(false) else {
+                let Some((path, i)) = self.thinnest(false) else {
                     break;
                 };
-                let c = match owner {
-                    None => self.checkpoints.remove(i),
-                    Some(b) => self.branches[b].checkpoints.remove(i),
-                };
+                let c = self.take_checkpoint(path, i);
                 engine.drop_checkpoint(c.id);
                 total -= c.bytes;
             }
@@ -882,6 +1078,8 @@ impl PrefixStore {
             let holds = |path: &[u32]| path.len() >= end && path[..end] == tokens[..];
             if holds(&self.trunk) {
                 add_record(&mut self.records, record);
+            } else if let Some(t) = self.parked.iter_mut().flatten().find(|t| holds(&t.tokens)) {
+                add_record(&mut t.records, record);
             } else if let Some(b) = self
                 .branches
                 .iter_mut()
@@ -903,6 +1101,17 @@ impl PrefixStore {
                 records: self.records.clone(),
             });
         }
+        for t in self
+            .parked
+            .iter()
+            .flatten()
+            .filter(|t| !t.records.is_empty())
+        {
+            paths.push(HeldPath {
+                tokens: Arc::new(t.tokens.clone()),
+                records: t.records.clone(),
+            });
+        }
         for b in self.branches.iter().filter(|b| !b.records.is_empty()) {
             paths.push(HeldPath {
                 tokens: b.tokens.clone(),
@@ -918,15 +1127,15 @@ impl PrefixStore {
     fn refresh_stats(&mut self) {
         let len = self.trunk.len() as u32;
         self.records.retain(|r| r.end <= len);
-        let live: Vec<CheckpointId> = self
-            .checkpoints
-            .iter()
-            .chain(self.branches.iter().flat_map(|b| &b.checkpoints))
-            .map(|c| c.id)
-            .collect();
+        let live: Vec<CheckpointId> = self.all_checkpoints().map(|c| c.id).collect();
         self.marks.retain(|id, _| live.contains(id));
+        let live_tokens = self.trunks().map(|(_, t, ..)| t.len() as u32).sum();
+        let (count, bytes) = self
+            .all_checkpoints()
+            .fold((0, 0), |(n, b), c| (n + 1, b + c.bytes));
+        let parked_records: usize = self.parked.iter().flatten().map(|t| t.records.len()).sum();
         let s = &mut self.stats;
-        s.live_tokens = len;
+        s.live_tokens = live_tokens;
         s.branches = self.branches.len() as u32;
         s.branch_tokens = self
             .branches
@@ -934,15 +1143,11 @@ impl PrefixStore {
             .map(|b| u64::from(b.segment.end - b.segment.start))
             .sum();
         s.buffer_bytes = self.branches.iter().map(|b| b.segment.bytes).sum();
-        let all = self
-            .checkpoints
-            .iter()
-            .chain(self.branches.iter().flat_map(|b| &b.checkpoints));
-        let (count, bytes) = all.fold((0, 0), |(n, b), c| (n + 1, b + c.bytes));
         s.checkpoints = count;
         s.checkpoint_bytes = bytes;
         s.ring_wrapped = self.ring_wrapped;
         s.records = (self.records.len()
+            + parked_records
             + self.branches.iter().map(|b| b.records.len()).sum::<usize>())
             as u32;
     }
@@ -952,6 +1157,7 @@ impl PrefixStore {
     fn fail(&mut self, engine: &mut dyn Engine, error: EngineError) -> EngineError {
         self.clear(engine);
         engine.reset_all();
+        engine.select(self.lane);
         error
     }
 
@@ -1141,7 +1347,7 @@ impl PrefixStore {
             Pressure::Warning => branch_bytes.div_ceil(2),
             Pressure::Critical => u64::MAX,
         };
-        self.evict_branches(engine, target, &[]);
+        self.drop_branches(engine, target, &[]);
         if level == Pressure::Critical {
             let deepest = self
                 .checkpoint_at_or_below(self.trunk.len() as u32)
@@ -1154,6 +1360,7 @@ impl PrefixStore {
                 engine.drop_checkpoint(c.id);
             }
             self.checkpoints = keep;
+            self.evict_idle_lanes(engine, u64::MAX);
             if idle {
                 self.reset_live(engine);
             }
@@ -1231,9 +1438,15 @@ impl PrefixStore {
         }
     }
 
-    /// Forgets all state (after an engine error or a panic, or `mrun run`'s `/clear`).
+    /// Forgets all state, every lane's (after an engine error or a panic, or `mrun run`'s
+    /// `/clear`).
     pub fn clear(&mut self, engine: &mut dyn Engine) {
-        self.reset_live(engine);
+        let selected = self.lane;
+        for lane in 0..self.lanes() {
+            self.select(engine, lane);
+            self.reset_live(engine);
+        }
+        self.select(engine, selected);
         for b in self.branches.drain(..) {
             engine.drop_segment(b.segment.id);
             for c in &b.checkpoints {
@@ -1316,5 +1529,105 @@ mod tests {
         assert!(store.ring_wrapped, "the first entry was overwritten");
         assert_eq!(store.dropped.len(), DROPPED_RING);
         assert_eq!(store.scan_dropped(&prompt, 50), (false, 0));
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    //! 011: one trunk per lane in one store.
+    use super::*;
+    use crate::chat::splice::{Reply, ReplyParts};
+    use crate::chat::tokenizer::test_support::byte_tokenizer;
+    use crate::runtime::generate::{GenerateRequest, generate};
+    use crate::runtime::pressure::PressureGauge;
+    use crate::runtime::scripted::ScriptedEngine;
+
+    fn run(engine: &mut ScriptedEngine, store: &mut PrefixStore, lane: usize, prompt: &[u32]) {
+        store.select(engine, lane);
+        store.set_busy(lane, true);
+        let tokenizer = byte_tokenizer();
+        let request = GenerateRequest::new(RenderedPrompt::from_tokens(prompt.to_vec()), 3);
+        generate(
+            engine,
+            store,
+            &mut tokenizer.stream(),
+            request,
+            &mut Vec::new(),
+            &PressureGauge::default(),
+        );
+        store.set_busy(lane, false);
+        store.assert_invariants(engine);
+    }
+
+    fn lanes(capacity: u32) -> (ScriptedEngine, PrefixStore) {
+        let engine = ScriptedEngine::new(vec![7, 8, 9], capacity).with_lanes(2);
+        let mut store = PrefixStore::new(CacheMode::Cached);
+        store.set_lanes(2);
+        (engine, store)
+    }
+
+    #[test]
+    fn a_reply_on_an_idle_lane_is_spliced_from_there() {
+        let (mut engine, mut store) = lanes(100_000);
+        let a: Vec<u32> = (100..900).collect();
+        let b: Vec<u32> = (2_000..2_600).collect();
+        run(&mut engine, &mut store, 0, &a);
+        run(&mut engine, &mut store, 1, &b);
+        // Lane 0's reply is recorded while lane 1 is selected: it lands on lane 0's trunk.
+        store.ledger().lock().unwrap().record(Reply {
+            prompt: a.clone(),
+            generation_start: 790,
+            generated: vec![7, 8],
+            eos: 1,
+            canonical: ReplyParts::of_message(&[]).canonical(&[]),
+        });
+        run(&mut engine, &mut store, 1, &[&b[..], &[5]].concat());
+        assert_eq!(store.stats().records, 1, "kept on lane 0's trunk");
+        // Lane 0: its prompt and two fed tokens; lane 1 (its script ended): its prompt.
+        assert_eq!(
+            store.stats().live_tokens as usize,
+            a.len() + 2 + b.len() + 1
+        );
+    }
+
+    #[test]
+    fn the_free_lane_is_the_one_holding_the_prompt_else_an_empty_one() {
+        let (mut engine, mut store) = lanes(100_000);
+        let a: Vec<u32> = (100..900).collect();
+        run(&mut engine, &mut store, 0, &a);
+        let follow_up = [&a[..], &[7, 8, 9, 1]].concat();
+        assert_eq!(
+            store.best_lane(&follow_up, &[0, 1]),
+            0,
+            "its own conversation"
+        );
+        let other: Vec<u32> = (3_000..3_400).collect();
+        assert_eq!(
+            store.best_lane(&other, &[0, 1]),
+            1,
+            "an empty lane over a full one"
+        );
+        assert_eq!(store.best_lane(&other, &[0]), 0);
+    }
+
+    #[test]
+    fn memory_is_found_in_idle_lanes_after_branches_never_in_busy_ones() {
+        let (mut engine, mut store) = lanes(2_000);
+        let a: Vec<u32> = (100..1_000).collect();
+        run(&mut engine, &mut store, 0, &a);
+        // Lane 1 needs more than what is free beside lane 0's idle state: lane 0 is shed.
+        let b: Vec<u32> = (2_000..3_500).collect();
+        run(&mut engine, &mut store, 1, &b);
+        store.select(&mut engine, 0);
+        assert_eq!(engine.len(), 0, "the idle lane gave its memory");
+        // A busy lane keeps its state.
+        store.select(&mut engine, 1);
+        let held = engine.len();
+        assert!(held > 0);
+        store.set_busy(1, true);
+        store.select(&mut engine, 0);
+        assert_eq!(store.evict_idle_lanes(&mut engine, u64::MAX), 0);
+        store.select(&mut engine, 1);
+        assert_eq!(engine.len(), held, "never a busy lane");
     }
 }

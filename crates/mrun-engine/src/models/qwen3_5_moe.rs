@@ -119,21 +119,62 @@ impl GatedDeltaNet {
         captured: &mut Vec<Recurrent>,
         rows: bool,
     ) -> tensor::Result<Array> {
-        let c = &self.cfg;
-        let len = x.dim(1);
-        let qkv = self.in_proj_qkv.forward(x)?;
-        let z = tensor::reshape(&self.in_proj_z.forward(x)?, &[1, len, c.v_heads, c.v_dim])?;
-        let b = self.in_proj_b.forward(x)?;
-        let a = self.in_proj_a.forward(x)?;
+        let [qkv, z, b, a] = self.project(x)?;
+        let out = self.core(&qkv, &b, &a, state, splits, captured, rows)?;
+        self.finish(&out, &z)
+    }
 
+    /// One decode step of several lanes (011): row `r` of `x` `[1, B, hidden]` advances
+    /// `states[r]`. The projections, the gated norm and `out_proj` run on every row at once,
+    /// the convolution and the recurrence per lane.
+    fn forward_lanes(&self, x: &Array, states: &mut [&mut Recurrent]) -> tensor::Result<Array> {
+        let [qkv, z, b, a] = self.project(x)?;
+        let rows = |t: &Array| super::per_row(t, |_, r| Ok(r.clone()));
+        let (qkv, b, a) = (rows(&qkv)?, rows(&b)?, rows(&a)?);
+        let mut outs = Vec::with_capacity(states.len());
+        for (r, state) in states.iter_mut().enumerate() {
+            outs.push(self.core(&qkv[r], &b[r], &a[r], state, &[], &mut Vec::new(), false)?);
+        }
+        self.finish(
+            &tensor::concatenate(&outs.iter().collect::<Vec<_>>(), 1)?,
+            &z,
+        )
+    }
+
+    /// The input projections of `x` `[1, L, hidden]`: `[qkv, z, b, a]`.
+    fn project(&self, x: &Array) -> tensor::Result<[Array; 4]> {
+        Ok([
+            self.in_proj_qkv.forward(x)?,
+            self.in_proj_z.forward(x)?,
+            self.in_proj_b.forward(x)?,
+            self.in_proj_a.forward(x)?,
+        ])
+    }
+
+    /// The convolution and the recurrence of one sequence's projections: `y` `[1, L, Hv, Dv]`.
+    #[allow(clippy::too_many_arguments)]
+    fn core(
+        &self,
+        qkv: &Array,
+        b: &Array,
+        a: &Array,
+        state: &mut Recurrent,
+        splits: &[i32],
+        captured: &mut Vec<Recurrent>,
+        rows: bool,
+    ) -> tensor::Result<Array> {
+        let c = &self.cfg;
+        let len = qkv.dim(1);
         let conv_state = match state.conv.take() {
             Some(conv) => conv,
-            None => tensor::zeros(&[1, c.kernel - 1, c.conv_dim()], x.dtype())?,
+            None => tensor::zeros(&[1, c.kernel - 1, c.conv_dim()], qkv.dtype())?,
         };
-        let conv_input = tensor::concatenate(&[&conv_state, &qkv], 1)?;
-        // The next call's convolution needs the last K − 1 inputs.
+        let conv_input = tensor::concatenate(&[&conv_state, qkv], 1)?;
+        // The next call's convolution needs the last K − 1 inputs: a copy of its own, since a
+        // row slice is already contiguous and would keep the whole chunk's input alive (with
+        // every checkpoint of it, 15–30 MB per layer and chunk).
         let total = conv_input.dim(1);
-        state.conv = Some(tensor::contiguous(&tensor::slice(
+        state.conv = Some(tensor::deep_copy(&tensor::slice(
             &conv_input,
             &[0, total - (c.kernel - 1), 0],
             &[1, total, c.conv_dim()],
@@ -167,8 +208,8 @@ impl GatedDeltaNet {
                 &q,
                 &k,
                 &v,
-                &a,
-                &b,
+                a,
+                b,
                 &self.a_log,
                 &self.dt_bias,
                 state.state.as_ref(),
@@ -191,15 +232,15 @@ impl GatedDeltaNet {
                     &part(&q, from, to)?,
                     &part(&k, from, to)?,
                     &part(&v, from, to)?,
-                    &part(&a, from, to)?,
-                    &part(&b, from, to)?,
+                    &part(a, from, to)?,
+                    &part(b, from, to)?,
                     &self.a_log,
                     &self.dt_bias,
                     carried.as_ref(),
                 )?;
                 if to < len {
                     // The conv tail at `to`: the K − 1 inputs before it.
-                    let conv = tensor::contiguous(&tensor::slice(
+                    let conv = tensor::deep_copy(&tensor::slice(
                         &conv_input,
                         &[0, to, 0],
                         &[1, to + c.kernel - 1, c.conv_dim()],
@@ -220,10 +261,17 @@ impl GatedDeltaNet {
             )
         };
         state.state = Some(next);
+        Ok(out)
+    }
 
-        // Gated RMSNorm (mlx-lm `Qwen3NextRMSNormGated`): silu(z) · rms_norm(out) in f32.
-        let normed = fast::rms_norm(&out, Some(&self.norm.weight), self.norm.eps)?;
-        let out = activations::precise_swiglu(&out, &z, &normed)?;
+    /// Gated RMSNorm (mlx-lm `Qwen3NextRMSNormGated`: silu(z) · rms_norm(y) in f32) and the
+    /// output projection, over `y` `[1, L, Hv, Dv]` and the projected `z`.
+    fn finish(&self, out: &Array, z: &Array) -> tensor::Result<Array> {
+        let c = &self.cfg;
+        let len = out.dim(1);
+        let z = tensor::reshape(z, &[1, len, c.v_heads, c.v_dim])?;
+        let normed = fast::rms_norm(out, Some(&self.norm.weight), self.norm.eps)?;
+        let out = activations::precise_swiglu(out, &z, &normed)?;
         self.out_proj
             .forward(&tensor::reshape(&out, &[1, len, c.value_dim()])?)
     }
@@ -566,6 +614,36 @@ impl Model for Qwen3_5Moe {
         let r = match &layer.mixer {
             Mixer::Linear(gdn) => gdn.forward(&h, state.recurrent()?)?,
             Mixer::Attention(attn) => attn.forward(&h, state.kv()?, offset)?,
+        };
+        let x = tensor::add(x, &r)?;
+        let h = layer.post_attention_layernorm.forward(&x)?;
+        tensor::add(&x, &layer.ffn.forward(&h)?)
+    }
+
+    fn layer_lanes(
+        &self,
+        i: usize,
+        x: &Array,
+        states: &mut [&mut LayerState],
+        offsets: &[i32],
+    ) -> tensor::Result<Array> {
+        let layer = &self.layers[i - self.first];
+        let h = layer.input_layernorm.forward(x)?;
+        let r = match &layer.mixer {
+            Mixer::Linear(gdn) => {
+                let mut recurrent = states
+                    .iter_mut()
+                    .map(|s| s.recurrent())
+                    .collect::<tensor::Result<Vec<_>>>()?;
+                gdn.forward_lanes(&h, &mut recurrent)?
+            }
+            Mixer::Attention(attn) => {
+                let mut kvs = states
+                    .iter_mut()
+                    .map(|s| s.kv())
+                    .collect::<tensor::Result<Vec<_>>>()?;
+                attn.forward_lanes(&h, &mut kvs, offsets)?
+            }
         };
         let x = tensor::add(x, &r)?;
         let h = layer.post_attention_layernorm.forward(&x)?;

@@ -98,7 +98,10 @@ needs.
 ## Admission
 
 Before a request touches the GPU, mrun checks that its prompt fits, evicting cached state if
-needed, and clamps the output limit to the space left (`x-mrun-max-tokens`). A prompt that cannot
+needed, and clamps the output limit to the space left (`x-mrun-max-tokens`). With several lanes,
+the prompts and output limits of the running requests share the context capacity; a request whose
+reservation does not fit beside them waits for a lane, and each lane beyond the first holds back
+its live recurrent state. A prompt that cannot
 fit is refused immediately with the token counts, in each API's error format (for example
 `context_length_exceeded`), and the cache is left intact. `GET /v1/models` reports the context
 capacity, and `mrun launch` passes it to the client so agents compact before the limit. `launch`

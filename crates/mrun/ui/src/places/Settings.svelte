@@ -89,6 +89,7 @@
     ["model", "Model"],
     ["budget-gib", "Memory budget (GiB)"],
     ["serve.max-output", "Output limit"],
+    ["serve.lanes", "Requests at once"],
     ["serve.queue", "Queue"],
     ["serve.queue-wait-s", "Queue wait (s)"],
     ["serve.no-cache", "Prefix cache"],
@@ -99,7 +100,10 @@
       const s = config?.settings.find((s) => s.key === key);
       if (!s) return [];
       // `no-cache` unset or false: the cache is on.
-      const value = key === "serve.no-cache" ? (s.value === true ? "off" : "on") : shown(s.value);
+      let value = key === "serve.no-cache" ? (s.value === true ? "off" : "on") : shown(s.value);
+      // Lanes (011): what the running server chose when left automatic.
+      const lanes = live.status?.lanes?.configured;
+      if (key === "serve.lanes" && s.value == null && lanes) value = `automatic (${lanes})`;
       return [{ key, label, value, source: sourceWords(s.source) }];
     }),
   );

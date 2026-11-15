@@ -301,9 +301,6 @@ fn nax(ctx: &Context) -> Option<Finding> {
         .strip_prefix("off (")
         .and_then(|s| s.strip_suffix(')'))
     {
-        Some("not yet measured on this GPU") => {
-            "off: not yet measured on this GPU (M5); mrun turns it on once measured".to_string()
-        }
         Some(reason) => format!("off: {reason}"),
         None => status.to_string(),
     };
@@ -1062,10 +1059,6 @@ mod tests {
         let off = with("off (not an M5-class GPU)");
         assert_eq!(off.status, Status::Info);
         assert_eq!(off.message, "off: not an M5-class GPU");
-        assert_eq!(
-            with("off (not yet measured on this GPU)").message,
-            "off: not yet measured on this GPU (M5); mrun turns it on once measured"
-        );
         assert_eq!(with("on").message, "on");
         assert_eq!(with("on (forced)").status, Status::Info);
     }

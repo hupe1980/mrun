@@ -337,7 +337,7 @@ impl Tokenizer {
 }
 
 /// Incremental detokenizer: text appears only once it forms complete characters.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StreamDecoder<'a> {
     tokenizer: &'a Tokenizer,
     ids: Vec<u32>,

@@ -91,6 +91,20 @@ impl LoopGuard {
 /// Receives events; returns `false` when the consumer is gone (the request is then cancelled).
 pub trait EventSink {
     fn send(&mut self, event: Event) -> bool;
+    /// Delivers events held for a consumer that was not reading (lanes never wait on one).
+    fn flush(&mut self) -> Delivery {
+        Delivery::Done
+    }
+}
+
+/// Whether a sink's held events reached the consumer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Delivery {
+    Done,
+    /// Some still wait, since this instant.
+    Waiting(Instant),
+    /// The consumer is gone.
+    Gone,
 }
 
 impl EventSink for Vec<Event> {
@@ -140,6 +154,9 @@ pub struct GenerateRequest {
     pub turn: Option<String>,
     /// Speculative decoding may run (006; the engine handle also applies the server's setting).
     pub speculate: bool,
+    /// A side request (`x-claude-code-request-class: auxiliary`): admitted before normal ones
+    /// when a lane frees (011 FR-005).
+    pub auxiliary: bool,
 }
 
 impl GenerateRequest {
@@ -155,6 +172,7 @@ impl GenerateRequest {
             call_fence: None,
             turn: None,
             speculate: true,
+            auxiliary: false,
         }
     }
 }
@@ -259,6 +277,8 @@ pub enum Event {
         max_tokens: u32,
         miss: Option<MissReport>,
         excerpt: Option<Arc<Excerpt>>,
+        /// The lane it runs on (011).
+        lane: u32,
     },
     Progress {
         done: u32,
@@ -322,78 +342,31 @@ impl Turn {
     }
 }
 
-/// Runs one request to completion; the result is its only `Finished`.
+/// Runs one request to completion on the store's selected lane; the result is its only
+/// `Finished`. The same steps the scheduler runs ([`crate::runtime::lanes`]) with one lane.
 pub fn generate<E: Engine>(
     engine: &mut E,
     store: &mut PrefixStore,
     detok: &mut StreamDecoder<'_>,
-    mut request: GenerateRequest,
+    request: GenerateRequest,
     sink: &mut dyn EventSink,
     pressure: &PressureGauge,
 ) -> Finished {
-    let mut turn = Turn {
-        started: Instant::now(),
-        stats: Stats {
-            prompt_tokens: request.prompt.len(),
-            ..Stats::default()
-        },
-        prefilled: 0,
-        decoding: false,
-        forwarded: 0,
-        output: Vec::new(),
-        text_ends: Vec::new(),
-        decoded_bytes: 0,
-        emitted_bytes: 0,
-        captured: Vec::new(),
-    };
-    let outcome = run(
-        engine,
-        store,
-        detok,
-        &mut request,
-        sink,
-        pressure,
-        &mut turn,
-    );
-    let reason = outcome.unwrap_or_else(|failure| {
-        FinishReason::Error(match failure {
-            Failure::OutOfMemory(detail) => {
-                let needed = request.prompt.len() + turn.output.len() as u32 + 1;
-                Failure::OutOfMemory(out_of_memory(needed, engine.len(), &detail))
-            }
-            other => other,
-        })
-    });
-    let prefilled = match reason {
-        FinishReason::Rejected(_) => 0,
-        FinishReason::Error(Failure::Backend(_)) => {
-            for checkpoint in turn.captured {
-                engine.drop_checkpoint(checkpoint.id);
-            }
-            store.clear(engine);
-            // The state is unknown (a move failed half-way poisons the engine, FR-028):
-            // `reset_all` clears the poison; the store already holds nothing.
-            engine.reset_all();
-            0
-        }
-        _ => {
-            let prompt = &request.prompt;
-            let shown = turn.committed_output();
-            let mut committed = prompt.tokens.clone();
-            committed.extend_from_slice(&turn.output[..shown]);
-            let target = if turn.decoding {
-                prompt.len() + turn.forwarded.min(shown as u32)
-            } else {
-                turn.prefilled
-            };
-            let reached = store.commit(engine, prompt, &committed, target, turn.captured);
-            reached.min(prompt.len())
-        }
-    };
-    Finished {
-        reason,
-        prefilled,
-        stats: turn.stats,
+    let lane = store.lane();
+    let job = Job::new(request, lane, Box::new(Borrowed(sink)), detok.clone());
+    crate::runtime::lanes::run_one(engine, store, job, pressure)
+}
+
+/// A borrowed sink as a job's own.
+struct Borrowed<'s>(&'s mut dyn EventSink);
+
+impl EventSink for Borrowed<'_> {
+    fn send(&mut self, event: Event) -> bool {
+        self.0.send(event)
+    }
+
+    fn flush(&mut self) -> Delivery {
+        self.0.flush()
     }
 }
 
@@ -409,7 +382,7 @@ pub fn out_of_memory(needed: u32, reached: u32, detail: &str) -> String {
 /// Retries `op` after the store evicts, while `NeedsMemory` can be satisfied; then after
 /// dropping this request's own checkpoints, shallowest first: they save later work and must never
 /// cost this request its memory.
-fn with_memory<E: Engine, T>(
+pub(crate) fn with_memory<E: Engine, T>(
     engine: &mut E,
     store: &mut PrefixStore,
     captured: &mut Vec<Checkpoint>,
@@ -426,7 +399,11 @@ fn with_memory<E: Engine, T>(
     }
 }
 
-fn relieve_pressure<E: Engine>(engine: &mut E, store: &mut PrefixStore, pressure: &PressureGauge) {
+pub(crate) fn relieve_pressure<E: Engine>(
+    engine: &mut E,
+    store: &mut PrefixStore,
+    pressure: &PressureGauge,
+) {
     if let Some(level) = pressure.take() {
         store.on_pressure(engine, level, false);
     }
@@ -441,238 +418,402 @@ fn looping(output: &[u32]) -> bool {
     (1..=LOOP_MAX_PERIOD).any(|p| window[p..].iter().zip(window).all(|(a, b)| a == b))
 }
 
-/// Returns the finish reason, or the failure that ended the request.
-fn run<E: Engine>(
-    engine: &mut E,
-    store: &mut PrefixStore,
-    detok: &mut StreamDecoder<'_>,
-    request: &mut GenerateRequest,
-    sink: &mut dyn EventSink,
-    pressure: &PressureGauge,
-    turn: &mut Turn,
-) -> Result<FinishReason, Failure> {
-    let prompt = &request.prompt;
-    let cancel = &request.cancel;
-    let invalid = |message: String| Ok(FinishReason::Rejected(Rejection::Invalid(message)));
-    if prompt.is_empty() {
-        return invalid("the prompt is empty".into());
-    }
-    if request.max_tokens == 0 {
-        return invalid("max tokens must be at least 1".into());
-    }
-    if let Err(message) = request.sampling.validate() {
-        return invalid(message);
-    }
-    let mut matcher = match StopMatcher::new(request.stop.clone()) {
-        Ok(matcher) => matcher,
-        Err(error) => return invalid(error.to_string()),
-    };
-    // Refuse only a prompt that leaves no room for one output token; clamp the output limit.
-    let capacity = engine.budget().kv_capacity_tokens;
-    let Some(room) = u32::try_from(prompt.tokens.len())
-        .ok()
-        .and_then(|len| capacity.checked_sub(len))
-        .filter(|room| *room > 0)
-    else {
-        let prompt = prompt.tokens.len().min(u32::MAX as usize) as u32;
-        return Ok(FinishReason::Rejected(Rejection::TooLong {
-            prompt,
-            capacity,
-        }));
-    };
-    let len = prompt.len();
-    let limit = request.max_tokens.min(room);
-    turn.stats.max_tokens = limit;
-    let total = len + limit;
+/// What a step of a job left: go on, or it ended (with its finish reason, or a failure).
+pub type Next = Result<Option<FinishReason>, Failure>;
 
-    // Memory is found when it is needed: moves are memory-neutral, attaching evicts other
-    // branches, and prefill growth evicts by rank once the old tail is a branch too.
-    relieve_pressure(engine, store, pressure);
-    let Prepared {
-        resume,
-        chunk_ends,
-        checkpoints,
-        miss,
-        excerpt,
-    } = store.prepare(engine, prompt, total)?;
-    turn.prefilled = resume;
-    turn.stats.cached_tokens = resume;
-    turn.stats.miss = Some(miss);
-    if !sink.send(Event::Started {
-        prompt: len,
-        cached: resume,
-        max_tokens: limit,
-        miss: Some(miss),
-        excerpt,
-    }) {
-        return Ok(FinishReason::Cancelled);
-    }
+/// One request on one lane (011), advanced a step at a time by the scheduler: [`Job::start`],
+/// then each prefill chunk ([`Job::next_chunk`], [`Job::chunk_done`]), then decode rounds, then
+/// [`Job::finish`]. Every call expects the job's lane selected in the store and the engine.
+pub struct Job<'a> {
+    pub request: GenerateRequest,
+    pub lane: usize,
+    sink: Box<dyn EventSink + 'a>,
+    detok: StreamDecoder<'a>,
+    turn: Turn,
+    decoding: Option<Decode>,
+    /// Prompt tokens committed to the state.
+    at: u32,
+    resume: u32,
+    chunk_ends: std::collections::VecDeque<u32>,
+    /// Positions to capture a checkpoint at, after the chunk ending there.
+    checkpoints: Vec<u32>,
+    prefill_started: Instant,
+    /// The stop matcher and output limit, from the start until decoding begins.
+    ready: Option<(StopMatcher, u32)>,
+    /// Prompt tokens plus the clamped output limit, held while the job runs (FR-007).
+    pub reservation: u32,
+}
 
-    // Prefill all but the last prompt token, one chunk at a time.
-    let prefill_started = Instant::now();
-    let pending_total = (len - 1).saturating_sub(resume);
-    let mut at = resume;
-    for end in chunk_ends {
-        let chunk = &prompt.tokens[at as usize..end as usize];
-        let committed = with_memory(engine, store, &mut turn.captured, |engine| {
-            engine.prefill_chunk(chunk, cancel)
-        })?;
-        if !committed {
-            return Ok(FinishReason::Cancelled);
+/// The decode phase's context.
+struct Decode {
+    matcher: StopMatcher,
+    hook: Option<Box<dyn DecodeHook>>,
+    mask: Option<TokenMask>,
+    guard: LoopGuard,
+    eos: Vec<u32>,
+    ignore_eos: bool,
+    limit: u32,
+    max_draft: usize,
+    drafter: Option<Drafter>,
+    pace: Pace,
+    /// The token fed next.
+    last: u32,
+    started: Option<Instant>,
+}
+
+impl std::fmt::Debug for Job<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Job")
+            .field("lane", &self.lane)
+            .field("at", &self.at)
+            .field("decoding", &self.decoding.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> Job<'a> {
+    pub fn new(
+        request: GenerateRequest,
+        lane: usize,
+        sink: Box<dyn EventSink + 'a>,
+        detok: StreamDecoder<'a>,
+    ) -> Self {
+        let turn = Turn {
+            started: Instant::now(),
+            stats: Stats {
+                prompt_tokens: request.prompt.len(),
+                ..Stats::default()
+            },
+            prefilled: 0,
+            decoding: false,
+            forwarded: 0,
+            output: Vec::new(),
+            text_ends: Vec::new(),
+            decoded_bytes: 0,
+            emitted_bytes: 0,
+            captured: Vec::new(),
+        };
+        Self {
+            request,
+            lane,
+            sink,
+            detok,
+            turn,
+            decoding: None,
+            at: 0,
+            resume: 0,
+            chunk_ends: Default::default(),
+            checkpoints: Vec::new(),
+            prefill_started: Instant::now(),
+            ready: None,
+            reservation: 0,
         }
-        at = end;
-        turn.prefilled = at;
-        if checkpoints.contains(&at) {
-            let checkpoint = with_memory(engine, store, &mut turn.captured, |engine| {
+    }
+
+    /// The output limit a request gets alone: its own, clamped to the context left after its
+    /// prompt; `None` when the prompt leaves no room (it is rejected at the start).
+    pub fn limit(request: &GenerateRequest, capacity: u32) -> Option<u32> {
+        let len = u32::try_from(request.prompt.tokens.len()).ok()?;
+        let room = capacity.checked_sub(len).filter(|room| *room > 0)?;
+        Some(request.max_tokens.min(room))
+    }
+
+    /// What it reserves when admitted: its prompt and its clamped output limit (FR-007).
+    pub fn need(request: &GenerateRequest, capacity: u32) -> u32 {
+        let len = request.prompt.len();
+        Self::limit(request, capacity).map_or(len, |limit| len + limit)
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.request.cancel.is_cancelled()
+    }
+
+    /// Whether the job reads its prompt (a chunk is next) or decodes.
+    pub fn decoding(&self) -> bool {
+        self.decoding.is_some()
+    }
+
+    /// Prompt tokens it still has to read.
+    pub fn left(&self) -> u32 {
+        self.chunk_ends.back().map_or(0, |&end| end - self.at)
+    }
+
+    /// The next prefill chunk's tokens.
+    pub fn next_chunk(&self) -> Option<&[u32]> {
+        let end = *self.chunk_ends.front()?;
+        Some(&self.request.prompt.tokens[self.at as usize..end as usize])
+    }
+
+    /// Delivers held events; whether they all left, wait, or the consumer is gone.
+    pub fn flush(&mut self) -> Delivery {
+        self.sink.flush()
+    }
+
+    /// Validates, plans the reuse (003 `prepare`) and reports `Started`.
+    pub fn start<E: Engine>(
+        &mut self,
+        engine: &mut E,
+        store: &mut PrefixStore,
+        pressure: &PressureGauge,
+    ) -> Next {
+        let prompt = &self.request.prompt;
+        let invalid =
+            |message: String| Ok(Some(FinishReason::Rejected(Rejection::Invalid(message))));
+        if prompt.is_empty() {
+            return invalid("the prompt is empty".into());
+        }
+        if self.request.max_tokens == 0 {
+            return invalid("max tokens must be at least 1".into());
+        }
+        if let Err(message) = self.request.sampling.validate() {
+            return invalid(message);
+        }
+        let matcher = match StopMatcher::new(self.request.stop.clone()) {
+            Ok(matcher) => matcher,
+            Err(error) => return invalid(error.to_string()),
+        };
+        // Refuse only a prompt that leaves no room for one output token; clamp the output limit.
+        let capacity = engine.budget().kv_capacity_tokens;
+        let Some(limit) = Self::limit(&self.request, capacity) else {
+            let prompt = prompt.tokens.len().min(u32::MAX as usize) as u32;
+            return Ok(Some(FinishReason::Rejected(Rejection::TooLong {
+                prompt,
+                capacity,
+            })));
+        };
+        let len = prompt.len();
+        self.turn.stats.max_tokens = limit;
+        self.reservation = len + limit;
+
+        // Memory is found when it is needed: moves are memory-neutral, attaching evicts other
+        // branches, and prefill growth evicts by rank once the old tail is a branch too.
+        relieve_pressure(engine, store, pressure);
+        let Prepared {
+            resume,
+            chunk_ends,
+            checkpoints,
+            miss,
+            excerpt,
+        } = store.prepare(engine, prompt, len + limit)?;
+        self.turn.prefilled = resume;
+        self.turn.stats.cached_tokens = resume;
+        self.turn.stats.miss = Some(miss);
+        if !self.sink.send(Event::Started {
+            prompt: len,
+            cached: resume,
+            max_tokens: limit,
+            miss: Some(miss),
+            excerpt,
+            lane: self.lane as u32,
+        }) {
+            return Ok(Some(FinishReason::Cancelled));
+        }
+        self.resume = resume;
+        self.at = resume;
+        self.chunk_ends = chunk_ends.into();
+        self.checkpoints = checkpoints;
+        self.prefill_started = Instant::now();
+        self.ready = Some((matcher, limit));
+        if self.chunk_ends.is_empty() {
+            self.begin_decode(engine);
+        }
+        Ok(None)
+    }
+
+    /// After the chunk [`Self::next_chunk`] gave was committed: a checkpoint where planned,
+    /// progress, pressure; decoding begins after the last chunk.
+    pub fn chunk_done<E: Engine>(
+        &mut self,
+        engine: &mut E,
+        store: &mut PrefixStore,
+        pressure: &PressureGauge,
+    ) -> Next {
+        let end = self.chunk_ends.pop_front().expect("a chunk ran");
+        self.at = end;
+        self.turn.prefilled = end;
+        if self.checkpoints.contains(&end) {
+            let checkpoint = with_memory(engine, store, &mut self.turn.captured, |engine| {
                 engine.checkpoint()
             })?;
-            turn.captured.push(checkpoint);
+            self.turn.captured.push(checkpoint);
         }
-        if !sink.send(Event::Progress {
-            done: at - resume,
-            total: pending_total,
+        let total = (self.request.prompt.len() - 1).saturating_sub(self.resume);
+        if !self.sink.send(Event::Progress {
+            done: end - self.resume,
+            total,
         }) {
-            cancel.cancel();
-            return Ok(FinishReason::Cancelled);
+            self.request.cancel.cancel();
+            return Ok(Some(FinishReason::Cancelled));
         }
         relieve_pressure(engine, store, pressure);
+        if self.chunk_ends.is_empty() {
+            self.begin_decode(engine);
+        }
+        Ok(None)
     }
 
-    let eos = engine.info().eos_tokens.clone();
-    let mut hook = request.hook.take();
-    let ignore_eos = hook.as_ref().is_some_and(|hook| hook.ignore_eos());
-    let mut mask = hook.as_mut().and_then(|hook| hook.first_mask());
-    let mut last = prompt.tokens[prompt.tokens.len() - 1];
-    let mut decode_started = None;
-    let mut guard = LoopGuard::new(request.call_fence);
-    // Speculative decoding (006): prompt lookup over the prompt and the reply, verified exactly.
-    let max_draft = if request.speculate && hook.as_ref().is_none_or(|hook| !hook.masks()) {
-        engine.max_draft() as usize
-    } else {
-        0
-    };
-    let mut drafter = (max_draft > 0).then(|| Drafter::new(&prompt.tokens));
-    let mut pace = Pace::default();
-    let mut tokens = Ctx {
-        sink,
-        detok,
-        matcher: &mut matcher,
-        hook: &mut hook,
-        mask: &mut mask,
-        guard: &mut guard,
-        eos: &eos,
-        ignore_eos,
-        limit,
-    };
-    loop {
-        if cancel.is_cancelled() {
-            return Ok(FinishReason::Cancelled);
+    /// The decode phase's context, once the prompt is read.
+    fn begin_decode<E: Engine>(&mut self, engine: &E) {
+        let (matcher, limit) = self.ready.take().expect("started");
+        let mut hook = self.request.hook.take();
+        let ignore_eos = hook.as_ref().is_some_and(|hook| hook.ignore_eos());
+        let mask = hook.as_mut().and_then(|hook| hook.first_mask());
+        // Speculative decoding (006): prompt lookup over the prompt and the reply, verified
+        // exactly.
+        let max_draft = if self.request.speculate && hook.as_ref().is_none_or(|hook| !hook.masks())
+        {
+            engine.max_draft() as usize
+        } else {
+            0
+        };
+        let tokens = &self.request.prompt.tokens;
+        self.decoding = Some(Decode {
+            matcher,
+            hook,
+            mask,
+            guard: LoopGuard::new(self.request.call_fence),
+            eos: engine.info().eos_tokens.clone(),
+            ignore_eos,
+            limit,
+            max_draft,
+            drafter: (max_draft > 0).then(|| Drafter::new(tokens)),
+            pace: Pace::default(),
+            last: tokens[tokens.len() - 1],
+            started: None,
+        });
+    }
+
+    /// The token the next decode step feeds.
+    pub fn last(&self) -> u32 {
+        self.decoding.as_ref().expect("decoding").last
+    }
+
+    /// The mask for the next sampled token (a grammar's), taken for one step.
+    pub fn take_mask(&mut self) -> Option<TokenMask> {
+        self.decoding.as_mut().expect("decoding").mask.take()
+    }
+
+    /// One decode round of this job alone: a step, or (`solo`, 006) a verify of a draft.
+    pub fn decode_round<E: Engine>(
+        &mut self,
+        engine: &mut E,
+        store: &mut PrefixStore,
+        pressure: &PressureGauge,
+        solo: bool,
+    ) -> Next {
+        if self.cancelled() {
+            return Ok(Some(FinishReason::Cancelled));
         }
-        if turn.stats.generated_tokens.is_multiple_of(PRESSURE_EVERY) {
+        if self
+            .turn
+            .stats
+            .generated_tokens
+            .is_multiple_of(PRESSURE_EVERY)
+        {
             relieve_pressure(engine, store, pressure);
         }
         let round = Instant::now();
+        let d = self.decoding.as_mut().expect("decoding");
         // Room for the draft: the output limit counts every committed token, the final sample
         // included.
-        let room = (limit - turn.stats.generated_tokens).saturating_sub(1) as usize;
-        let draft = match &drafter {
-            Some(drafter) if tokens.mask.is_none() && pace.drafting() => {
-                drafter.draft(max_draft.min(room))
+        let room = (d.limit - self.turn.stats.generated_tokens).saturating_sub(1) as usize;
+        let draft = match &d.drafter {
+            Some(drafter) if solo && d.mask.is_none() && d.pace.drafting() => {
+                drafter.draft(d.max_draft.min(room))
             }
             _ => Vec::new(),
         };
+        let last = d.last;
         let committed = if draft.is_empty() {
-            let step = with_memory(engine, store, &mut turn.captured, |engine| {
+            let step = with_memory(engine, store, &mut self.turn.captured, |engine| {
                 engine.forward(last)
             })?;
-            vec![engine.sample(step, &request.sampling, tokens.mask.take().as_ref())?]
+            let mask = d.mask.take();
+            vec![engine.sample(step, &self.request.sampling, mask.as_ref())?]
         } else {
-            let committed = with_memory(engine, store, &mut turn.captured, |engine| {
-                engine.verify(last, &draft, &request.sampling)
+            let sampling = self.request.sampling;
+            let committed = with_memory(engine, store, &mut self.turn.captured, |engine| {
+                engine.verify(last, &draft, &sampling)
             })?;
-            turn.stats.drafted += draft.len() as u32;
-            turn.stats.accepted += committed.len() as u32 - 1;
-            turn.stats.passes += 1;
-            if !tokens.sink.send(Event::Verified {
+            self.turn.stats.drafted += draft.len() as u32;
+            self.turn.stats.accepted += committed.len() as u32 - 1;
+            self.turn.stats.passes += 1;
+            if !self.sink.send(Event::Verified {
                 drafted: draft.len() as u32,
                 accepted: committed.len() as u32 - 1,
             }) {
-                return Ok(FinishReason::Cancelled);
+                return Ok(Some(FinishReason::Cancelled));
             }
             committed
         };
+        self.commit(&committed, !draft.is_empty(), round)
+    }
+
+    /// Takes the tokens a step (one) or a verify (the kept drafts and a sample) committed.
+    pub fn commit(&mut self, committed: &[u32], verified: bool, round: Instant) -> Next {
+        let len = self.request.prompt.len();
         // `last` is fed now; it is an output token after the first step.
-        if turn.decoding {
-            turn.forwarded += 1;
+        if self.turn.decoding {
+            self.turn.forwarded += 1;
         } else {
-            turn.decoding = true;
-            turn.prefilled = len;
+            self.turn.decoding = true;
+            self.turn.prefilled = len;
         }
-        if decode_started.is_none() {
-            turn.stats.ttft = Some(turn.started.elapsed());
-            let prefill = prefill_started.elapsed().as_secs_f64();
+        let d = self.decoding.as_mut().expect("decoding");
+        if d.started.is_none() {
+            self.turn.stats.ttft = Some(self.turn.started.elapsed());
+            let prefill = self.prefill_started.elapsed().as_secs_f64();
             if prefill > 0.0 {
-                turn.stats.prefill_tps = f64::from(len - resume) / prefill;
+                self.turn.stats.prefill_tps = f64::from(len - self.resume) / prefill;
             }
-            decode_started = Some(Instant::now());
+            d.started = Some(Instant::now());
         }
         let kept = committed.len() - 1;
         for (i, &next) in committed.iter().enumerate() {
-            if let Some(reason) = tokens.take(next, turn)? {
-                let reason = match reason {
+            if let Some(reason) = self.take(next)? {
+                return Ok(Some(match reason {
                     FinishReason::Cancelled => reason,
-                    reason => finish_decode(turn, decode_started, reason),
-                };
-                return Ok(reason);
+                    reason => self.finish_decode(reason),
+                }));
             }
-            if let Some(drafter) = &mut drafter {
+            let d = self.decoding.as_mut().expect("decoding");
+            if let Some(drafter) = &mut d.drafter {
                 drafter.push(next);
             }
             // A kept draft token was fed in the verify; the final sample is fed next round.
             if i < kept {
-                turn.forwarded += 1;
+                self.turn.forwarded += 1;
             }
         }
+        let d = self.decoding.as_mut().expect("decoding");
         // The first step (the prompt's) is not a decode step; the rest time the pace.
-        if turn.stats.generated_tokens > committed.len() as u32 {
-            if draft.is_empty() {
-                pace.plain(round.elapsed());
+        if self.turn.stats.generated_tokens > committed.len() as u32 {
+            if verified {
+                d.pace.round(committed.len(), round.elapsed());
             } else {
-                pace.round(committed.len(), round.elapsed());
+                d.pace.plain(round.elapsed());
             }
         }
-        last = committed[kept];
+        d.last = committed[kept];
+        Ok(None)
     }
-}
 
-/// What each committed output token passes through.
-struct Ctx<'a, 'd> {
-    sink: &'a mut dyn EventSink,
-    detok: &'a mut StreamDecoder<'d>,
-    matcher: &'a mut StopMatcher,
-    hook: &'a mut Option<Box<dyn DecodeHook>>,
-    mask: &'a mut Option<TokenMask>,
-    guard: &'a mut LoopGuard,
-    eos: &'a [u32],
-    ignore_eos: bool,
-    limit: u32,
-}
-
-impl Ctx<'_, '_> {
     /// The per-token path: EOS, the hook, detokenizing, stop sequences, the output limit and
-    /// the loop guard. `Some` ends the request (`finish_decode` is the caller's).
-    fn take(&mut self, next: u32, turn: &mut Turn) -> Result<Option<FinishReason>, Failure> {
-        if !self.ignore_eos && self.eos.contains(&next) {
-            flush(self.sink, self.matcher, turn);
+    /// the loop guard. `Some` ends the request.
+    fn take(&mut self, next: u32) -> Next {
+        let d = self.decoding.as_mut().expect("decoding");
+        if !d.ignore_eos && d.eos.contains(&next) {
+            Self::flush_text(&mut *self.sink, &mut d.matcher, &mut self.turn);
             return Ok(Some(FinishReason::Stop {
                 stop: None,
                 eos_token: Some(next),
             }));
         }
+        let turn = &mut self.turn;
         turn.stats.generated_tokens += 1;
         turn.output.push(next);
-        if let Some(hook) = self.hook {
-            *self.mask = hook.on_token(next);
+        if let Some(hook) = &mut d.hook {
+            d.mask = hook.on_token(next);
         }
         let mut fed = Fed::default();
         let text = self
@@ -684,66 +825,122 @@ impl Ctx<'_, '_> {
             let ends = turn.output.len() - turn.text_ends.len();
             turn.text_ends
                 .extend(std::iter::repeat_n(turn.decoded_bytes, ends));
-            fed = self.matcher.feed(&text);
+            fed = d.matcher.feed(&text);
         }
-        if !emit(self.sink, next, fed.emit, self.matcher.held(), turn) {
+        let held = d.matcher.held() as u32;
+        let bytes = fed.emit.len();
+        if !self.sink.send(Event::Token {
+            id: next,
+            text: fed.emit,
+            held,
+        }) {
             return Ok(Some(FinishReason::Cancelled));
         }
+        turn.emitted_bytes += bytes;
         if let Some(stop) = fed.stopped {
             return Ok(Some(FinishReason::Stop {
                 stop: Some(stop),
                 eos_token: None,
             }));
         }
-        if turn.stats.generated_tokens >= self.limit {
-            flush(self.sink, self.matcher, turn);
+        if turn.stats.generated_tokens >= d.limit {
+            Self::flush_text(&mut *self.sink, &mut d.matcher, turn);
             return Ok(Some(FinishReason::Length));
         }
         // Off with `ignore_eos`: forced-length runs (bench) generate to the limit on purpose.
-        if self.guard.push(next) && !self.ignore_eos {
-            flush(self.sink, self.matcher, turn);
+        if d.guard.push(next) && !d.ignore_eos {
+            Self::flush_text(&mut *self.sink, &mut d.matcher, turn);
             return Ok(Some(FinishReason::Repetition));
         }
         Ok(None)
     }
-}
 
-/// Reports one output token; `false` when the consumer is gone.
-fn emit(sink: &mut dyn EventSink, id: u32, text: String, held: usize, turn: &mut Turn) -> bool {
-    let bytes = text.len();
-    let delivered = sink.send(Event::Token {
-        id,
-        text,
-        held: held as u32,
-    });
-    if delivered {
-        turn.emitted_bytes += bytes;
-    }
-    delivered
-}
-
-/// Releases held text at a finish without a stop match.
-fn flush(sink: &mut dyn EventSink, matcher: &mut StopMatcher, turn: &mut Turn) {
-    let text = matcher.finish();
-    let bytes = text.len();
-    if bytes > 0 && sink.send(Event::Flush { text }) {
-        turn.emitted_bytes += bytes;
-    }
-}
-
-fn finish_decode(
-    turn: &mut Turn,
-    decode_started: Option<Instant>,
-    reason: FinishReason,
-) -> FinishReason {
-    let stats = &mut turn.stats;
-    if let Some(start) = decode_started {
-        let elapsed = start.elapsed().as_secs_f64();
-        if elapsed > 0.0 && stats.generated_tokens > 1 {
-            stats.decode_tps = f64::from(stats.generated_tokens - 1) / elapsed;
+    /// Releases held text at a finish without a stop match.
+    fn flush_text(sink: &mut dyn EventSink, matcher: &mut StopMatcher, turn: &mut Turn) {
+        let text = matcher.finish();
+        let bytes = text.len();
+        if bytes > 0 && sink.send(Event::Flush { text }) {
+            turn.emitted_bytes += bytes;
         }
     }
-    reason
+
+    fn finish_decode(&mut self, reason: FinishReason) -> FinishReason {
+        let started = self.decoding.as_ref().and_then(|d| d.started);
+        let stats = &mut self.turn.stats;
+        if let Some(start) = started {
+            let elapsed = start.elapsed().as_secs_f64();
+            if elapsed > 0.0 && stats.generated_tokens > 1 {
+                stats.decode_tps = f64::from(stats.generated_tokens - 1) / elapsed;
+            }
+        }
+        reason
+    }
+
+    /// This request's own checkpoints so far (dropped first when memory runs out).
+    pub fn captured(&mut self) -> &mut Vec<Checkpoint> {
+        &mut self.turn.captured
+    }
+
+    /// Ends the job: the state keeps what it committed (003 `commit`), or everything is dropped
+    /// after a backend failure. Its lane must be selected. Returns the report and the sink,
+    /// which may still hold events for the client.
+    pub fn finish<E: Engine>(
+        self,
+        engine: &mut E,
+        store: &mut PrefixStore,
+        outcome: Result<FinishReason, Failure>,
+    ) -> (Finished, Box<dyn EventSink + 'a>) {
+        let Job {
+            request,
+            turn,
+            sink,
+            ..
+        } = self;
+        let reason = outcome.unwrap_or_else(|failure| {
+            FinishReason::Error(match failure {
+                Failure::OutOfMemory(detail) => {
+                    let needed = request.prompt.len() + turn.output.len() as u32 + 1;
+                    Failure::OutOfMemory(out_of_memory(needed, engine.len(), &detail))
+                }
+                other => other,
+            })
+        });
+        let prefilled = match reason {
+            FinishReason::Rejected(_) => 0,
+            FinishReason::Error(Failure::Backend(_)) => {
+                for checkpoint in turn.captured {
+                    engine.drop_checkpoint(checkpoint.id);
+                }
+                store.clear(engine);
+                // The state is unknown (a move failed half-way poisons the engine, FR-028):
+                // `reset_all` clears the poison; the store already holds nothing.
+                engine.reset_all();
+                engine.select(store.lane());
+                0
+            }
+            _ => {
+                let prompt = &request.prompt;
+                let shown = turn.committed_output();
+                let mut committed = prompt.tokens.clone();
+                committed.extend_from_slice(&turn.output[..shown]);
+                let target = if turn.decoding {
+                    prompt.len() + turn.forwarded.min(shown as u32)
+                } else {
+                    turn.prefilled
+                };
+                let reached = store.commit(engine, prompt, &committed, target, turn.captured);
+                reached.min(prompt.len())
+            }
+        };
+        (
+            Finished {
+                reason,
+                prefilled,
+                stats: turn.stats,
+            },
+            sink,
+        )
+    }
 }
 
 #[cfg(test)]

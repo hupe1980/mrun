@@ -455,6 +455,8 @@ mod tests {
             .map(|rank| {
                 let (nodes, done) = (nodes.clone(), done.clone());
                 std::thread::spawn(move || {
+                    // GPU ranks must be separate processes (nuvec 0.9.0 fails threads at once);
+                    // the CPU stream carries ranks as threads.
                     mrun_engine::tensor::use_device(mrun_engine::tensor::Device::Cpu);
                     let got =
                         Pipe::connect(&nodes, rank, &[7; 32], modes[rank], timeout).map(|pipe| {

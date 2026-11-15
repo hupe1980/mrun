@@ -12,8 +12,9 @@
 use mrun_engine::budget::{self, BudgetError, DeviceMemory, Overrides, RESERVED_CHECKPOINTS};
 use mrun_engine::ledger::Ledger;
 use mrun_engine::{
-    CancelToken, Checkpoint, CheckpointId, Engine, EngineError, LayerKind, MemoryBudget, ModelInfo,
-    Numerics, Sampling, Segment, SegmentId, Step, TokenMask, verify_serially,
+    CancelToken, Checkpoint, CheckpointId, ChunkProgress, Engine, EngineError, LayerKind,
+    MemoryBudget, ModelInfo, Numerics, Sampling, Segment, SegmentId, Step, TokenMask,
+    verify_serially,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -122,9 +123,29 @@ struct StoredSegment {
     recurrent: Option<Vec<u32>>,
 }
 
+/// A lane's own fields while another lane is selected (011).
+#[derive(Debug, Default)]
+struct LaneSlot {
+    script: Vec<u32>,
+    next: usize,
+    tokens: Vec<u32>,
+    recurrent: Option<Vec<u32>>,
+    current: Option<u64>,
+}
+
+/// A prefill chunk run a few layers at a time (011).
+#[derive(Debug)]
+struct InFlight {
+    lane: usize,
+    tokens: Vec<u32>,
+    layer: u32,
+    capacity: u32,
+}
+
 #[derive(Debug)]
 pub struct ScriptedEngine {
     info: ModelInfo,
+    /// The selected lane's script and cursor (each lane samples its own script in order).
     script: Vec<u32>,
     next: usize,
     /// Live positions, including a pending pipelined token.
@@ -156,6 +177,14 @@ pub struct ScriptedEngine {
     /// Draft tokens a verify takes (006); 0, the default, keeps the runtime from drafting. Its
     /// verify is serial decoding with the trim window of a verify pass.
     pub max_draft: u32,
+    /// The selected lane; `script`, `next`, `tokens`, `recurrent` and `current` are its.
+    lane: usize,
+    /// Every lane's slot but the selected one's.
+    parked: Vec<Option<LaneSlot>>,
+    /// Each lane's chunk in flight (011: a shorter prompt may take over between layers).
+    in_flight: Vec<Option<InFlight>>,
+    /// Lanes of every `forward_lanes` call, in order (scheduler tests).
+    pub batches: Vec<Vec<usize>>,
 }
 
 impl ScriptedEngine {
@@ -245,7 +274,38 @@ impl ScriptedEngine {
             chunks: Vec::new(),
             peak_allocated: 0,
             max_draft: 0,
+            lane: 0,
+            parked: vec![None],
+            in_flight: vec![None],
+            batches: Vec::new(),
         }
+    }
+
+    /// `lanes` lanes, each sampling `script` (the engine's own unless set per lane).
+    pub fn with_lanes(mut self, lanes: usize) -> Self {
+        let hybrid = self.hybrid();
+        self.ledger.set_lanes(lanes);
+        self.in_flight = (0..lanes).map(|_| None).collect();
+        self.parked = (0..lanes)
+            .map(|i| {
+                (i != 0).then(|| LaneSlot {
+                    script: self.script.clone(),
+                    recurrent: hybrid.then(Vec::new),
+                    ..LaneSlot::default()
+                })
+            })
+            .collect();
+        self
+    }
+
+    /// Lane `lane` samples `script` (in order, then [`SCRIPT_EOS`]).
+    pub fn with_lane_script(mut self, lane: usize, script: Vec<u32>) -> Self {
+        if lane == self.lane {
+            self.script = script;
+        } else {
+            self.parked[lane].as_mut().expect("a parked lane").script = script;
+        }
+        self
     }
 
     pub fn with_state_capacity_bytes(mut self, bytes: u64) -> Self {
@@ -368,32 +428,12 @@ impl Engine for ScriptedEngine {
         if tokens.is_empty() {
             return Ok(true);
         }
-        let capacity = self.grow(tokens.len() as u32)?;
-        self.current = None;
-        let start = self.ledger.len();
-        let layers = self.info.layers();
-        for layer in 1..=layers {
-            if let Some(delay) = self.layer_delay {
-                std::thread::sleep(delay);
-            }
-            self.layers_run += 1;
-            if self
-                .cancel_after_layers
-                .is_some_and(|n| self.layers_run >= n)
-            {
-                self.cancel_after_layers = None;
-                cancel.cancel();
-            }
-            // The partial chunk was never written to the live state; its growth is given back.
-            if layer < layers && cancel.is_cancelled() {
-                self.ledger.set_capacity(capacity);
-                return Ok(false);
-            }
+        self.begin_chunk(tokens)?;
+        match self.advance_chunk(usize::MAX, cancel)? {
+            ChunkProgress::Done => Ok(true),
+            ChunkProgress::Cancelled => Ok(false),
+            ChunkProgress::More => unreachable!("every layer ran"),
         }
-        self.feed(tokens);
-        self.ledger.advance(tokens.len() as u32);
-        self.chunks.push((start, start + tokens.len() as u32));
-        Ok(true)
     }
 
     fn forward(&mut self, last: u32) -> Result<Step, EngineError> {
@@ -582,9 +622,126 @@ impl Engine for ScriptedEngine {
     }
 
     fn reset_all(&mut self) {
-        self.reset();
+        self.in_flight.iter_mut().for_each(|c| *c = None);
+        for lane in 0..self.parked.len() {
+            self.select(lane);
+            self.reset();
+        }
+        self.select(0);
         self.ledger.reset_all();
         self.reset_all_calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn lanes(&self) -> usize {
+        self.parked.len()
+    }
+
+    fn lane(&self) -> usize {
+        self.lane
+    }
+
+    fn select(&mut self, lane: usize) {
+        if lane == self.lane {
+            return;
+        }
+        let incoming = self.parked[lane].take().expect("a parked lane");
+        let outgoing = LaneSlot {
+            script: std::mem::replace(&mut self.script, incoming.script),
+            next: std::mem::replace(&mut self.next, incoming.next),
+            tokens: std::mem::replace(&mut self.tokens, incoming.tokens),
+            recurrent: std::mem::replace(&mut self.recurrent, incoming.recurrent),
+            current: std::mem::replace(&mut self.current, incoming.current),
+        };
+        self.parked[self.lane] = Some(outgoing);
+        self.lane = lane;
+        self.ledger.select(lane);
+    }
+
+    fn forward_lanes(&mut self, rows: &[(usize, u32)]) -> Result<Vec<Step>, (usize, EngineError)> {
+        self.batches
+            .push(rows.iter().map(|&(lane, _)| lane).collect());
+        let selected = self.lane;
+        let mut steps = Vec::with_capacity(rows.len());
+        for (i, &(lane, last)) in rows.iter().enumerate() {
+            self.select(lane);
+            match self.forward(last) {
+                Ok(step) => steps.push(step),
+                Err(e) => {
+                    self.select(selected);
+                    return Err((i, e));
+                }
+            }
+        }
+        self.select(selected);
+        Ok(steps)
+    }
+
+    fn begin_chunk(&mut self, tokens: &[u32]) -> Result<(), EngineError> {
+        assert!(
+            self.in_flight[self.lane].is_none(),
+            "one chunk in flight per lane"
+        );
+        let capacity = self.grow(tokens.len() as u32)?;
+        self.current = None;
+        self.in_flight[self.lane] = Some(InFlight {
+            lane: self.lane,
+            tokens: tokens.to_vec(),
+            layer: 0,
+            capacity,
+        });
+        Ok(())
+    }
+
+    fn advance_chunk(
+        &mut self,
+        layers: usize,
+        cancel: &CancelToken,
+    ) -> Result<ChunkProgress, EngineError> {
+        let Some(mut chunk) = self.in_flight[self.lane].take() else {
+            return Err(EngineError::Backend("no chunk in flight".into()));
+        };
+        self.select(chunk.lane);
+        let total = self.info.layers();
+        let stop = (chunk.layer as usize)
+            .saturating_add(layers)
+            .min(total as usize) as u32;
+        while chunk.layer < stop {
+            chunk.layer += 1;
+            if let Some(delay) = self.layer_delay {
+                std::thread::sleep(delay);
+            }
+            self.layers_run += 1;
+            if self
+                .cancel_after_layers
+                .is_some_and(|n| self.layers_run >= n)
+            {
+                self.cancel_after_layers = None;
+                cancel.cancel();
+            }
+            // The partial chunk was never written to the live state; its growth is given back.
+            if chunk.layer < total && cancel.is_cancelled() {
+                self.ledger.set_capacity(chunk.capacity);
+                return Ok(ChunkProgress::Cancelled);
+            }
+        }
+        if chunk.layer < total {
+            self.in_flight[self.lane] = Some(chunk);
+            return Ok(ChunkProgress::More);
+        }
+        let start = self.ledger.len();
+        self.feed(&chunk.tokens);
+        self.ledger.advance(chunk.tokens.len() as u32);
+        self.chunks.push((start, start + chunk.tokens.len() as u32));
+        Ok(ChunkProgress::Done)
+    }
+
+    fn abort_chunk(&mut self) {
+        if let Some(chunk) = self.in_flight[self.lane].take() {
+            let selected = self.lane;
+            self.select(chunk.lane);
+            self.ledger.set_capacity(chunk.capacity);
+            self.select(selected);
+        }
     }
 }
 

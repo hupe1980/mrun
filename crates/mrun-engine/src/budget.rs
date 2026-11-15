@@ -302,6 +302,22 @@ pub fn with_state_capacity(
     })
 }
 
+/// `budget` with `lanes` lanes (011): every lane beyond the first holds back its live
+/// position-bound state, so the context capacity (the most one request may reserve, and what all
+/// busy lanes share) shrinks by that much attention state.
+pub fn with_lanes(budget: MemoryBudget, lanes: usize, info: &ModelInfo) -> MemoryBudget {
+    if lanes <= 1 || info.recurrent_bytes == 0 {
+        return budget;
+    }
+    let held =
+        position_bound_reserve(info.recurrent_bytes) + (lanes as u64 - 1) * info.recurrent_bytes;
+    let attention = budget.state_capacity_bytes.saturating_sub(held);
+    MemoryBudget {
+        kv_capacity_tokens: budget.kv_capacity_tokens.min(tokens(attention, info)),
+        ..budget
+    }
+}
+
 /// Lowers `budget` to what `context` tokens need (`--context`, 027): the weights, `scratch` at that
 /// depth, the position-bound reserve and the attention state, so [`with_state_capacity`] then
 /// gives exactly `context` tokens. Refused when that is more than the budget (naming the largest

@@ -264,6 +264,7 @@ fn generation_defaults(dir: &std::path::Path) -> Sampling {
 pub fn engine_factory(
     model: &OpenModel,
     overrides: Overrides,
+    lanes: Option<usize>,
 ) -> impl FnOnce() -> Result<mrun_engine::NuvecEngine, String> + Send + 'static {
     let dir = model.dir.clone();
     let name = model.name.clone();
@@ -274,6 +275,7 @@ pub fn engine_factory(
         cpu: false,
         calibration: mrun_engine::calibration::default_path(),
         part: None,
+        lanes,
     };
     move || {
         use mrun_engine::NuvecLoadError;
@@ -286,6 +288,7 @@ pub fn engine_factory(
                     mrun_engine::budget::BudgetError::ContextTooLarge { .. }
                     | mrun_engine::budget::BudgetError::ContextOutOfRange { .. },
                 ) => Code::ContextTooLarge,
+                NuvecLoadError::Lanes { .. } => Code::ContextTooLarge,
                 NuvecLoadError::Budget(_) => Code::DoesNotFit,
                 _ => Code::Internal,
             };

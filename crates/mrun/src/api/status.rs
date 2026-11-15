@@ -533,6 +533,7 @@ pub async fn status(State(state): State<ServerState>) -> Response {
     if let Ok(loaded) = handler::ready(&state) {
         let info = loaded.handle.info();
         let budget = loaded.handle.budget();
+        body["lanes"]["configured"] = loaded.handle.lanes().into();
         body["model"] = json!({
             "id": loaded.model_id,
             "identity": info.identity,

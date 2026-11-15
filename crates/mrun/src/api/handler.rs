@@ -101,6 +101,14 @@ fn ignore_eos(headers: &HeaderMap) -> bool {
         .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"on"))
 }
 
+/// A side request (011 FR-005): `x-claude-code-request-class` set to anything but `main`.
+fn auxiliary(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-claude-code-request-class")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|class| !class.eq_ignore_ascii_case("main"))
+}
+
 /// The loaded model, unless the server is loading or shutting down.
 fn accepting(state: &ServerState) -> Result<Arc<Loaded>, ApiError> {
     if state.tracker.stage() != Stage::Serving {
@@ -136,6 +144,7 @@ pub async fn serve<A: Api>(
         Err(e) => return rejected(&e),
     };
     request.ignore_eos = ignore_eos(&headers);
+    request.auxiliary = auxiliary(&headers);
     request.client = crate::chat::splice::client_class(
         headers
             .get(header::USER_AGENT)

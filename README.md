@@ -18,14 +18,15 @@ the Anthropic Messages, OpenAI Chat Completions and OpenAI Responses APIs on `12
 
 ## Status
 
-**0.4**: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
+**0.6**: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
 (M4 Pro, 48 GB); smaller Macs are simulated there with `--budget-gib`.
 
 - **Models**: `qwen3.6` (Qwen3.6-35B-A3B 4-bit), the default wherever it leaves at least 64K
   tokens of context, and `qwen3.5` (Qwen3.5-9B 4-bit, a preview) on smaller Macs; also Qwen3-8B
   and the Qwen3-Coder family by repo name. See [Models](https://hupe1980.github.io/mrun/docs/models/).
 - **Measured**: token-for-token parity with mlx-lm, speed against mlx-lm and Ollama,
-  cancellation latency and speculative decoding (1.43× on copy-heavy replies with `qwen3.6`) are
+  cancellation latency, speculative decoding (1.43× on copy-heavy replies with `qwen3.6`) and
+  parallel lanes (a title's first token in 2.1 s during a 19K-token prompt instead of 28.5 s) are
   on [Benchmarks](https://hupe1980.github.io/mrun/docs/benchmarks/).
   The client gate (Claude Code, Codex and OpenCode on scripted tasks) is on
   [Clients](https://hupe1980.github.io/mrun/docs/clients/#client-gate).
@@ -44,6 +45,8 @@ Each is measured on the target Mac ([Benchmarks](https://hupe1980.github.io/mrun
   changed.
 - **Tool loops always hit**: the model's own generated tokens are spliced back into the next
   prompt, also on hybrid models.
+- **Side requests never wait**: titles, summaries and subagents decode beside the main turn, up
+  to four at once in one shared pass, each bit-identical to running alone.
 - **Speculative decoding that changes nothing**: tokens drafted from the prompt are kept only
   where plain decoding would produce them, bit for bit, greedy or seeded.
 - **A memory budget that holds**: weights, state, cache and scratch stay inside one budget

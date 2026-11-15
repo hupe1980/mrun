@@ -65,8 +65,8 @@
         <p>Weights, sequence state, cache and scratch are budgeted at startup against unified memory, or set by the context you need (<code>--context 64K</code>). Requests that cannot fit are refused up front with the numbers. Under memory pressure, mrun sheds cache first.</p>
       </article>
       <article class="card">
-        <h3>Fast interruption</h3>
-        <p>Cancellation is checked after every model layer and every token, and the prompt chunks already processed are kept for the retry.</p>
+        <h3>Nothing waits in line</h3>
+        <p>Titles, summaries and subagents run beside the main turn, up to four at once in one shared pass, each bit-identical to running alone. Cancellation is checked after every layer and token, and finished prompt chunks are kept for the retry.</p>
       </article>
       <article class="card">
         <h3>Three APIs, one binary</h3>
@@ -112,6 +112,7 @@
         <li><strong>mrun renders and tokenizes it</strong> with the model's own chat template.</li>
         <li><strong>The prefix cache finds the longest identical token prefix</strong> and moves its state back in — or simply continues the live conversation.</li>
         <li><strong>Only the new tokens are processed</strong> on the Apple GPU, with nuvec's Metal kernels, in chunks that can be interrupted.</li>
+        <li><strong>Side requests run beside it</strong>: up to four requests decode in one pass, a title streaming while the main turn reads its prompt.</li>
         <li><strong>Replies that copy decode faster</strong>: tokens drafted from the prompt are checked several at a time and kept only where the model would have written them.</li>
         <li><strong>Tokens stream back</strong> with exact usage numbers and a cache report.</li>
       </ol>

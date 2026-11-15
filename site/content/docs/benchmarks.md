@@ -42,6 +42,19 @@ covered.
 The tokens are identical with and without it, greedy and seeded. The MoE model gains less: a
 verify pass reads the experts every drafted token routes to.
 
+**Parallel lanes** (Qwen3.6-35B-A3B 4-bit, `--lanes 2` against `--lanes 1`, 2026-11-15):
+
+| Measure | One lane | Two lanes |
+| --- | --- | --- |
+| Decode at 4K depth, two requests | 80 tok/s | 120 tok/s together (1.5×) |
+| First token of a 1.8K-token title request sent during a 19K-token prompt (median of 5) | 28.5 s | 2.1 s (alone: 2.2 s) |
+| The 19K-token request itself | 27.8 s | 28.0 s |
+| Largest gap between tokens while the other lane reads a long prompt | — | 0.12 s |
+
+Each lane's output is identical to running its request alone. A 30-minute soak of main turns,
+subagent fan-outs and titles stayed within the budget, every subagent prefix and main turn
+cached.
+
 **Small Macs (simulated).** `qwen3.5` fits 84,333 tokens of context at a 16 GB Mac's working set
 and 235,385 at a 24 GB Mac's ([Memory](@/docs/memory.md#smaller-macs)).
 

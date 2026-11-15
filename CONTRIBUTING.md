@@ -62,8 +62,7 @@ default model, the 64K floor and admission. What simulation cannot show is publi
 unmeasured until someone measures it:
 
 - cancellation latency on a slower GPU (M1, M2, M3),
-- speed with the NAX kernels on an M5 (nuvec keeps them off until measured: `NUVEC_NAX=on` turns
-  them on),
+- speed on an M5, with the NAX kernels (on by default) and with `NUVEC_NAX=off`,
 - real memory pressure on a 16 or 24 GB Mac (other apps, swap).
 
 If you have one of these Macs, a report helps everyone:
