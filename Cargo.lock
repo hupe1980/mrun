@@ -2624,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "mrun"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2663,7 +2663,7 @@ dependencies = [
 
 [[package]]
 name = "mrun-engine"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "nuvec",
  "nuvec-kernels",
@@ -2677,7 +2677,7 @@ dependencies = [
 
 [[package]]
 name = "mrun-runpod"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "reqwest",
@@ -2911,9 +2911,9 @@ dependencies = [
 
 [[package]]
 name = "nuvec"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35345dc3ee9702acc22ff0cbe336f89b48ff6ad06e76ff516fd8576352bd9835"
+checksum = "0eb200c2e5bb3b58eb6f9383796bccb205187b7c4ac9e10e74d4f1c1e56214b2"
 dependencies = [
  "nuvec-compile",
  "nuvec-core",
@@ -2925,18 +2925,18 @@ dependencies = [
 
 [[package]]
 name = "nuvec-compile"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b104fd990a850614d104a511c3bb1bbb6764c118f4e183fbc89f06fbaec3623"
+checksum = "04ac7d9119b0af7aacca25c06dba1aaed98d61289d0eb727a970a140a39bd817"
 dependencies = [
  "nuvec-core",
 ]
 
 [[package]]
 name = "nuvec-core"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b32dbf66981763a2ec835752e80db02549f78586f86f87057d13449cb9e4b39"
+checksum = "2b8d13fc8787db19513dc4b78d9668baf205b233041c025e909ea5b8b85ca952"
 dependencies = [
  "bytemuck",
  "half",
@@ -2947,20 +2947,21 @@ dependencies = [
 
 [[package]]
 name = "nuvec-cpu"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7f0d9edddec043170bab868d7e6ef3f0095bb47feafeb22daece920acd6d50c"
+checksum = "03880242c6f6b059c3517848ab53d6e3777410db9b54917da7793f1a1695c05b"
 dependencies = [
  "faer",
  "gemm",
  "half",
+ "rayon",
 ]
 
 [[package]]
 name = "nuvec-distributed"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "987f6b12c58fbaf71836b83baf21628aa825d4e5e40ea740ce2eb991ac357a48"
+checksum = "ee403e6f008194e39240d3a8be2558c474fdb5615bfb17cfbf5da675209a509a"
 dependencies = [
  "chacha20poly1305",
  "half",
@@ -2972,9 +2973,9 @@ dependencies = [
 
 [[package]]
 name = "nuvec-gpu"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b02cef20c38181a2abeffd83ff90adb741b9f378e059a369bf00f56d7eae9fa9"
+checksum = "1026dd625e710c5dcfec6d58880072c3bb79eb7c9a1d55acee1867638b103432"
 dependencies = [
  "block2",
  "dispatch2",
@@ -2987,24 +2988,24 @@ dependencies = [
 
 [[package]]
 name = "nuvec-io"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "726f5f0a74b11e45b7b2d2db60cf973a864a750f16056cdb5a044adfc1173833"
+checksum = "bfd610d2dd7ce2c22445efb2750b6c6b1cb65e414e4c85f5280741f93744860c"
 dependencies = [
  "nuvec-core",
 ]
 
 [[package]]
 name = "nuvec-kernels"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58438bd9e08d2c974f4d8c59d916cf986e7aa59e2b678cd89b660c224753e6fd"
+checksum = "6d3ea2eaffbbe3fdfaee0331a96b712be402037306f00e222ad3eeea1b469f79"
 
 [[package]]
 name = "nuvec-macros"
-version = "0.8.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23cbac3df4303035107048d9889b41cd3a989dd097b4fd6b6c9ceb37c01bbcf1"
+checksum = "480db7de5654e3d79fdf919467dd9892f407b890930d7384b7a2da3ea6e18850"
 dependencies = [
  "proc-macro2",
  "quote",

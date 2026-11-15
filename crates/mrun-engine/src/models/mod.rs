@@ -22,6 +22,8 @@ pub use common::{SCORE_BLOCK_BYTES_DEFAULT, set_score_block_bytes};
 pub use registry::{Family, FamilyConfig, SyntaxId};
 
 #[cfg(feature = "engine")]
+pub(crate) use graph::per_row;
+#[cfg(feature = "engine")]
 pub use graph::{Model, build};
 
 #[cfg(feature = "engine")]
@@ -87,6 +89,21 @@ mod graph {
             let splits: Vec<i32> = (1..x.dim(1)).collect();
             self.layer_split(i, x, state, offset, &splits, captured)
         }
+        /// Decoder layer `i` for one decode step of several lanes (011): row `b` of `x`
+        /// `[1, B, hidden]` is lane `b`'s token at `offsets[b]` with its state `states[b]`. Each
+        /// row equals [`Model::layer`] on that lane alone, bit for bit, under
+        /// `tensor::with_row_exact`. The default runs the rows one by one; families share their
+        /// weight passes across the rows.
+        fn layer_lanes(
+            &self,
+            i: usize,
+            x: &Array,
+            states: &mut [&mut LayerState],
+            offsets: &[i32],
+        ) -> tensor::Result<Array> {
+            let rows = per_row(x, |b, row| self.layer(i, row, states[b], offsets[b]))?;
+            tensor::concatenate(&rows.iter().collect::<Vec<_>>(), 1)
+        }
         /// Hidden states `[1, L, hidden]` → logits of the last position `[1, vocab]`.
         fn logits(&self, x: &Array) -> tensor::Result<Array>;
         /// Hidden states `[1, L, hidden]` → logits of every position `[L, vocab]`.
@@ -96,6 +113,23 @@ mod graph {
         /// Analytic scratch of one chunk of `len` tokens at `depth` (activations, MoE routing,
         /// unfused attention scores; D029); the engine maximizes it over the chunk schedule.
         fn chunk_scratch(&self, len: u32, depth: u32) -> u64;
+    }
+
+    /// `f(b, row)` for each row `b` of `x` `[1, B, …]`, as a `[1, 1, …]` array.
+    pub(crate) fn per_row(
+        x: &Array,
+        mut f: impl FnMut(usize, &Array) -> tensor::Result<Array>,
+    ) -> tensor::Result<Vec<Array>> {
+        let shape = x.shape();
+        (0..x.dim(1))
+            .map(|b| {
+                let mut start = vec![0; shape.len()];
+                let mut stop = shape.clone();
+                start[1] = b;
+                stop[1] = b + 1;
+                f(b as usize, &tensor::slice(x, &start, &stop)?)
+            })
+            .collect()
     }
 
     /// Builds the graph of `family` from `config.json` (`text` is its text config) and the

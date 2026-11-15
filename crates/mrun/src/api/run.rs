@@ -165,6 +165,7 @@ pub async fn start(
     generate.hook = hook(&loaded, &request, rendered.reasoning_open).boxed();
     generate.call_fence = call_fence(&loaded, rendered.reasoning_open);
     generate.turn = request.member.clone();
+    generate.auxiliary = request.auxiliary;
     let generation = loaded.handle.generate(generate).map_err(|e| match e {
         SubmitError::QueueFull(full) => {
             ApiError::new(ErrorKind::QueueFull, "the request queue is full")
@@ -475,6 +476,7 @@ impl Relay {
                     max_tokens,
                     miss,
                     excerpt,
+                    lane,
                 } => {
                     started = true;
                     self.miss = miss;
@@ -482,6 +484,7 @@ impl Relay {
                         replay.excerpt = excerpt;
                     }
                     self.tracker.update(self.id, |entry| {
+                        entry.lane = lane;
                         entry.phase = Phase::Prefill;
                         entry.prompt_tokens = prompt;
                         entry.cached = Some(cached);

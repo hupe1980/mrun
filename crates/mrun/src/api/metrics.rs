@@ -249,6 +249,18 @@ impl Metrics {
     }
 }
 
+/// Bytes nuvec's allocator holds (0 without the engine).
+fn allocated() -> u64 {
+    #[cfg(feature = "engine")]
+    {
+        mrun_engine::tensor::memory::active_allocated()
+    }
+    #[cfg(not(feature = "engine"))]
+    {
+        0
+    }
+}
+
 pub fn render(state: &ServerState) -> String {
     let metrics = &state.tracker.metrics;
     let mut out = Text(String::new());
@@ -349,7 +361,12 @@ pub fn render(state: &ServerState) -> String {
         "System memory-pressure events.",
         stats.pressure_events,
     );
-    out.single("mrun_lanes_configured", "gauge", "Decode lanes.", 1);
+    out.single(
+        "mrun_lanes_configured",
+        "gauge",
+        "Decode lanes.",
+        loaded.handle.lanes(),
+    );
     out.single(
         "mrun_lanes_busy",
         "gauge",
@@ -377,6 +394,9 @@ pub fn render(state: &ServerState) -> String {
         ("scratch", budget.scratch),
         ("state", state_bytes),
         ("cache", stats.buffer_bytes + stats.checkpoint_bytes),
+        // What the allocator holds now, the mapped weights excluded: weights read into memory,
+        // state and scratch.
+        ("allocated", allocated()),
     ] {
         out.sample("mrun_memory_bytes", &[("part", part)], bytes);
     }

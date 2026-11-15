@@ -158,6 +158,24 @@ impl SeqState {
         self.capacity
     }
 
+    /// An empty state of the same layout (another lane's, 011).
+    pub fn fresh(&self) -> Self {
+        Self {
+            layers: self
+                .layers
+                .iter()
+                .map(|l| match l {
+                    LayerState::Recurrent(_) => LayerState::Recurrent(Recurrent::default()),
+                    LayerState::Kv(_) => LayerState::Kv(LayerKv::default()),
+                })
+                .collect(),
+            capacity: 0,
+            kv_heads: self.kv_heads,
+            head_dim: self.head_dim,
+            dtype: self.dtype,
+        }
+    }
+
     fn kv_layers(&mut self) -> impl Iterator<Item = &mut LayerKv> {
         self.layers.iter_mut().filter_map(|layer| match layer {
             LayerState::Kv(kv) => Some(kv),

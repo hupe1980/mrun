@@ -61,6 +61,10 @@ pub struct ServeArgs {
     #[arg(long, env = "MRUN_CONTEXT", value_parser = crate::cli::model::parse_tokens,
         conflicts_with = "budget_gib")]
     pub context: Option<u32>,
+    /// Requests decoded at once (1–4): side requests and subagents run beside the main turn
+    /// [default: 2 when the context holds two lanes of 32K tokens, else 1].
+    #[arg(long, env = "MRUN_LANES", value_parser = clap::value_parser!(u32).range(1..=4))]
+    pub lanes: Option<u32>,
     /// Disable prefix reuse across requests.
     #[arg(long, env = "MRUN_NO_CACHE")]
     pub no_cache: bool,
@@ -403,7 +407,7 @@ pub fn load_named(args: &ServeArgs, name: &str) -> Result<Loaded, CliError> {
     crate::cli::model::preflight(&model, args.context)?;
     let overrides = crate::cli::model::overrides(args.budget_gib, args.context);
     let handle = EngineHandle::spawn_with(
-        crate::cli::model::engine_factory(&model, overrides),
+        crate::cli::model::engine_factory(&model, overrides, args.lanes.map(|n| n as usize)),
         model.tokenizer.clone(),
         crate::runtime::handle::DEFAULT_STALL_TIMEOUT,
         cache_policy(args),
@@ -650,10 +654,12 @@ pub fn run(args: ServeArgs, factory: EngineFactory) -> u8 {
         match server.loaded().await {
             Ok(loaded) => {
                 let syntax = crate::chat::syntax::registry::ChatSyntax::get(loaded.syntax).name;
+                let lanes = loaded.handle.lanes();
                 eprintln!(
-                    "mrun serving {} ({}, {syntax}) at {url}",
+                    "mrun serving {} ({}, {syntax}, {lanes} {}) at {url}",
                     loaded.model_id,
-                    loaded.handle.info().family
+                    loaded.handle.info().family,
+                    if lanes == 1 { "lane" } else { "lanes" }
                 );
                 eprintln!("  next: mrun launch claude-code   (or codex, opencode)");
             }

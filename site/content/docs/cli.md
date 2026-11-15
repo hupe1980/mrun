@@ -73,10 +73,11 @@ and `/exit` (or `/quit`, `/bye`) quits. Turns reuse the prefix cache.
 | `--model <MODEL>` | `MRUN_MODEL` | This machine's default alias, or the largest pulled model that fits | Model to serve |
 | `--port <PORT>` | `MRUN_PORT` | 8484 | Port on 127.0.0.1 |
 | `--max-output <N>` | `MRUN_MAX_OUTPUT` | 32768 | Output limit for requests that send none, clamped to the context left after the prompt. At least 1 |
-| `--queue <N>` | `MRUN_QUEUE` | 16 | Requests that may wait while one runs. At least 1 |
+| `--queue <N>` | `MRUN_QUEUE` | 16 | Requests that may wait while every lane is busy. At least 1 |
 | `--queue-wait-s <S>` | `MRUN_QUEUE_WAIT_S` | 240 | Seconds a non-streaming request may wait; one whose estimated wait is longer is refused at once. Streaming requests never time out in the queue. At least 1 |
 | `--budget-gib <GIB>` | `MRUN_BUDGET_GIB` | Metal's recommended working set | A lower memory budget; a value above the automatic one is refused (see [Memory](@/docs/memory.md#tuning)) |
 | `--context <TOKENS>` | `MRUN_CONTEXT` | The most that fits | The budget this many tokens of context need, `64K` or `65536`; refused with E042 when it does not fit; not with `--budget-gib` ([Memory](@/docs/memory.md#context)) |
+| `--lanes <N>` | `MRUN_LANES` | 2 when the context holds 32K tokens per lane, else 1 | Requests decoded at once, 1–4; refused with E042 when they do not fit. One per Mac in a pool |
 | `--no-cache` | `MRUN_NO_CACHE` | off | Disable prefix reuse across requests |
 | `--speculation <auto\|off>` | `MRUN_SPECULATION` | `auto` | Speculative decoding: drafts from the prompt, keeps only what plain decoding would produce, while it is faster ([How it works](@/docs/how-it-works.md#speculative-decoding)) |
 | `--reject-tool-images` | `MRUN_REJECT_TOOL_IMAGES` | off | Refuse images inside tool results instead of omitting them |

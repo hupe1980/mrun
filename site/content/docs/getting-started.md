@@ -36,8 +36,8 @@ A clean release build takes about 72 s on an M4 Pro. The Metal kernels are compi
 `mrun` binary, which needs no other files. Without the Metal toolchain they are compiled at first
 start instead, and `mrun doctor` warns and names the command above.
 
-The M5 Neural Accelerator (NAX) kernels are compiled in but stay off until measured on an M5;
-`NUVEC_NAX=on` forces them.
+On an M5-class Mac the Neural Accelerator (NAX) kernels run where MLX would use them;
+`NUVEC_NAX=off` keeps them off.
 
 ## Download a model
 

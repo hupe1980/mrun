@@ -24,10 +24,10 @@ pub mod tensor;
 pub mod testing;
 
 pub use engine::{
-    ALIGN, BACKEND, Binding, CHUNK_ALIGN, CancelToken, Checkpoint, CheckpointId, Engine,
-    EngineError, GROWTH, LAYER_TIME_BOUND_MS, LayerKind, MemoryBudget, ModelInfo, Numerics,
-    Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, align, chunk_len, grown_capacity,
-    verify_serially,
+    ALIGN, BACKEND, Binding, CHUNK_ALIGN, CancelToken, Checkpoint, CheckpointId, ChunkProgress,
+    Engine, EngineError, GROWTH, LAYER_TIME_BOUND_MS, LayerKind, MAX_LANES, MIN_LANE_TOKENS,
+    MemoryBudget, ModelInfo, Numerics, Pick, Sampling, Segment, SegmentId, Step, TimeLen,
+    TokenMask, align, chunk_len, grown_capacity, verify_serially,
 };
 #[cfg(feature = "engine")]
 pub use models::Part;

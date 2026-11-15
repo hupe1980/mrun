@@ -21,7 +21,8 @@ branch (subagents, titles, retries) and cancel often.
 3. **Splicing.** Where the current turn contains a reply the model generated earlier, mrun puts
    back the exact token ids it sampled, reasoning included (see
    [Prefix cache](@/docs/prefix-cache.md#tool-loops-always-hit)).
-4. **Queue.** One request runs at a time; up to 16 wait. Streaming requests receive keepalives
+4. **Queue and lanes.** Up to two requests run at once by default (lanes, see below); up to 16
+   more wait. Side requests (titles, summaries) start first. Streaming requests receive keepalives
    and wait as long as needed; non-streaming ones wait at most 240 seconds.
 5. **Lookup and admission.** The [prefix cache](@/docs/prefix-cache.md) finds the longest exact
    token prefix it holds. mrun checks that the prompt fits the [memory budget](@/docs/memory.md)
@@ -41,12 +42,31 @@ branch (subagents, titles, retries) and cancel often.
    recorded for splicing. A request that fails on its own ends with an error and leaves the cache
    intact.
 
-## One engine, one thread
+## One engine, one thread, several lanes
 
 All GPU work runs on a single engine thread that owns the model, the sequence state and the
-prefix cache. HTTP handlers only parse, queue and stream. One sequence runs at a time, which
-keeps latency predictable and reuse exact. Moves between live state and cache go one layer at a
-time, so state is never held twice.
+prefix cache. HTTP handlers only parse, queue and stream. Moves between live state and cache go
+one layer at a time, so state is never held twice.
+
+The thread runs up to four live sequences, *lanes* (`--lanes`; two when the context holds 32K
+tokens for each). Coding agents send side requests beside the main turn and run subagents in
+parallel; with lanes they no longer wait for each other:
+
+- **Decode** steps every decoding lane in one forward pass, so lanes share each read of the
+  weights. Each lane's output is bit-identical to running its request alone.
+- **Prefill** runs a layer at a time, always for the lane with the fewest prompt tokens left: a
+  title that arrives while a long prompt is read takes over at the next layer and starts as soon
+  as it would alone, and the long prompt resumes where it paused. Between layers the decoding
+  lanes step, with prefill keeping about 80 % of the GPU, so a reply keeps streaming (a token at
+  least every ≈ 0.2 s) while a long prompt is read.
+- **Admission** reserves each request's prompt and output limit; a request whose reservation does
+  not fit beside the running ones waits for a lane.
+- **Reuse:** a request goes to the lane that holds the longest part of its prompt. An idle lane
+  keeps its conversation, so a second round of subagents finds its prefix on every lane; memory
+  pressure sheds stored branches first, then idle lanes, never a running one.
+- A client that stops reading pauses only its own lane.
+
+One running request uses exactly the single-sequence path, with speculative decoding.
 
 ## nuvec
 
@@ -65,8 +85,8 @@ M4 Pro with 48 GB, 4,350-token prompt, best of 2, against mlx-lm 0.32.0:
 
 The first request's time to first token on a short prompt is about 0.13 s.
 
-The M5 Neural Accelerator (NAX) kernels are compiled in but stay off until measured on an M5
-(`NUVEC_NAX=on` forces them). Whether they are used is part of the engine identity shown by
+On M5-class GPUs the Neural Accelerator (NAX) kernels run where MLX would use them
+(`NUVEC_NAX=off` keeps them off). Whether they are used is part of the engine identity shown by
 `mrun --version` and recorded in bench results.
 
 ## Attention and hybrid models

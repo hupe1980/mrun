@@ -173,6 +173,24 @@ impl Model for Qwen3Moe {
         tensor::add(&x, &layer.ffn.forward(&h)?)
     }
 
+    fn layer_lanes(
+        &self,
+        i: usize,
+        x: &Array,
+        states: &mut [&mut LayerState],
+        offsets: &[i32],
+    ) -> tensor::Result<Array> {
+        let layer = &self.layers[i - self.first];
+        let h = layer.input_layernorm.forward(x)?;
+        let mut kvs = states
+            .iter_mut()
+            .map(|s| s.kv())
+            .collect::<tensor::Result<Vec<_>>>()?;
+        let x = tensor::add(x, &layer.attention.forward_lanes(&h, &mut kvs, offsets)?)?;
+        let h = layer.post_attention_layernorm.forward(&x)?;
+        tensor::add(&x, &layer.ffn.forward(&h)?)
+    }
+
     fn logits(&self, x: &Array) -> tensor::Result<Array> {
         common::head(&self.head)?.logits(x)
     }

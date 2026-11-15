@@ -20,9 +20,8 @@ local servers. What mrun claims:
 - A memory budget that holds.
 - An [independent benchmark](@/docs/benchmarks.md) that reports every cell, including losses.
 
-mrun has no parallel lanes and no on-disk cache that survives a restart: servers with lanes
-answer parallel requests sooner. Its speculative decoding drafts from the prompt only, with no
-draft model.
+mrun has no on-disk cache that survives a restart. Its speculative decoding drafts from the
+prompt only, with no draft model, and runs only while a single request is running.
 
 ## Why not just use mlx-lm's server?
 
@@ -84,9 +83,10 @@ an NVIDIA GPU can run remotely with [`mrun cloud`](@/docs/cloud.md).
 
 ## Can several agents use it at once?
 
-Yes. Requests are queued and run one at a time, and the prefix cache keeps each conversation's
-state as a branch. A subagent or title request waits behind the main turn; streaming requests
-never time out while they wait.
+Yes. Two requests run at once by default (up to four with `--lanes 4`), each bit-identical to
+running alone: a title or subagent streams while the main turn reads its prompt, and side requests
+start first. More requests wait in the queue; streaming requests never time out while they wait.
+Each lane keeps its conversation, and the prefix cache keeps the others as branches.
 
 ## Does mrun send any data anywhere?
 

@@ -85,6 +85,32 @@ struct Stored<T, D> {
     data: D,
 }
 
+/// The live fields of a lane that is not selected (011).
+#[derive(Debug)]
+struct Live<P> {
+    len: u32,
+    capacity: u32,
+    limit: u32,
+    recurrent_live: bool,
+    pending: Option<P>,
+    window: Option<u32>,
+}
+
+impl<P> Default for Live<P> {
+    fn default() -> Self {
+        Self {
+            len: 0,
+            capacity: 0,
+            limit: 0,
+            recurrent_live: true,
+            pending: None,
+            window: None,
+        }
+    }
+}
+
+/// The live fields below are the selected lane's (011); the others are parked. Segments and
+/// checkpoints belong to no lane, so a segment detached on one lane attaches on another.
 #[derive(Debug)]
 pub struct Ledger<P, S, C> {
     pub budget: MemoryBudget,
@@ -106,6 +132,10 @@ pub struct Ledger<P, S, C> {
     /// After a verify (006): the position it started at. Hybrids may then trim to any position
     /// from it on (the engine holds the state after each); the next state change closes it.
     window: Option<u32>,
+    /// The selected lane.
+    lane: usize,
+    /// Every lane's live fields but the selected one's (`None` at the selected index).
+    parked: Vec<Option<Live<P>>>,
 }
 
 impl<P, S, C> Ledger<P, S, C> {
@@ -128,6 +158,48 @@ impl<P, S, C> Ledger<P, S, C> {
             next_id: 0,
             window: None,
             poisoned: None,
+            lane: 0,
+            parked: vec![None],
+        }
+    }
+
+    /// Sets the number of lanes (at load, before any lane holds state); lane 0 is selected.
+    pub fn set_lanes(&mut self, lanes: usize) {
+        self.select(0);
+        self.parked = (0..lanes.max(1))
+            .map(|i| (i != 0).then(Live::default))
+            .collect();
+    }
+
+    pub fn lanes(&self) -> usize {
+        self.parked.len()
+    }
+
+    /// The selected lane.
+    pub fn lane(&self) -> usize {
+        self.lane
+    }
+
+    /// Selects `lane`: the live fields become its, the previous lane's are parked.
+    pub fn select(&mut self, lane: usize) {
+        if lane == self.lane {
+            return;
+        }
+        let incoming = self.parked[lane].take().expect("a parked lane");
+        let outgoing = self.swap_live(incoming);
+        self.parked[self.lane] = Some(outgoing);
+        self.lane = lane;
+    }
+
+    /// Puts `live` in place and returns the fields it replaced.
+    fn swap_live(&mut self, live: Live<P>) -> Live<P> {
+        Live {
+            len: std::mem::replace(&mut self.len, live.len),
+            capacity: std::mem::replace(&mut self.capacity, live.capacity),
+            limit: std::mem::replace(&mut self.limit, live.limit),
+            recurrent_live: std::mem::replace(&mut self.recurrent_live, live.recurrent_live),
+            pending: std::mem::replace(&mut self.pending, live.pending),
+            window: std::mem::replace(&mut self.window, live.window),
         }
     }
 
@@ -171,9 +243,15 @@ impl<P, S, C> Ledger<P, S, C> {
         self.live_bytes(self.capacity, self.recurrent_live)
     }
 
-    /// Live allocation + segments + checkpoints.
+    /// Every lane's live allocation + segments + checkpoints.
     pub fn allocated(&self) -> u64 {
         self.current_live_bytes()
+            + self
+                .parked
+                .iter()
+                .flatten()
+                .map(|l| self.live_bytes(l.capacity, l.recurrent_live))
+                .sum::<u64>()
             + self.segments.values().map(|s| s.meta.bytes).sum::<u64>()
             + self.checkpoints.values().map(|c| c.meta.bytes).sum::<u64>()
     }
@@ -561,9 +639,13 @@ impl<P, S, C> Ledger<P, S, C> {
         self.recurrent_live = true;
     }
 
-    /// `reset`, dropping every segment and checkpoint and clearing a poisoned state.
+    /// `reset` on every lane, dropping every segment and checkpoint and clearing a poisoned
+    /// state.
     pub fn reset_all(&mut self) {
         self.reset();
+        for live in self.parked.iter_mut().flatten() {
+            *live = Live::default();
+        }
         self.segments.clear();
         self.checkpoints.clear();
         self.poisoned = None;
@@ -777,5 +859,37 @@ mod tests {
         l.open_window(10);
         l.reset();
         assert_eq!(l.window(), None);
+    }
+
+    #[test]
+    fn lanes_keep_their_own_live_state_and_share_the_budget() {
+        let mut l = ledger(false, 8192);
+        l.set_lanes(2);
+        assert_eq!((l.lanes(), l.lane()), (2, 0));
+        let grown = l.plan_append(100).unwrap().unwrap();
+        l.set_capacity(grown);
+        l.advance(100);
+        l.select(1);
+        assert_eq!((l.len(), l.capacity()), (0, 0), "lane 1 starts empty");
+        // Lane 0's allocation still counts: lane 1 may grow only into what is left.
+        assert_eq!(l.allocated(), u64::from(grown) * KV);
+        let rest = 8192 - grown;
+        l.set_limit(8192).unwrap();
+        assert!(matches!(
+            l.plan_append(rest + 1),
+            Err(EngineError::NeedsMemory { .. })
+        ));
+        l.set_limit(rest).unwrap();
+        assert_eq!(l.plan_append(rest), Ok(Some(rest)));
+        l.advance(0);
+        l.push_pending(7);
+        l.select(0);
+        assert_eq!((l.len(), l.pending()), (100, None));
+        l.select(1);
+        assert_eq!((l.len(), l.pending()), (1, Some(&7)));
+        l.reset_all();
+        assert_eq!(l.len(), 0);
+        l.select(0);
+        assert_eq!((l.len(), l.allocated()), (0, 0));
     }
 }

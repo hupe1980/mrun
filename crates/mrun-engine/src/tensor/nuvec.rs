@@ -990,7 +990,6 @@ pub fn nax_status() -> String {
                 NaxReason::Os => "macOS before 26.2",
                 NaxReason::Generation => "not an M5-class GPU",
                 NaxReason::NoLibrary => "no NAX kernels in this build",
-                NaxReason::Unmeasured => "not yet measured on this GPU",
                 NaxReason::PipelineError => "pipeline error",
                 _ => "unknown reason",
             };

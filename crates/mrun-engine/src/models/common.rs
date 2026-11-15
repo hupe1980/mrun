@@ -113,26 +113,63 @@ impl Attention {
 
     /// Attention over `x` `[1, L, hidden]` at absolute position `offset`, writing K/V to `kv`.
     pub fn forward(&self, x: &Array, kv: &mut LayerKv, offset: i32) -> tensor::Result<Array> {
+        let projected = self.project(x)?;
+        let o = self.core(&projected, kv, offset)?;
+        self.o_proj.forward(&o)
+    }
+
+    /// One decode step of several lanes (011): row `b` of `x` `[1, B, hidden]` attends over
+    /// `kvs[b]` at `offsets[b]`. The projections run on every row at once, the attention per
+    /// lane.
+    pub fn forward_lanes(
+        &self,
+        x: &Array,
+        kvs: &mut [&mut LayerKv],
+        offsets: &[i32],
+    ) -> tensor::Result<Array> {
+        let [q, k, v] = self.project(x)?;
+        let (q, k, v) = (
+            super::per_row(&q, |_, r| Ok(r.clone()))?,
+            super::per_row(&k, |_, r| Ok(r.clone()))?,
+            super::per_row(&v, |_, r| Ok(r.clone()))?,
+        );
+        let mut rows = Vec::with_capacity(kvs.len());
+        for (b, kv) in kvs.iter_mut().enumerate() {
+            let row = [q[b].clone(), k[b].clone(), v[b].clone()];
+            rows.push(self.core(&row, kv, offsets[b])?);
+        }
+        self.o_proj
+            .forward(&tensor::concatenate(&rows.iter().collect::<Vec<_>>(), 1)?)
+    }
+
+    /// The q, k and v projections of `x` `[1, L, hidden]` (q with its gate when gated).
+    fn project(&self, x: &Array) -> tensor::Result<[Array; 3]> {
+        Ok([
+            self.q_proj.forward(x)?,
+            self.k_proj.forward(x)?,
+            self.v_proj.forward(x)?,
+        ])
+    }
+
+    /// Attention of projected `[q, k, v]` `[1, L, ·]` at `offset`: norms, RoPE, the K/V
+    /// update, the attention and the output gate; `[1, L, heads · head_dim]` before `o_proj`.
+    fn core(&self, [q, k, v]: &[Array; 3], kv: &mut LayerKv, offset: i32) -> tensor::Result<Array> {
         let c = &self.cfg;
-        let len = x.dim(1);
+        let len = q.dim(1);
         let heads = |y: &Array, n: i32| tensor::reshape(y, &[1, len, n, -1]);
         let to_bhld = |y: &Array| tensor::transpose(y, &[0, 2, 1, 3]);
         let (queries, gate) = if c.gated {
             // [1, L, H, 2·D] split into the queries and the output gate, per head.
-            let mut parts = tensor::split(&heads(&self.q_proj.forward(x)?, c.heads)?, 2, -1)?;
+            let mut parts = tensor::split(&heads(q, c.heads)?, 2, -1)?;
             let gate = parts.pop().expect("two parts");
             let queries = parts.pop().expect("two parts");
             (queries, Some(tensor::reshape(&gate, &[1, len, -1])?))
         } else {
-            (heads(&self.q_proj.forward(x)?, c.heads)?, None)
+            (heads(q, c.heads)?, None)
         };
         let q = to_bhld(&self.q_norm.forward(&queries)?)?;
-        let k = to_bhld(
-            &self
-                .k_norm
-                .forward(&heads(&self.k_proj.forward(x)?, c.kv_heads)?)?,
-        )?;
-        let v = to_bhld(&heads(&self.v_proj.forward(x)?, c.kv_heads)?)?;
+        let k = to_bhld(&self.k_norm.forward(&heads(k, c.kv_heads)?)?)?;
+        let v = to_bhld(&heads(v, c.kv_heads)?)?;
         let rope = |y: &Array| {
             fast::rope(
                 y,
@@ -154,11 +191,10 @@ impl Attention {
         let limit = SCORE_LIMIT.with(std::cell::Cell::get);
         let o = fast::scaled_dot_product_attention(&q, &keys, &values, self.scale, mask, limit)?;
         let o = tensor::reshape(&to_bhld(&o)?, &[1, len, -1])?;
-        let o = match gate {
-            Some(gate) => tensor::multiply(&o, &tensor::sigmoid(&gate)?)?,
-            None => o,
-        };
-        self.o_proj.forward(&o)
+        match gate {
+            Some(gate) => tensor::multiply(&o, &tensor::sigmoid(&gate)?),
+            None => Ok(o),
+        }
     }
 
     /// Activation bytes of one chunk of `len` tokens at `depth` (f32 at worst): projections, and

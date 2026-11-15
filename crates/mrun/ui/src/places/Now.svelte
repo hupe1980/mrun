@@ -187,7 +187,7 @@
       <h2 class="section-title">Working now</h2>
       {#if active.length || waiting.length}
         <ul class="lanes">
-          {#each [...active, ...waiting] as r (r.id)}<Lane request={r} />{/each}
+          {#each [...active, ...waiting] as r (r.id)}<Lane request={r} lanes={s?.lanes.configured ?? 1} />{/each}
         </ul>
       {:else}
         <p class="empty">Nothing is running. Requests from your agents and chats appear here as they arrive.</p>

@@ -24,6 +24,8 @@ export const status = {
   last: null,
   requests: [
     { id: 12, api: "messages", lane: 0, phase: "prefill", prompt_tokens: 30000, cached: 17600, progress: 24000, cause: null, unreused: 0, generated: 0, decode_tps: null, age_ms: 900 },
+    // A title request beside it (011).
+    { id: 13, api: "messages", lane: 1, phase: "generating", prompt_tokens: 1840, cached: 1700, progress: 1840, cause: null, unreused: 0, generated: 9, decode_tps: 47.2, age_ms: 400 },
   ],
   finished: [
     finished(7, { prompt_tokens: 900, cached: 0, processed: 900, cause: "new" }),
@@ -32,7 +34,7 @@ export const status = {
     finished(10, { prompt_tokens: 24100, cached: 24060, processed: 40, cause: null, speculation: { drafted: 168, accepted: 131, passes: 52 } }),
     finished(11, { prompt_tokens: 26000, cached: 0, processed: 26000, cause: "evicted" }),
   ],
-  lanes: { configured: 1, busy: 1 },
+  lanes: { configured: 2, busy: 2 },
   speculation: { mode: "auto", drafted: 4120, accepted: 3190, passes: 1450 },
 };
 
@@ -255,6 +257,7 @@ export const configView = {
     setting("model", "qwen3.6", "file:2"),
     setting("budget-gib", null),
     setting("serve.max-output", null),
+    setting("serve.lanes", null, "default"),
     setting("serve.queue", 4, "file:5"),
     setting("serve.queue-wait-s", 240),
     setting("serve.no-cache", null),

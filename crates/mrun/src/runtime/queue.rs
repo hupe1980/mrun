@@ -1,13 +1,13 @@
-//! Admission for the single engine worker (002 FR-010): a bounded FIFO of waiting requests.
+//! Admission for the engine worker (002 FR-010): a bounded FIFO of waiting requests.
 //!
-//! The worker runs one request at a time; up to `capacity` more wait. A full queue refuses at
+//! The worker runs one request per lane (011); up to `capacity` more wait. A full queue refuses at
 //! once with a `retry-after` hint. Waiting deadlines and keepalives are enforced by the caller
 //! (it cancels the request's token), so the worker drops a cancelled request when it reaches it
 //! without touching the engine. The gauge keeps a moving average of request durations, so a
 //! non-streaming request can be refused at admission when its estimated wait exceeds the
 //! deadline (D052).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Default number of waiting requests (`--queue`).
@@ -21,7 +21,9 @@ const RETRY_PER_REQUEST_S: u64 = 10;
 pub struct QueueGauge {
     capacity: AtomicUsize,
     waiting: AtomicUsize,
-    running: AtomicBool,
+    /// Requests running, one per busy lane.
+    busy: AtomicUsize,
+    lanes: AtomicUsize,
     /// Moving average of request durations on the worker, in milliseconds (0: none yet).
     service_ms: AtomicU64,
 }
@@ -31,7 +33,8 @@ impl Default for QueueGauge {
         Self {
             capacity: AtomicUsize::new(usize::MAX),
             waiting: AtomicUsize::new(0),
-            running: AtomicBool::new(false),
+            busy: AtomicUsize::new(0),
+            lanes: AtomicUsize::new(1),
             service_ms: AtomicU64::new(0),
         }
     }
@@ -56,7 +59,21 @@ impl QueueGauge {
     }
 
     pub fn running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
+        self.busy() > 0
+    }
+
+    /// Requests running.
+    pub fn busy(&self) -> usize {
+        self.busy.load(Ordering::Relaxed)
+    }
+
+    /// Lanes the engine runs.
+    pub fn lanes(&self) -> usize {
+        self.lanes.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_lanes(&self, lanes: usize) {
+        self.lanes.store(lanes.max(1), Ordering::Relaxed);
     }
 
     /// Takes a waiting slot, or refuses when all are taken.
@@ -65,7 +82,7 @@ impl QueueGauge {
         let waiting = self.waiting.fetch_add(1, Ordering::AcqRel);
         if waiting >= capacity {
             self.waiting.fetch_sub(1, Ordering::AcqRel);
-            let ahead = waiting as u64 + u64::from(self.running());
+            let ahead = (waiting + self.busy()) as u64 / self.lanes() as u64;
             return Err(QueueFull {
                 retry_after: (ahead * RETRY_PER_REQUEST_S).clamp(1, 60),
             });
@@ -90,15 +107,21 @@ impl QueueGauge {
         self.service_ms.store(new.max(1), Ordering::Relaxed);
     }
 
-    /// Estimated wait of a request admitted now: the requests ahead times the average duration
-    /// (zero before any request finished).
+    /// Estimated wait of a request admitted now: the requests ahead, shared by the lanes, times
+    /// the average duration (zero before any request finished).
     pub fn estimated_wait(&self) -> Duration {
-        let ahead = self.waiting() as u64 + u64::from(self.running());
-        Duration::from_millis(ahead.saturating_mul(self.service_ms.load(Ordering::Relaxed)))
+        let ahead = (self.waiting() + self.busy()) as u64;
+        let ms = ahead.saturating_mul(self.service_ms.load(Ordering::Relaxed));
+        Duration::from_millis(ms / self.lanes() as u64)
     }
 
+    pub(crate) fn set_busy(&self, busy: usize) {
+        self.busy.store(busy, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_running(&self, running: bool) {
-        self.running.store(running, Ordering::Relaxed);
+        self.set_busy(usize::from(running));
     }
 }
 

@@ -6,6 +6,31 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-15
+
+### Added
+
+- Parallel lanes: up to four requests decode at once (`mrun serve --lanes N`, `lanes` in
+  config.toml; two by default when the context holds 32K tokens each), sharing each weight pass
+  and each bit-identical to running alone. A title or subagent streams while the main turn reads
+  its prompt; side requests (`x-claude-code-request-class` other than `main`) start first; a
+  client that stops reading pauses only its own lane. A short prompt that arrives while a long
+  one is read takes over at the next layer.
+- Lanes in `/mrun/status` (`lanes.configured`, `busy`, each request's `lane`), `mrun ps`, the
+  startup line and the window (Now, Settings › Server).
+
+### Fixed
+
+- Hybrid models (`qwen3.6`, `qwen3.5`) held up to 2.7× the memory the budget counted for stored
+  conversations and checkpoints: each kept state also kept its prompt chunk's convolution input
+  and output. A long agent session could end in `engine failure: out of memory`. Memory now
+  matches the count.
+
+### Changed
+
+- nuvec 0.11.0. Speculative decoding verifies drafts in one pass on the CPU too; the M5
+  Neural Accelerator kernels run by default on M5-class Macs (`NUVEC_NAX=off` keeps them off).
+
 ## [0.5.0] - 2026-11-11
 
 ### Added

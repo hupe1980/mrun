@@ -136,6 +136,7 @@ mrun config schema > ~/.mrun/config.schema.json
 | `MRUN_QUEUE_WAIT_S` | `serve --queue-wait-s` | 240 (non-streaming requests only); at least 1 |
 | `MRUN_BUDGET_GIB` | `--budget-gib` (`serve`, `run`, `ls`) | Metal's recommended working set; can only be lowered |
 | `MRUN_CONTEXT` | `--context` (`serve`, `run`) | The most that fits; `64K` or `65536` |
+| `MRUN_LANES` | `serve --lanes` | 2 when the context holds 32K tokens per lane, else 1; 1–4 |
 | `MRUN_NO_CACHE` | `serve --no-cache` | off |
 | `MRUN_SPECULATION` | `--speculation` (`serve`, `run`) | `auto` |
 | `MRUN_REJECT_TOOL_IMAGES` | `serve --reject-tool-images` | off |
@@ -177,5 +178,5 @@ These apply when building from source, except `NUVEC_NAX`, which is read at star
 | Variable | Meaning |
 | --- | --- |
 | `NUVEC_REQUIRE_METALLIB` | `1` fails the build when the Metal kernels cannot be precompiled, instead of compiling them at first start; the release build sets it |
-| `NUVEC_NAX` | `auto` (default), `on` or `off`: the M5 Neural Accelerator kernels; `auto` keeps them off until measured on an M5 |
+| `NUVEC_NAX` | `auto` (default), `on` or `off`: the M5 Neural Accelerator kernels; `auto` runs them on M5-class GPUs |
 | `MRUN_BUILD_COMMIT` | The commit shown by `mrun --version` (default: the repository's `HEAD`) |

@@ -8,8 +8,9 @@ use crate::cache::{CacheMode, CacheStats, ClearReport, PrefixStore};
 use crate::chat::splice::Ledger;
 use crate::chat::tokenizer::Tokenizer;
 use crate::runtime::generate::{
-    self, Event, EventSink, Failure, FinishReason, Finished, GenerateRequest, Stats,
+    Delivery, Event, EventSink, Failure, FinishReason, Finished, GenerateRequest, Job, Stats,
 };
+use crate::runtime::lanes::Lanes;
 use crate::runtime::pressure::{self, PressureGauge};
 use crate::runtime::queue::{QueueFull, QueueGauge};
 use flume::{Receiver, Sender, bounded, unbounded};
@@ -191,6 +192,8 @@ impl EngineHandle {
                     }
                 };
                 let mut policy = policy(engine.info());
+                policy.set_lanes(engine.lanes());
+                worker_queue.set_lanes(engine.lanes());
                 *worker_cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(policy.stats());
                 let _ = ready_tx.send(Ok((
                     engine.info().clone(),
@@ -254,7 +257,12 @@ impl EngineHandle {
         Ok(receiver)
     }
 
-    /// Waiting requests and the running flag; the capacity is set with `--queue`.
+    /// Lanes the engine runs (011).
+    pub fn lanes(&self) -> usize {
+        self.queue.lanes()
+    }
+
+    /// Waiting requests and the busy lanes; the capacity is set with `--queue`.
     pub fn queue(&self) -> &Arc<QueueGauge> {
         &self.queue
     }
@@ -308,20 +316,77 @@ impl EngineHandle {
     }
 }
 
+/// A request's events: sent without blocking the engine thread. A full channel (the consumer
+/// is not reading) holds the rest here; the scheduler retries and, after the stall timeout,
+/// cancels the request (011: one slow client never stalls the other lanes).
 struct ChannelSink {
     events: Sender<Event>,
-    stall_timeout: Duration,
-    /// Set once the consumer disconnected or stalled; nothing more is sent to it.
+    held: std::collections::VecDeque<Event>,
+    since: Option<Instant>,
+    /// Set once the consumer disconnected; nothing more is sent to it.
     gone: bool,
+}
+
+impl ChannelSink {
+    fn new(events: Sender<Event>) -> Self {
+        Self {
+            events,
+            held: std::collections::VecDeque::new(),
+            since: None,
+            gone: false,
+        }
+    }
 }
 
 impl EventSink for ChannelSink {
     fn send(&mut self, event: Event) -> bool {
-        if !self.gone {
-            self.gone = self.events.send_timeout(event, self.stall_timeout).is_err();
+        if self.gone {
+            return false;
         }
-        !self.gone
+        if !self.held.is_empty() {
+            self.held.push_back(event);
+            return true;
+        }
+        match self.events.try_send(event) {
+            Ok(()) => true,
+            Err(flume::TrySendError::Full(event)) => {
+                self.held.push_back(event);
+                self.since = Some(Instant::now());
+                true
+            }
+            Err(flume::TrySendError::Disconnected(_)) => {
+                self.gone = true;
+                false
+            }
+        }
     }
+
+    fn flush(&mut self) -> Delivery {
+        if self.gone {
+            return Delivery::Gone;
+        }
+        while let Some(event) = self.held.pop_front() {
+            match self.events.try_send(event) {
+                Ok(()) => {}
+                Err(flume::TrySendError::Full(event)) => {
+                    self.held.push_front(event);
+                    return Delivery::Waiting(self.since.unwrap_or_else(Instant::now));
+                }
+                Err(flume::TrySendError::Disconnected(_)) => {
+                    self.gone = true;
+                    return Delivery::Gone;
+                }
+            }
+        }
+        self.since = None;
+        Delivery::Done
+    }
+}
+
+/// What the worker keeps with each running request.
+struct Reply {
+    finished: Sender<Finished>,
+    began: Instant,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -337,104 +402,188 @@ fn worker<E: Engine>(
 ) {
     let mut waiting: std::collections::VecDeque<Command> = std::collections::VecDeque::new();
     let mut last_turn: Option<Option<String>> = None;
+    let mut lanes: Lanes<'_, Reply> = Lanes::new(engine.lanes(), stall_timeout);
+    let finish = |reply: Reply, done: Finished| {
+        queue.record_service(reply.began.elapsed());
+        // The slot is empty and never waited on; this fails only if the consumer left.
+        let _ = reply.finished.try_send(done);
+    };
     loop {
         // Everything that arrived waits here, so the next request can be chosen in turns.
         while let Ok(command) = inbox.try_recv() {
             waiting.push_back(command);
         }
-        let next = if waiting.is_empty() {
-            inbox.recv_timeout(IDLE_PRESSURE_POLL)
-        } else {
-            Ok(next_turn(&mut waiting, last_turn.as_ref()))
-        };
-        let command = match next {
-            Ok(command) => command,
-            Err(flume::RecvTimeoutError::Timeout) => {
-                // Idle: memory pressure sheds cache here too (critical also drops the live state).
-                if let Some(level) = pressure.take() {
-                    policy.on_pressure(engine, level, true);
-                    *cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(policy.stats());
-                }
-                continue;
-            }
-            Err(flume::RecvTimeoutError::Disconnected) => break,
-        };
-        match command {
-            Command::Generate {
-                request,
-                ticket,
-                events,
-                finished,
-            } => {
-                ticket.leave_queue();
-                last_turn = Some(request.turn.clone());
-                if request.cancel.is_cancelled() {
-                    // Cancelled or expired while waiting: never reaches the engine.
-                    drop(events);
-                    let _ = finished.try_send(Finished {
-                        reason: FinishReason::Cancelled,
-                        prefilled: 0,
-                        stats: Stats::default(),
-                    });
+        if !lanes.active() && waiting.is_empty() {
+            match inbox.recv_timeout(IDLE_PRESSURE_POLL) {
+                Ok(command) => waiting.push_back(command),
+                Err(flume::RecvTimeoutError::Timeout) => {
+                    // Idle: memory pressure sheds cache here too (critical also drops the live
+                    // state).
+                    if let Some(level) = pressure.take() {
+                        policy.on_pressure(engine, level, true);
+                        *cache.lock().unwrap_or_else(PoisonError::into_inner) =
+                            Some(policy.stats());
+                    }
                     continue;
                 }
-                queue.set_running(true);
-                let began = Instant::now();
-                let mut sink = ChannelSink {
-                    events,
-                    stall_timeout,
-                    gone: false,
-                };
-                let outcome = catch_unwind(AssertUnwindSafe(|| {
-                    let mut detok = tokenizer.stream();
-                    generate::generate(engine, policy, &mut detok, *request, &mut sink, pressure)
-                }));
-                // Close the event stream first so a consumer draining it moves on to `Finished`.
-                drop(sink);
-                let done = outcome.unwrap_or_else(|_| {
-                    // A panic left the engine state unknown: drop everything it holds.
-                    engine.reset_all();
-                    policy.clear(engine);
-                    Finished {
-                        reason: FinishReason::Error(Failure::Backend(
-                            "internal error; state reset".into(),
-                        )),
-                        prefilled: 0,
-                        stats: Stats::default(),
-                    }
-                });
-                queue.set_running(false);
-                queue.record_service(began.elapsed());
-                // The slot is empty and never waited on; this fails only if the consumer left.
-                let _ = finished.try_send(done);
-            }
-            Command::Reset => policy.clear(engine),
-            Command::ClearCache { reply } => {
-                let _ = reply.try_send(Some(policy.clear_cache(engine)));
+                Err(flume::RecvTimeoutError::Disconnected) => break,
             }
         }
+        // Control commands run between requests, before any new one starts.
+        if let Some(at) = waiting
+            .iter()
+            .position(|c| !matches!(c, Command::Generate { .. }))
+        {
+            if lanes.busy() == 0 {
+                match waiting.remove(at).expect("a command") {
+                    Command::Reset => policy.clear(engine),
+                    Command::ClearCache { reply } => {
+                        let _ = reply.try_send(Some(policy.clear_cache(engine)));
+                    }
+                    Command::Generate { .. } => unreachable!("a control command"),
+                }
+                *cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(policy.stats());
+                continue;
+            }
+        } else {
+            admit(
+                engine,
+                policy,
+                tokenizer,
+                &mut waiting,
+                &mut last_turn,
+                &mut lanes,
+                pressure,
+                &finish,
+            );
+        }
+        queue.set_busy(lanes.busy());
+        if !lanes.active() {
+            continue;
+        }
+        let stepped = catch_unwind(AssertUnwindSafe(|| lanes.step(engine, policy, pressure)));
+        let moved = match stepped {
+            Ok((ready, moved)) => {
+                for (reply, done) in ready {
+                    finish(reply, done);
+                }
+                moved
+            }
+            Err(_) => {
+                // A panic left the engine state unknown: drop everything it holds.
+                let failure = Failure::Backend("internal error; state reset".into());
+                for (reply, done) in lanes.fail_all(&failure) {
+                    finish(reply, done);
+                }
+                engine.reset_all();
+                policy.clear(engine);
+                true
+            }
+        };
+        queue.set_busy(lanes.busy());
         *cache.lock().unwrap_or_else(PoisonError::into_inner) = Some(policy.stats());
+        if !moved {
+            // Every running request waits for its client: wait a moment for one, or for news.
+            if let Ok(command) = inbox.recv_timeout(Duration::from_millis(1)) {
+                waiting.push_back(command);
+            }
+        }
     }
 }
 
-/// The next command: control commands first, then the oldest request of another member than
-/// the one just served (026 FR-007), else the oldest.
-fn next_turn(
+/// Starts waiting requests on free lanes while their reservations fit beside the running ones
+/// (FR-007): side requests first (FR-005), within a class the next member's turn (026 FR-007).
+#[allow(clippy::too_many_arguments)]
+fn admit<'t, E: Engine>(
+    engine: &mut E,
+    policy: &mut PrefixStore,
+    tokenizer: &'t Tokenizer,
     waiting: &mut std::collections::VecDeque<Command>,
+    last_turn: &mut Option<Option<String>>,
+    lanes: &mut Lanes<'t, Reply>,
+    pressure: &PressureGauge,
+    finish: &impl Fn(Reply, Finished),
+) {
+    let capacity = engine.budget().kv_capacity_tokens;
+    loop {
+        let free = lanes.free();
+        if free.is_empty() {
+            return;
+        }
+        let Some(at) = next_turn(waiting, last_turn.as_ref()) else {
+            return;
+        };
+        let Command::Generate { request, .. } = &waiting[at] else {
+            return;
+        };
+        let need = Job::need(request, capacity);
+        if lanes.busy() > 0 && lanes.reserved().saturating_add(need) > capacity {
+            return;
+        }
+        let Some(Command::Generate {
+            request,
+            ticket,
+            events,
+            finished,
+        }) = waiting.remove(at)
+        else {
+            unreachable!("a request");
+        };
+        ticket.leave_queue();
+        *last_turn = Some(request.turn.clone());
+        if request.cancel.is_cancelled() {
+            // Cancelled or expired while waiting: never reaches the engine.
+            drop(events);
+            finish(
+                Reply {
+                    finished,
+                    began: Instant::now(),
+                },
+                Finished {
+                    reason: FinishReason::Cancelled,
+                    prefilled: 0,
+                    stats: Stats::default(),
+                },
+            );
+            continue;
+        }
+        let lane = policy.best_lane(&request.prompt.tokens, &free);
+        let sink = Box::new(ChannelSink::new(events));
+        let job = Job::new(*request, lane, sink, tokenizer.stream());
+        let reply = Reply {
+            finished,
+            began: Instant::now(),
+        };
+        lanes.admit(engine, policy, pressure, job, reply);
+    }
+}
+
+/// The request to start next, if any: the oldest side request, else the oldest request of
+/// another member than the one just served (026 FR-007), else the oldest.
+fn next_turn(
+    waiting: &std::collections::VecDeque<Command>,
     last: Option<&Option<String>>,
-) -> Command {
-    let turn = |c: &Command| match c {
-        Command::Generate { request, .. } => Some(request.turn.clone()),
-        _ => None,
-    };
-    let at = waiting
+) -> Option<usize> {
+    let requests: Vec<(usize, &GenerateRequest)> = waiting
         .iter()
-        .position(|c| turn(c).is_none())
-        .or_else(|| {
-            last.and_then(|last| waiting.iter().position(|c| turn(c).as_ref() != Some(last)))
+        .enumerate()
+        .filter_map(|(i, c)| match c {
+            Command::Generate { request, .. } => Some((i, &**request)),
+            _ => None,
         })
-        .unwrap_or(0);
-    waiting.remove(at).expect("a waiting command")
+        .collect();
+    requests
+        .iter()
+        .find(|(_, r)| r.auxiliary)
+        .or_else(|| {
+            last.and_then(|last| {
+                requests
+                    .iter()
+                    .find(|(_, r)| r.turn.as_ref() != last.as_ref())
+            })
+        })
+        .or(requests.first())
+        .map(|&(i, _)| i)
 }
 
 #[cfg(test)]
@@ -454,11 +603,12 @@ mod tests {
     }
 
     #[test]
-    fn members_take_turns() {
+    fn members_take_turns_and_side_requests_go_first() {
         let tokenizer = byte_tokenizer();
         let command = |turn: Option<&str>, prompt: &str| {
             let mut request = request(&tokenizer, prompt);
             request.turn = turn.map(str::to_string);
+            request.auxiliary = prompt.starts_with('x');
             let (events, _) = bounded(1);
             let (finished, _) = bounded(1);
             Command::Generate {
@@ -472,13 +622,14 @@ mod tests {
             command(Some("anna"), "a1"),
             command(Some("anna"), "a2"),
             command(None, "b1"),
+            command(Some("anna"), "x-title"),
             command(Some("anna"), "a3"),
         ]
         .into();
         let mut order = Vec::new();
         let mut last = Some(Some("anna".to_string()));
-        while !waiting.is_empty() {
-            if let Command::Generate { request, .. } = next_turn(&mut waiting, last.as_ref()) {
+        while let Some(at) = next_turn(&waiting, last.as_ref()) {
+            if let Some(Command::Generate { request, .. }) = waiting.remove(at) {
                 order.push(
                     tokenizer
                         .inner()
@@ -488,9 +639,13 @@ mod tests {
                 last = Some(request.turn);
             }
         }
-        assert_eq!(order, ["b1", "a1", "a2", "a3"]);
+        assert_eq!(order, ["x-title", "b1", "a1", "a2", "a3"]);
         waiting.push_back(Command::Reset);
-        assert!(matches!(next_turn(&mut waiting, None), Command::Reset));
+        assert_eq!(
+            next_turn(&waiting, None),
+            None,
+            "control commands are not requests"
+        );
     }
 
     fn spawn(

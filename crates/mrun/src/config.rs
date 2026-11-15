@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use clap::{Arg, ArgAction, Command};
 
 /// Every `MRUN_*` variable mrun reads (`--record` has none by design).
-pub const KNOWN: [&str; 35] = [
+pub const KNOWN: [&str; 36] = [
     "MRUN_HOME",
     "MRUN_CONFIG",
     "MRUN_PORT",
@@ -22,6 +22,7 @@ pub const KNOWN: [&str; 35] = [
     "MRUN_QUEUE_WAIT_S",
     "MRUN_BUDGET_GIB",
     "MRUN_CONTEXT",
+    "MRUN_LANES",
     "MRUN_NO_CACHE",
     "MRUN_SPECULATION",
     "MRUN_REJECT_TOOL_IMAGES",
@@ -901,7 +902,7 @@ mod tests {
         let candidates: Vec<String> = match &setting.kind {
             Kind::Boolean => vec!["true".into()],
             Kind::Choice(choices) => choices.iter().rev().cloned().collect(),
-            _ => ["7", "2.5", "45m", "qwen3", "/tmp/x", "a=b", "x"]
+            _ => ["7", "2", "2.5", "45m", "qwen3", "/tmp/x", "a=b", "x"]
                 .map(String::from)
                 .to_vec(),
         };

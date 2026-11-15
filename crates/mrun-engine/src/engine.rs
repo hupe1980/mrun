@@ -547,6 +547,31 @@ pub fn verify_serially<E: Engine + ?Sized>(
     Ok(committed)
 }
 
+/// Most lanes an engine runs (011).
+pub const MAX_LANES: usize = 4;
+/// Context each lane must be able to hold for a lane count to fit (011 FR-001, FR-008).
+pub const MIN_LANE_TOKENS: u32 = 32_768;
+
+/// One lane's sample in [`Engine::sample_lanes`].
+#[derive(Debug)]
+pub struct Pick<'a> {
+    pub lane: usize,
+    pub step: Step,
+    pub sampling: &'a Sampling,
+    pub mask: Option<&'a TokenMask>,
+}
+
+/// What [`Engine::advance_chunk`] left.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChunkProgress {
+    /// Layers remain.
+    More,
+    /// Committed, as `prefill_chunk` commits it.
+    Done,
+    /// Cancelled: the lane's state is as before `begin_chunk`.
+    Cancelled,
+}
+
 /// Primitive operations on the single live sequence plus stored checkpoints and segments
 /// (contract v2, D028). The runtime owns the chunk loop, the chunk plan, checkpoint placement,
 /// memory-pressure handling and `NeedsMemory` retries.
@@ -644,8 +669,77 @@ pub trait Engine {
 
     /// Empties the live state and releases its allocation; segments and checkpoints stay.
     fn reset(&mut self);
-    /// `reset` plus dropping every stored segment and checkpoint (recovery after a panic).
+    /// `reset` on every lane plus dropping every stored segment and checkpoint (recovery after a
+    /// panic).
     fn reset_all(&mut self);
+
+    // Lanes (011): every primitive above acts on the selected lane; lane 0 after load.
+
+    /// Lanes this engine runs.
+    fn lanes(&self) -> usize {
+        1
+    }
+    /// The selected lane.
+    fn lane(&self) -> usize {
+        0
+    }
+    /// Points every single-sequence primitive at `lane` (`< lanes()`).
+    fn select(&mut self, lane: usize) {
+        assert_eq!(lane, 0, "a one-lane engine");
+    }
+    /// One forward for the `(lane, last)` rows (distinct lanes): each row's step equals
+    /// `forward(last)` on its lane, bit for bit. `Err((row, e))`: row `row` failed; the other
+    /// rows may have stepped (their steps are lost, their pending steps rolled back). The
+    /// selected lane is unchanged.
+    fn forward_lanes(&mut self, rows: &[(usize, u32)]) -> Result<Vec<Step>, (usize, EngineError)> {
+        let selected = self.lane();
+        let mut steps = Vec::with_capacity(rows.len());
+        for (i, &(lane, last)) in rows.iter().enumerate() {
+            self.select(lane);
+            match self.forward(last) {
+                Ok(step) => steps.push(step),
+                Err(e) => {
+                    self.select(selected);
+                    return Err((i, e));
+                }
+            }
+        }
+        self.select(selected);
+        Ok(steps)
+    }
+    /// Each pick as `sample` on its lane computes it. The selected lane is unchanged.
+    fn sample_lanes(&mut self, picks: Vec<Pick<'_>>) -> Vec<Result<u32, EngineError>> {
+        let selected = self.lane();
+        let out = picks
+            .into_iter()
+            .map(|p| {
+                self.select(p.lane);
+                self.sample(p.step, p.sampling, p.mask)
+            })
+            .collect();
+        self.select(selected);
+        out
+    }
+    /// Starts a prefill chunk of `tokens` on the selected lane, to be run a few layers at a time
+    /// between other lanes' work (their steps, their own chunks); until it is done, cancelled or
+    /// aborted this lane takes no other call. Each lane has at most one chunk in flight. Only
+    /// engines with more than one lane resume chunks; one lane calls `prefill_chunk`.
+    fn begin_chunk(&mut self, tokens: &[u32]) -> Result<(), EngineError> {
+        let _ = tokens;
+        Err(EngineError::Backend("this engine runs one lane".into()))
+    }
+    /// Runs up to `layers` more layers of the selected lane's chunk, checking `cancel` after
+    /// every layer.
+    fn advance_chunk(
+        &mut self,
+        layers: usize,
+        cancel: &CancelToken,
+    ) -> Result<ChunkProgress, EngineError> {
+        let _ = (layers, cancel);
+        Err(EngineError::Backend("no chunk in flight".into()))
+    }
+    /// Drops the selected lane's chunk: its state is as before `begin_chunk`.
+    fn abort_chunk(&mut self) {}
 }
 
 #[cfg(test)]

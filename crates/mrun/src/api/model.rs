@@ -61,6 +61,9 @@ pub struct ChatRequest {
     /// The pool member that sent it (026; `x-mrun-member`, set by this Mac's pool port from the
     /// member's certificate); `None` from this Mac.
     pub member: Option<String>,
+    /// A side request (011 FR-005): Claude Code's `x-claude-code-request-class` other than
+    /// `main` (titles, summaries, memory recall).
+    pub auxiliary: bool,
 }
 
 impl ChatRequest {
@@ -86,6 +89,7 @@ impl ChatRequest {
             ignore_eos: false,
             client: "other".into(),
             member: None,
+            auxiliary: false,
         }
     }
 

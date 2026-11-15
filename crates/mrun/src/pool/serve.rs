@@ -220,6 +220,7 @@ fn load_part(model: &OpenModel, part: Part) -> Result<NuvecEngine, String> {
         cpu: false,
         calibration: mrun_engine::calibration::default_path(),
         part: Some(part),
+        lanes: Some(1),
     };
     if std::env::var_os("MRUN_POOL_CPU").is_some() {
         options.cpu = true;

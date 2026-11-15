@@ -259,11 +259,15 @@ fn request_line(request: &Value) -> String {
         detail.push_str(&format!(" ({})", cache.join(", ")));
     }
     let age = request["age_ms"].as_u64().unwrap_or(0) as f64 / 1000.0;
+    // Lanes count from 1 here, as in the window; a waiting request has none yet.
+    let lane = match request["lane"].as_u64() {
+        Some(lane) if phase != "queued" => (lane + 1).to_string(),
+        _ => "–".into(),
+    };
     format!(
-        "#{} {:<9} lane {}  {phase:<10} {detail:<36}  age {age:.1}s\n",
+        "#{} {:<9} lane {lane}  {phase:<10} {detail:<36}  age {age:.1}s\n",
         request["id"],
         request["api"].as_str().unwrap_or("?"),
-        request["lane"],
     )
 }
 
@@ -382,6 +386,12 @@ pub fn render(status: &Value) -> String {
         gib(&budget["scratch"]),
         budget["kv_capacity_tokens"],
     ));
+    if let Some(lanes) = status["lanes"]["configured"].as_u64().filter(|&n| n > 1) {
+        out.push_str(&format!(
+            "lanes     {} of {lanes} busy\n",
+            status["lanes"]["busy"].as_u64().unwrap_or(0)
+        ));
+    }
     match (&status["active"], status["requests"].as_array()) {
         // Servers with per-request status (012): one line each.
         (_, Some(requests)) if !requests.is_empty() => {
@@ -586,7 +596,7 @@ mod tests {
             "generated": 0, "decode_tps": null, "speculation": null, "age_ms": 300});
         let line = request_line(&queued);
         assert!(
-            line.starts_with("#13 chat      lane 0  queued     prompt 812"),
+            line.starts_with("#13 chat      lane –  queued     prompt 812"),
             "{line}"
         );
         assert!(line.trim_end().ends_with("age 0.3s"), "{line}");
@@ -611,7 +621,7 @@ mod tests {
             "generated": 214, "decode_tps": 41.25, "speculation": null, "age_ms": 9800});
         let line = request_line(&generating);
         assert!(
-            line.contains("lane 1  generating 214 tokens, 41.2 tok/s (cached 90)"),
+            line.contains("lane 2  generating 214 tokens, 41.2 tok/s (cached 90)"),
             "{line}"
         );
         assert!(!line.contains("spec"), "no speculation, no rate");

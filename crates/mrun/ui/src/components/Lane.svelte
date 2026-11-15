@@ -1,10 +1,11 @@
 <script lang="ts">
-  // One running or waiting request: real progress, never an indefinite spinner (US1 AS2).
+  // One running or waiting request: real progress, never an indefinite spinner (US1 AS2). With
+  // several lanes (011) it names the lane it runs on.
   import { phaseLine, seconds } from "../lib/format";
   import type { Request } from "../lib/types";
   import ReuseRibbon from "./ReuseRibbon.svelte";
 
-  let { request }: { request: Request } = $props();
+  let { request, lanes = 1 }: { request: Request; lanes?: number } = $props();
 
   const fraction = $derived(
     request.phase === "prefill" && request.prompt_tokens > 0
@@ -25,7 +26,7 @@
   <div class="body">
     <div class="line">
       <span class="what">{phaseLine(request)}</span>
-      <span class="meta num">{api} · lane {request.lane + 1} · {seconds(request.age_ms)}</span>
+      <span class="meta num">{api}{lanes > 1 && request.phase !== "queued" ? ` · lane ${request.lane + 1}` : ""} · {seconds(request.age_ms)}</span>
     </div>
     {#if request.phase === "prefill"}
       <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax={request.prompt_tokens} aria-valuenow={request.progress} aria-label="Reading the prompt">
