@@ -338,8 +338,9 @@ pub fn servers_in(file: &Path) -> Result<Vec<(String, Value)>, String> {
 }
 
 /// mrun's own tools (028): the `workspace` tools in `root` (read, write, edit, list, glob, grep,
-/// bash; caged, writing allowed there) and `fetch` (web pages; it needs the network, so uncaged,
-/// and every call names its host).
+/// bash; caged, writing allowed there), `fetch` (web pages; it needs the network, so uncaged,
+/// and every call names its host) and `browser` (pageon: it needs the network too, and runs the
+/// pages in its own sandbox).
 pub fn builtin(kind: &str, root: Option<&Path>) -> Option<(String, Value)> {
     match (kind, root) {
         ("workspace", Some(root)) => Some((
@@ -353,6 +354,10 @@ pub fn builtin(kind: &str, root: Option<&Path>) -> Option<(String, Value)> {
         ("fetch", _) => Some((
             "fetch".into(),
             json!({"command": "mrun", "args": ["mcp", "serve", "fetch"], "sandbox": false}),
+        )),
+        ("browser", _) if cfg!(feature = "browser") => Some((
+            "browser".into(),
+            json!({"command": "mrun", "args": ["mcp", "serve", "browser"], "sandbox": false}),
         )),
         _ => None,
     }
@@ -459,5 +464,10 @@ mod tests {
         let (_, fetch) = builtin("fetch", None).unwrap();
         assert_eq!(fetch["sandbox"], false);
         assert!(builtin("workspace", None).is_none());
+        let browser = builtin("browser", None);
+        assert_eq!(browser.is_some(), cfg!(feature = "browser"));
+        if let Some((_, b)) = browser {
+            assert_eq!(b["args"], json!(["mcp", "serve", "browser"]));
+        }
     }
 }

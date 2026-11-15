@@ -2,6 +2,8 @@
 //! and kept for the process (the window or `mrun run`), each local one in a procage cage. The
 //! server (`mrun serve`) never runs tools; mrun's own tools are `mrun mcp serve`.
 
+#[cfg(feature = "browser")]
+pub mod browser;
 pub mod cage;
 pub mod client;
 pub mod config;

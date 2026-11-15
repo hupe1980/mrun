@@ -202,6 +202,7 @@
       <div class="buttons wrap">
         <button class="btn" disabled={toolBusy} onclick={() => toolAction(() => tools.addWorkspace(), "")} title="mrun mcp add workspace <folder>">Add Workspace…</button>
         <button class="btn" disabled={toolBusy || Boolean(tools.server("fetch"))} onclick={() => toolAction(() => tools.addFetch(), "")} title="mrun mcp add fetch">Add Fetch</button>
+        <button class="btn" disabled={toolBusy || Boolean(tools.server("browser"))} onclick={() => toolAction(() => tools.addBrowser(), "")} title="mrun mcp add browser">Add Browser</button>
         <button class="btn" disabled={toolBusy} aria-haspopup="menu" onclick={(e) => void contextMenu(e, [{ id: "claude-code", title: "From Claude Code" }, { id: "claude-desktop", title: "From Claude Desktop" }]).then((id) => {
           if (id === "claude-code" || id === "claude-desktop") void toolAction(() => tools.importFrom(id), id === "claude-code" ? "Claude Code" : "Claude Desktop");
         })} title="mrun mcp import claude-code | claude-desktop">Import…</button>

@@ -92,7 +92,7 @@ pub struct AddBody {
     dir: Option<std::path::PathBuf>,
 }
 
-/// `POST /app/mcp/add`: mrun's own `workspace` (in a folder) or `fetch`.
+/// `POST /app/mcp/add`: mrun's own `workspace` (in a folder), `fetch` or `browser`.
 pub async fn add(State(host): State<Host>, axum::Json(b): axum::Json<AddBody>) -> Response {
     let dir = match b.dir.as_ref().map(|d| d.canonicalize()) {
         Some(Ok(d)) => Some(d),
@@ -100,7 +100,12 @@ pub async fn add(State(host): State<Host>, axum::Json(b): axum::Json<AddBody>) -
         None => None,
     };
     let Some(entry) = config::builtin(&b.kit, dir.as_deref()) else {
-        return error(StatusCode::BAD_REQUEST, "workspace needs a folder");
+        let why = if b.kit == "workspace" {
+            "workspace needs a folder".to_string()
+        } else {
+            format!("this mrun was built without the {} tools", b.kit)
+        };
+        return error(StatusCode::BAD_REQUEST, &why);
     };
     match config::add(host.mcp.home(), vec![entry]) {
         Ok(added) if added.is_empty() => error(

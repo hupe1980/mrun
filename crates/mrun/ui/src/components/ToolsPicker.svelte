@@ -62,6 +62,10 @@
         <Symbol name="globe" size={18} />
         <span><b>Fetch</b><small>Read web pages; each call names the site.</small></span>
       </button>
+      <button class="offer" disabled={busy} onclick={() => run(() => tools.addBrowser())}>
+        <Symbol name="browser" size={18} />
+        <span><b>Browser</b><small>Open and use websites; pages run sandboxed.</small></span>
+      </button>
       <button class="offer" disabled={busy} onclick={() => run(() => tools.importFrom("claude-code"))}>
         <Symbol name="download" size={18} />
         <span><b>Claude Code’s servers</b><small>Copied into ~/.mrun/mcp.json, sandboxed here.</small></span>
