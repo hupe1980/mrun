@@ -7,6 +7,7 @@ pub mod browser;
 pub mod cage;
 pub mod client;
 pub mod config;
+pub mod search;
 pub mod serve;
 
 use client::{Client, Outcome, Tool};

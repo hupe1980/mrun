@@ -37,6 +37,7 @@ pub fn render_json(ctx: &Ctx, manifest: &Manifest) -> serde_json::Value {
     });
     serde_json::json!({
         "schema_version": 1,
+        "vision": vision(manifest) != "no",
         "name": manifest.name(),
         "path": manifest.dir(&ctx.paths),
         "status": status.label(),
@@ -80,6 +81,7 @@ pub fn render(ctx: &Ctx, manifest: &Manifest) -> String {
         }),
     );
     line("syntax", manifest.syntax.clone());
+    line("vision", vision(manifest));
     line("license", manifest.license.clone());
     line("identity", manifest.identity.clone());
     line(
@@ -141,6 +143,20 @@ pub fn run(args: ShowArgs) -> u8 {
             print!("{}", render(&ctx, &manifest));
         }
     }))
+}
+
+/// Whether the model reads images (009) and what its tower weighs.
+fn vision(manifest: &hub::Manifest) -> String {
+    match aliases::pinned(&manifest.repo, &manifest.revision) {
+        Some(alias) if alias.vision > 0 => format!("yes ({})", human_bytes(alias.vision)),
+        Some(_) => "no".into(),
+        None if manifest.architecture.ends_with("ForConditionalGeneration")
+            && manifest.family.starts_with("qwen3_5") =>
+        {
+            "yes".into()
+        }
+        None => "no".into(),
+    }
 }
 
 #[cfg(test)]

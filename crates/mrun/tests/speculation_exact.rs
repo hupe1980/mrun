@@ -60,8 +60,12 @@ struct Loaded {
 
 fn load(name: &str) -> Loaded {
     let model = mrun::cli::model::open(name).expect("pull the model first");
-    let factory =
-        mrun::cli::model::engine_factory(&model, mrun::cli::model::overrides(None, None), Some(1));
+    let factory = mrun::cli::model::engine_factory(
+        &model,
+        mrun::cli::model::overrides(None, None),
+        Some(1),
+        false,
+    );
     let engine = factory().unwrap();
     assert!(engine.max_draft() > 0, "{name}: the GPU verifies");
     Loaded { model, engine }

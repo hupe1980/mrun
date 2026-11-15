@@ -400,7 +400,9 @@ fn listed(state: &RelayState) -> Option<(String, u32, u32)> {
 
 async fn models(State(state): State<RelayState>) -> Response {
     let data: Vec<Value> = listed(&state)
-        .map(|(id, context, max_output)| status::model_json(&id, Some(context), Some(max_output)))
+        .map(|(id, context, max_output)| {
+            status::model_json(&id, Some(context), Some(max_output), false)
+        })
         .into_iter()
         .collect();
     let first = data.first().map(|m| m["id"].clone()).unwrap_or(Value::Null);
@@ -411,9 +413,13 @@ async fn models(State(state): State<RelayState>) -> Response {
 
 async fn model(State(state): State<RelayState>, Path(id): Path<String>) -> Response {
     match listed(&state) {
-        Some((_, context, max_output)) => {
-            axum::Json(status::model_json(&id, Some(context), Some(max_output))).into_response()
-        }
+        Some((_, context, max_output)) => axum::Json(status::model_json(
+            &id,
+            Some(context),
+            Some(max_output),
+            false,
+        ))
+        .into_response(),
         None => (
             StatusCode::NOT_FOUND,
             axum::Json(json!({"type": "error", "error": {"type": "not_found_error",

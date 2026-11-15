@@ -27,7 +27,9 @@ Qwen3-8B is not the small alias: its 40,960-token window barely holds Claude Cod
 and tools, and its state costs 144 KiB per token. Qwen3.5-9B has a 262K window at about 32 KiB per
 token plus a fixed linear-attention state.
 
-Greedy output of Qwen3.6 and Qwen3-8B is token-for-token identical to mlx-lm 0.32.0.
+Both aliases read images ([API](@/docs/api.md)). Their vision tower (0.9 GB) loads with the
+model unless it alone would leave less than 64K tokens of context, as on 16 GB Macs; `--vision
+on|off` decides instead. `mrun show` says whether a model reads images.
 
 ## Without an alias
 
@@ -51,7 +53,7 @@ coding agents. Other architectures are refused with the list of supported famili
 ## How model support works
 
 - **A family module per architecture**, ported from
-  [mlx-lm](https://github.com/ml-explore/mlx-lm) and checked token for token against it.
+  [mlx-lm](https://github.com/ml-explore/mlx-lm) and checked against its greedy output.
 - **A chat syntax per model**: its chat template plus one parser for tool calls and reasoning. The
   parser switches modes on special-token ids, never on text, so a `<tool_call>` string inside a
   file stays text. Qwen XML argument values are converted using the tool's JSON schema (booleans,

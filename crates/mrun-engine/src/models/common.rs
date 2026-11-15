@@ -4,8 +4,8 @@
 
 use serde_json::Value;
 
-use super::LoadError;
 use super::activations;
+use super::{LoadError, Pos, Run};
 use crate::load::{Embedding, Linear, Quantization, RmsNorm, Weights, invalid};
 use crate::state::LayerKv;
 use crate::tensor::{self, Array, Dtype, fast};
@@ -59,6 +59,25 @@ pub struct AttentionConfig {
     pub eps: f32,
     /// `q_proj` also emits a per-feature output gate (Qwen3-Next `Qwen3NextAttention`).
     pub gated: bool,
+    /// Interleaved M-RoPE sections (t, h, w) of image rows (009); `None` for text-only families.
+    pub mrope: Option<[i32; 3]>,
+}
+
+/// The axis (0 = t, 1 = h, 2 = w) each rotary frequency of an image row takes its position
+/// from: Qwen3-VL's interleaved layout, `[t, h, w, t, h, w, …]` within the h and w sections.
+pub fn mrope_axes(sections: [i32; 3], freqs: usize) -> Vec<usize> {
+    (0..freqs)
+        .map(|j| {
+            let j32 = j as i32;
+            if j % 3 == 1 && j32 < sections[1] * 3 {
+                1
+            } else if j % 3 == 2 && j32 < sections[2] * 3 {
+                2
+            } else {
+                0
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -111,21 +130,21 @@ impl Attention {
         })
     }
 
-    /// Attention over `x` `[1, L, hidden]` at absolute position `offset`, writing K/V to `kv`.
-    pub fn forward(&self, x: &Array, kv: &mut LayerKv, offset: i32) -> tensor::Result<Array> {
+    /// Attention over `x` `[1, L, hidden]` at `pos`, writing K/V to `kv`.
+    pub fn forward(&self, x: &Array, kv: &mut LayerKv, pos: Pos<'_>) -> tensor::Result<Array> {
         let projected = self.project(x)?;
-        let o = self.core(&projected, kv, offset)?;
+        let o = self.core(&projected, kv, pos)?;
         self.o_proj.forward(&o)
     }
 
     /// One decode step of several lanes (011): row `b` of `x` `[1, B, hidden]` attends over
-    /// `kvs[b]` at `offsets[b]`. The projections run on every row at once, the attention per
+    /// `kvs[b]` at `positions[b]`. The projections run on every row at once, the attention per
     /// lane.
     pub fn forward_lanes(
         &self,
         x: &Array,
         kvs: &mut [&mut LayerKv],
-        offsets: &[i32],
+        positions: &[Pos<'_>],
     ) -> tensor::Result<Array> {
         let [q, k, v] = self.project(x)?;
         let (q, k, v) = (
@@ -136,7 +155,7 @@ impl Attention {
         let mut rows = Vec::with_capacity(kvs.len());
         for (b, kv) in kvs.iter_mut().enumerate() {
             let row = [q[b].clone(), k[b].clone(), v[b].clone()];
-            rows.push(self.core(&row, kv, offsets[b])?);
+            rows.push(self.core(&row, kv, positions[b])?);
         }
         self.o_proj
             .forward(&tensor::concatenate(&rows.iter().collect::<Vec<_>>(), 1)?)
@@ -153,7 +172,12 @@ impl Attention {
 
     /// Attention of projected `[q, k, v]` `[1, L, ·]` at `offset`: norms, RoPE, the K/V
     /// update, the attention and the output gate; `[1, L, heads · head_dim]` before `o_proj`.
-    fn core(&self, [q, k, v]: &[Array; 3], kv: &mut LayerKv, offset: i32) -> tensor::Result<Array> {
+    fn core(
+        &self,
+        [q, k, v]: &[Array; 3],
+        kv: &mut LayerKv,
+        pos: Pos<'_>,
+    ) -> tensor::Result<Array> {
         let c = &self.cfg;
         let len = q.dim(1);
         let heads = |y: &Array, n: i32| tensor::reshape(y, &[1, len, n, -1]);
@@ -170,19 +194,8 @@ impl Attention {
         let q = to_bhld(&self.q_norm.forward(&queries)?)?;
         let k = to_bhld(&self.k_norm.forward(&heads(k, c.kv_heads)?)?)?;
         let v = to_bhld(&heads(v, c.kv_heads)?)?;
-        let rope = |y: &Array| {
-            fast::rope(
-                y,
-                c.rope_dims,
-                false,
-                Some(c.rope_theta),
-                c.rope_scale,
-                offset,
-                None,
-            )
-        };
-        let (q, k) = (rope(&q)?, rope(&k)?);
-        let (keys, values) = kv.update(&k, &v, offset)?;
+        let (q, k) = (self.rope(&q, pos)?, self.rope(&k, pos)?);
+        let (keys, values) = kv.update(&k, &v, pos.at)?;
         let mask = if len > 1 {
             fast::Mask::Causal
         } else {
@@ -195,6 +208,80 @@ impl Attention {
             Some(gate) => tensor::multiply(&o, &tensor::sigmoid(&gate)?),
             None => Ok(o),
         }
+    }
+
+    /// RoPE of `y` `[1, H, L, D]` at `pos`: text rows with the fused kernel (bit for bit the
+    /// text-only path, since it is elementwise per position), image rows with M-RoPE.
+    fn rope(&self, y: &Array, pos: Pos<'_>) -> tensor::Result<Array> {
+        let c = &self.cfg;
+        let text = |y: &Array, offset: i32| {
+            fast::rope(
+                y,
+                c.rope_dims,
+                false,
+                Some(c.rope_theta),
+                c.rope_scale,
+                offset,
+                None,
+            )
+        };
+        if pos.runs.is_empty() {
+            return text(y, pos.at + pos.delta);
+        }
+        let shape = y.shape();
+        let mut parts = Vec::with_capacity(pos.runs.len());
+        let mut row = 0;
+        for run in pos.runs {
+            let n = run.rows();
+            let piece =
+                tensor::slice(y, &[0, 0, row, 0], &[shape[0], shape[1], row + n, shape[3]])?;
+            parts.push(match *run {
+                Run::Text { offset, .. } => text(&piece, offset)?,
+                Run::Image {
+                    first, width, base, ..
+                } => self.mrope(&piece, first, width, base)?,
+            });
+            row += n;
+        }
+        tensor::concatenate(&parts.iter().collect::<Vec<_>>(), 2)
+    }
+
+    /// Interleaved M-RoPE of image rows `y` `[1, H, n, D]` (009 FR-005): the image's token `k`
+    /// (`first + row`) sits at (t, h, w) = (base, base + k / width, base + k % width); each
+    /// frequency takes its axis from [`mrope_axes`]; halves rotated as `fast::rope` does.
+    fn mrope(&self, y: &Array, first: i32, width: i32, base: i32) -> tensor::Result<Array> {
+        let c = &self.cfg;
+        let sections = c.mrope.unwrap_or([c.rope_dims / 2, 0, 0]);
+        let half = (c.rope_dims / 2) as usize;
+        let axes = mrope_axes(sections, half);
+        let n = y.dim(2);
+        let mut cos = Vec::with_capacity(n as usize * half);
+        let mut sin = Vec::with_capacity(n as usize * half);
+        for row in 0..n {
+            let k = first + row;
+            let at = [base, base + k / width.max(1), base + k % width.max(1)];
+            for (j, &axis) in axes.iter().enumerate() {
+                let inv = (c.rope_theta as f64).powf(-2.0 * j as f64 / c.rope_dims as f64);
+                let angle = (f64::from(at[axis]) * f64::from(c.rope_scale) * inv) as f32;
+                cos.push(angle.cos());
+                sin.push(angle.sin());
+            }
+        }
+        let shape = [1, 1, n, half as i32];
+        let (cos, sin) = (Array::from_f32(&cos, &shape), Array::from_f32(&sin, &shape));
+        let dtype = y.dtype();
+        let d = y.dim(3);
+        let h = y.dim(1);
+        let part = |from: i32, to: i32| tensor::slice(y, &[0, 0, 0, from], &[1, h, n, to]);
+        let x1 = tensor::astype(&part(0, half as i32)?, Dtype::Float32)?;
+        let x2 = tensor::astype(&part(half as i32, c.rope_dims)?, Dtype::Float32)?;
+        let o1 = tensor::subtract(&tensor::multiply(&x1, &cos)?, &tensor::multiply(&x2, &sin)?)?;
+        let o2 = tensor::add(&tensor::multiply(&x2, &cos)?, &tensor::multiply(&x1, &sin)?)?;
+        let mut out = vec![tensor::astype(&o1, dtype)?, tensor::astype(&o2, dtype)?];
+        if c.rope_dims < d {
+            out.push(part(c.rope_dims, d)?);
+        }
+        tensor::concatenate(&out.iter().collect::<Vec<_>>(), 3)
     }
 
     /// Activation bytes of one chunk of `len` tokens at `depth` (f32 at worst): projections, and

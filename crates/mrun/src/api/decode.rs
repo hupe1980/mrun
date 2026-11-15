@@ -8,25 +8,226 @@ use crate::chat::stop::StopMatcher;
 use serde_json::{Value, json};
 
 /// Text standing in for an image inside a tool result (FR-020).
-pub const IMAGE_PLACEHOLDER: &str = "[image omitted: model has no vision input]";
+pub const IMAGE_PLACEHOLDER: &str =
+    "[image omitted: not sent inline, or the model reads no images]";
 
 /// Server settings the decoders apply.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DecodeOptions {
     /// `--reject-tool-images`: refuse images in tool results instead of replacing them.
     pub reject_tool_images: bool,
+    /// The served model reads images (009), at this many pixels per token side.
+    pub vision: Option<u32>,
 }
 
-/// An image inside a tool result: replaced by the placeholder, or refused.
-pub fn tool_image(options: DecodeOptions, path: &str) -> Result<&'static str, ApiError> {
+/// Where an image in a request is (009): inline data, or somewhere mrun does not fetch.
+#[derive(Debug)]
+pub enum ImageSource<'a> {
+    Base64(&'a str),
+    /// A URL: a `data:` URL is inline, anything else is remote.
+    Url(&'a str),
+    /// A file id or another source mrun cannot read.
+    Remote,
+}
+
+impl<'a> ImageSource<'a> {
+    /// Anthropic's `source`: `{type: base64, data}`, `{type: url, url}` or `{type: file, …}`.
+    pub fn anthropic(source: &'a Value) -> Self {
+        match source["type"].as_str() {
+            Some("base64") => source["data"].as_str().map_or(Self::Remote, Self::Base64),
+            Some("url") => source["url"].as_str().map_or(Self::Remote, Self::Url),
+            _ => Self::Remote,
+        }
+    }
+
+    /// An OpenAI URL field (`image_url.url`, `image_url` or `input_image.image_url`).
+    pub fn openai(url: Option<&'a str>) -> Self {
+        url.map_or(Self::Remote, Self::Url)
+    }
+}
+
+/// Stands for an image in decoded text until [`attach_images`] places it.
+pub const IMAGE_MARK: char = '\u{E003}';
+
+thread_local! {
+    static IMAGES: std::cell::RefCell<Vec<std::sync::Arc<crate::chat::image::Image>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The image's bytes and size, or `None` when it is remote (never fetched).
+fn inline_image(
+    options: DecodeOptions,
+    source: ImageSource<'_>,
+    path: &str,
+) -> Result<Option<crate::chat::image::Image>, ApiError> {
+    use crate::chat::image::{Image, base64_decode, data_url};
+    // Without vision nothing is decoded: the image is only omitted.
+    let Some(px) = options.vision else {
+        return Ok(None);
+    };
+    let bytes = match source {
+        ImageSource::Base64(data) => base64_decode(data),
+        ImageSource::Url(url) => match data_url(url) {
+            Some(bytes) => bytes,
+            None => return Ok(None),
+        },
+        ImageSource::Remote => return Ok(None),
+    }
+    .map_err(|e| ApiError::invalid(e, path))?;
+    Image::new(bytes, px)
+        .map(Some)
+        .map_err(|e| ApiError::invalid(e, path))
+}
+
+fn mark(image: crate::chat::image::Image) -> String {
+    IMAGES.with(|i| i.borrow_mut().push(std::sync::Arc::new(image)));
+    IMAGE_MARK.to_string()
+}
+
+/// An image in a user message: its mark when the model reads it; a remote one, or any when the
+/// model reads none, is refused naming the path (FR-020, 009 FR-001).
+pub fn user_image(
+    options: DecodeOptions,
+    source: ImageSource<'_>,
+    path: &str,
+) -> Result<String, ApiError> {
+    if options.vision.is_none() {
+        return Err(ApiError::invalid(
+            "the served model reads no images (or mrun serve --vision off)",
+            path,
+        ));
+    }
+    match inline_image(options, source, path)? {
+        Some(image) => Ok(mark(image)),
+        None => Err(ApiError::invalid(
+            "mrun does not fetch images: send the image inline (base64 or a data: URL)",
+            path,
+        )),
+    }
+}
+
+/// An image inside a tool result: its mark when the model reads it inline, else the placeholder
+/// (`true`: omitted), or refused with `--reject-tool-images`.
+pub fn tool_image(
+    options: DecodeOptions,
+    source: ImageSource<'_>,
+    path: &str,
+) -> Result<(String, bool), ApiError> {
+    if let Some(image) = inline_image(options, source, path)? {
+        return Ok((mark(image), false));
+    }
     if options.reject_tool_images {
         Err(ApiError::invalid(
-            "images in tool results are not supported (--reject-tool-images)",
+            "image in a tool result not read: not inline, or the model reads no images (--reject-tool-images)",
             path,
         ))
     } else {
-        Ok(IMAGE_PLACEHOLDER)
+        Ok((IMAGE_PLACEHOLDER.to_string(), true))
     }
+}
+
+/// The URL of an OpenAI image part: Chat's `image_url.url` (or a bare string), Responses'
+/// `image_url`; a `file_id` is remote.
+pub fn openai_image_url(part: &Value) -> ImageSource<'_> {
+    let url = part["image_url"]["url"]
+        .as_str()
+        .or_else(|| part["image_url"].as_str());
+    ImageSource::openai(url)
+}
+
+/// OpenAI user content: a string, or parts whose text is joined and whose images
+/// (`image_url`, `input_image`) are placed (009); anything else is refused with its path.
+pub fn openai_user_content(
+    content: &Value,
+    path: &str,
+    options: DecodeOptions,
+    text_types: &[&str],
+) -> Result<String, ApiError> {
+    let Value::Array(parts) = content else {
+        return join_text_parts(
+            content,
+            path,
+            |p| text_part(p, text_types),
+            "unsupported content",
+        );
+    };
+    let mut text = String::new();
+    for (j, part) in parts.iter().enumerate() {
+        let ppath = format!("{path}.content[{j}]");
+        match part["type"].as_str() {
+            Some("image_url" | "input_image") => {
+                text.push_str(&user_image(options, openai_image_url(part), &ppath)?);
+            }
+            _ => match text_part(part, text_types) {
+                Some(t) => text.push_str(t),
+                None => {
+                    return Err(ApiError::invalid(
+                        "only text and image content is supported",
+                        ppath,
+                    ));
+                }
+            },
+        }
+    }
+    Ok(text)
+}
+
+/// Runs `decode` and places the images it marked into `request.images` (009).
+pub fn with_images(
+    decode: impl FnOnce() -> Result<ChatRequest, ApiError>,
+) -> Result<ChatRequest, ApiError> {
+    IMAGES.with(|i| i.borrow_mut().clear());
+    let decoded = decode();
+    let images = IMAGES.with(|i| std::mem::take(&mut *i.borrow_mut()));
+    let mut request = decoded?;
+    attach_images(&mut request, images)?;
+    Ok(request)
+}
+
+fn attach_images(
+    request: &mut ChatRequest,
+    images: Vec<std::sync::Arc<crate::chat::image::Image>>,
+) -> Result<(), ApiError> {
+    use crate::api::model::{Message, MessageImage};
+    let mut next = images.into_iter();
+    let mut placed = Vec::new();
+    let mut take = |text: &mut String, message: usize| -> Result<(), ApiError> {
+        if !text.contains(IMAGE_MARK) {
+            return Ok(());
+        }
+        let mut out = String::with_capacity(text.len());
+        for c in text.chars() {
+            if c == IMAGE_MARK {
+                let image = next.next().ok_or_else(|| {
+                    ApiError::invalid("text contains the character U+E003", "messages")
+                })?;
+                placed.push(MessageImage {
+                    message,
+                    at: out.len(),
+                    image,
+                });
+            } else {
+                out.push(c);
+            }
+        }
+        *text = out;
+        Ok(())
+    };
+    for (i, m) in request.messages.iter_mut().enumerate() {
+        match m {
+            Message::User(text) => take(text, i)?,
+            Message::Tool(result) => take(&mut result.content, i)?,
+            Message::Assistant(_) | Message::System(_) => {}
+        }
+    }
+    if next.next().is_some() {
+        return Err(ApiError::invalid(
+            "text contains the character U+E003",
+            "messages",
+        ));
+    }
+    request.images = placed;
+    Ok(())
 }
 
 /// Paths of the fields of `body` outside `known`, each prefixed with `prefix`. Names that are

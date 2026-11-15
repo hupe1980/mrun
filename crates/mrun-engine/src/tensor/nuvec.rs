@@ -508,6 +508,14 @@ unary!(exp);
 unary!(log);
 unary!(negative);
 
+pub fn tanh(a: &Array) -> Result<Array> {
+    ok(a.0.tanh())
+}
+
+pub fn erf(a: &Array) -> Result<Array> {
+    ok(a.0.erf())
+}
+
 pub fn matmul(a: &Array, b: &Array) -> Result<Array> {
     ok(a.0.matmul(&b.0))
 }
@@ -750,6 +758,21 @@ pub mod fast {
     use super::*;
 
     /// RMS normalization over the last axis, scaled by `weight` when given.
+    /// Layer normalisation over the last axis (MLX `fast.layer_norm`).
+    pub fn layer_norm(
+        x: &Array,
+        weight: Option<&Array>,
+        bias: Option<&Array>,
+        eps: f32,
+    ) -> Result<Array> {
+        ok(nv::fast::layer_norm(
+            &x.0,
+            weight.map(|w| &w.0),
+            bias.map(|b| &b.0),
+            eps,
+        ))
+    }
+
     pub fn rms_norm(x: &Array, weight: Option<&Array>, eps: f32) -> Result<Array> {
         ok(nv::fast::rms_norm(&x.0, weight.map(|w| &w.0), eps))
     }

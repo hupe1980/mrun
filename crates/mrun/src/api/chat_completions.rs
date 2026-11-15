@@ -2,9 +2,9 @@
 //! §1a).
 
 use crate::api::decode::{
-    DecodeOptions, arr, check_counts, function_tool, join_text_parts, obj, openai_tool_choice,
-    opt_bool, opt_f32, opt_str, opt_u32, raw_args, response_format, stops, str_field, text_part,
-    tool_image,
+    DecodeOptions, arr, check_counts, function_tool, join_text_parts, obj, openai_image_url,
+    openai_tool_choice, openai_user_content, opt_bool, opt_f32, opt_str, opt_u32, raw_args,
+    response_format, stops, str_field, text_part, tool_image,
 };
 use crate::api::handler::{Api, StreamEncode};
 use crate::api::model::{
@@ -70,7 +70,7 @@ pub fn decode(body: &Value, options: DecodeOptions) -> Result<ChatRequest, ApiEr
                 }
             }
             "user" => {
-                let text = text_content(&message["content"], &path)?;
+                let text = openai_user_content(&message["content"], &path, options, &["text"])?;
                 request.messages.push(Message::User(text));
             }
             "assistant" => request.messages.push(assistant(message, &path)?),
@@ -196,8 +196,13 @@ fn tool_content(
         match part["type"].as_str() {
             Some("text") => text.push_str(part["text"].as_str().unwrap_or_default()),
             Some("image_url") => {
-                text.push_str(tool_image(options, &format!("{path}.content[{j}]"))?);
-                images += 1;
+                let (part, omitted) = tool_image(
+                    options,
+                    openai_image_url(part),
+                    &format!("{path}.content[{j}]"),
+                )?;
+                text.push_str(&part);
+                images += u32::from(omitted);
             }
             _ => {
                 return Err(ApiError::invalid(

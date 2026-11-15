@@ -6,13 +6,33 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-15
+
 ### Added
 
-- A browser for mrun's chats: `mrun mcp add browser` (or *Add Browser* in Settings › Tools)
-  adds [pageon](https://github.com/hupe1980/pageon) in the binary. The model opens websites,
-  reads them as compact element lists, clicks, types, scrolls and uses tabs; pages run in
-  pageon's sandbox (no files, network or programs) and each call asks first. Any MCP client can
-  start it: `mrun mcp serve browser`.
+- A built-in browser for mrun's chats, [pageon](https://github.com/hupe1980/pageon) 0.2.0: `mrun mcp
+  add browser` or *Add Browser* in Settings › Tools. The model opens pages, reads them as element
+  lists, clicks, types, scrolls and uses tabs; page content runs sandboxed and each call asks
+  first. `--origin` keeps it to named sites, `--allow-local` lets it
+  open this Mac's dev servers, `--secret NAME@SITE` types a login the model never sees.
+  `mrun mcp serve browser` serves it to any MCP client.
+- Web search for mrun's chats: `mrun mcp add search` or *Add Search* in Settings › Tools. Exa
+  without a key by default, or `--provider brave` (`BRAVE_API_KEY`) or `--provider searxng --url`;
+  the card and the privacy line name the service.
+- Images: `qwen3.6` and `qwen3.5` read images in user messages and tool results on all three APIs
+  (inline base64 or `data:` URLs; scaled to at most 2,560 tokens), and the window's Chat takes
+  them by drop, paste or attach. Reuse stays exact: the same image is never encoded twice, and
+  another image in its place is a miss with the new cause `image`. `mrun serve --vision
+  auto|on|off`; `auto` loads the vision tower unless that leaves less than 64K tokens of context.
+  `/v1/models` lists `input_modalities`; `launch` and `connect opencode` declare image input.
+
+### Changed
+
+- `fetch` follows redirects only on the host the call named; a redirect to another host is
+  returned to the model. URLs with a user name or password are refused.
+- The pool's default port is 8486 (`--pool-port`, `MRUN_POOL_PORT`); 8485 is the window's.
+- Fit verdicts count the vision tower when `--vision auto` would load it.
+- nuvec 0.12.0.
 
 ## [0.6.0] - 2026-11-15
 
@@ -22,17 +42,15 @@ All notable changes to mrun are documented here. The format follows
   config.toml; two by default when the context holds 32K tokens each), sharing each weight pass
   and each bit-identical to running alone. A title or subagent streams while the main turn reads
   its prompt; side requests (`x-claude-code-request-class` other than `main`) start first; a
-  client that stops reading pauses only its own lane. A short prompt that arrives while a long
-  one is read takes over at the next layer.
+  client that stops reading pauses only its own lane.
 - Lanes in `/mrun/status` (`lanes.configured`, `busy`, each request's `lane`), `mrun ps`, the
   startup line and the window (Now, Settings › Server).
 
 ### Fixed
 
 - Hybrid models (`qwen3.6`, `qwen3.5`) held up to 2.7× the memory the budget counted for stored
-  conversations and checkpoints: each kept state also kept its prompt chunk's convolution input
-  and output. A long agent session could end in `engine failure: out of memory`. Memory now
-  matches the count.
+  conversations and checkpoints, so a long agent session could end in `engine failure: out of
+  memory`.
 
 ### Changed
 

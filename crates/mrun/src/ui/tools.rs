@@ -90,10 +90,106 @@ pub async fn import(State(host): State<Host>, axum::Json(b): axum::Json<ImportBo
 pub struct AddBody {
     kit: String,
     dir: Option<std::path::PathBuf>,
+    /// `search`: `exa`, `brave` or `searxng`.
+    provider: Option<String>,
+    /// `browser`: `any` (default), `local` (also this Mac's servers) or `only` (sites asked for).
+    reach: Option<String>,
 }
 
-/// `POST /app/mcp/add`: mrun's own `workspace` (in a folder), `fetch` or `browser`.
+/// A system dialog on this Mac; `None` when cancelled. Keys are typed here, never in the page
+/// (029 FR-007).
+async fn ask(prompt: &str, hidden: bool) -> Option<String> {
+    let script = format!(
+        "text returned of (display dialog \"{prompt}\" default answer \"\"{} buttons {{\"Cancel\", \"Add\"}} default button \"Add\" with title \"mrun\")",
+        if hidden { " with hidden answer" } else { "" }
+    );
+    let out = tokio::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .await
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !text.is_empty()).then_some(text)
+}
+
+/// `search`'s entry: Brave's key and SearXNG's address come from a dialog.
+async fn search_entry(provider: &str) -> Result<(String, serde_json::Value), String> {
+    let (key, url) = match provider {
+        "brave" => (
+            ask("Brave Search API key (search.brave.com/api)", true).await,
+            None,
+        ),
+        "searxng" => (
+            None,
+            ask(
+                "Address of your SearXNG instance, for example http://127.0.0.1:8888",
+                false,
+            )
+            .await,
+        ),
+        _ => (None, None),
+    };
+    if provider == "brave" && key.is_none() || provider == "searxng" && url.is_none() {
+        return Err("cancelled".into());
+    }
+    config::search(provider, url.as_deref(), |name| {
+        (name == "BRAVE_API_KEY").then(|| key.clone()).flatten()
+    })
+    .map(|(entry, _)| entry)
+}
+
+/// `POST /app/mcp/add`: mrun's own `workspace` (in a folder), `fetch`, `browser` or `search`.
 pub async fn add(State(host): State<Host>, axum::Json(b): axum::Json<AddBody>) -> Response {
+    if b.kit == "browser" && cfg!(feature = "browser") {
+        let mut options = config::BrowserOptions::default();
+        match b.reach.as_deref().unwrap_or("any") {
+            "local" => options.allow_local = true,
+            "only" => {
+                let Some(sites) = ask(
+                    "Sites the browser may use, separated by spaces (github.com docs.rs http://localhost:3000)",
+                    false,
+                )
+                .await
+                else {
+                    return error(StatusCode::BAD_REQUEST, "cancelled");
+                };
+                options.origins = sites
+                    .split([' ', ','])
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                options.allow_local = options
+                    .origins
+                    .iter()
+                    .any(|o| o.contains("localhost") || o.contains("127.0.0.1"));
+            }
+            _ => {}
+        }
+        let entry = match config::browser(&options, |_| None) {
+            Ok(entry) => entry,
+            Err(e) => return error(StatusCode::BAD_REQUEST, &e),
+        };
+        return match config::add(host.mcp.home(), vec![entry]) {
+            Ok(added) if added.is_empty() => {
+                error(StatusCode::CONFLICT, "mcp.json already has browser")
+            }
+            Ok(added) => axum::Json(json!({"added": added})).into_response(),
+            Err(e) => error(StatusCode::BAD_REQUEST, &e),
+        };
+    }
+    if b.kit == "search" {
+        let entry = match search_entry(b.provider.as_deref().unwrap_or("exa")).await {
+            Ok(e) => e,
+            Err(e) => return error(StatusCode::BAD_REQUEST, &e),
+        };
+        return match config::add(host.mcp.home(), vec![entry]) {
+            Ok(added) if added.is_empty() => {
+                error(StatusCode::CONFLICT, "mcp.json already has search")
+            }
+            Ok(added) => axum::Json(json!({"added": added})).into_response(),
+            Err(e) => error(StatusCode::BAD_REQUEST, &e),
+        };
+    }
     let dir = match b.dir.as_ref().map(|d| d.canonicalize()) {
         Some(Ok(d)) => Some(d),
         Some(Err(e)) => return error(StatusCode::BAD_REQUEST, &e.to_string()),

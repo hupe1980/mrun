@@ -2,7 +2,9 @@
 
 pub mod constrain;
 pub mod hook;
+pub mod image;
 pub mod limits;
+pub mod media;
 pub mod prompt;
 pub mod reasoning;
 pub mod render;

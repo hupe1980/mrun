@@ -43,8 +43,10 @@ tokio = { version = "1.53", features = ["rt-multi-thread", "net", "signal", "mac
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "system-proxy", "stream"] }
 sha1 = "0.11"
-# The built-in `grep` tool (028); already in the tree through tokenizers.
+# The built-in `grep` tool; already in the tree through tokenizers.
 regex = "1.13"
+# Image input (009): decoding and resizing (pageon uses it too).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 tempfile.workspace = true
 toml.workspace = true
 llguidance = { version = "1.9.1", default-features = false, features = ["lark"] }
@@ -55,10 +57,11 @@ mdns-sd = "0.21.7"
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "crypto", "pem"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "logging"] }
 
-# Cages the local MCP servers mrun's chats start (028): Seatbelt on macOS, Landlock on Linux.
+# procage cages the local MCP servers mrun's chats start (Seatbelt on macOS, Landlock on Linux);
+# pageon is the `browser` feature.
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 procage = { version = "=0.7.1", features = ["tokio", "proxy"] }
-pageon = { version = "=0.1.0", optional = true }
+pageon = { version = "=0.2.0", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tao = { version = "0.37.2", optional = true }

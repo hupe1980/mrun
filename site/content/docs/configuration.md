@@ -65,7 +65,7 @@ reps = 5
 Not settable: confirmations and one-shot actions (`yes`, `dry-run`, `write`, `restore`,
 `record`, `trace`, `out`, `follow`, `info`), output formats (`json`, `quiet`, `verbose`), remote mode
 (`serve --relay`: only `mrun cloud up` starts it), secrets (the RunPod key comes from
-`RUNPOD_API_KEY` or `.env`) and addresses (mrun binds to 127.0.0.1 only). Such keys get a warning
+`RUNPOD_API_KEY`, `.env` or the Keychain) and addresses (mrun binds to 127.0.0.1 only). Such keys get a warning
 like any unknown key.
 
 ### Mistakes
@@ -129,7 +129,7 @@ mrun config schema > ~/.mrun/config.schema.json
 | --- | --- | --- |
 | `MRUN_HOME` | — | `~/.mrun` |
 | `MRUN_CONFIG` | — | `$MRUN_HOME/config.toml`; empty: no config file |
-| `MRUN_PORT` | `--port` (`serve`, `launch`, `connect`, `ls`, `ps`, `doctor`, `stop`, `cache clear`, `cloud up`, `cloud down`, `cloud status`) | 8484 |
+| `MRUN_PORT` | `--port` (`serve`, `launch`, `connect`, `ls`, `ps`, `doctor`, `stop`, `cache clear`, `cloud up`, `cloud down`, `cloud status`, `pool`, `ui --server-port`) | 8484 |
 | `MRUN_MODEL` | `--model` (`serve`, `launch`) | This machine's default alias, or the largest pulled model that fits |
 | `MRUN_MAX_OUTPUT` | `serve --max-output` | 32768 (all three APIs, clamped to the context left); at least 1 |
 | `MRUN_QUEUE` | `serve --queue` | 16; at least 1 |
@@ -137,8 +137,10 @@ mrun config schema > ~/.mrun/config.schema.json
 | `MRUN_BUDGET_GIB` | `--budget-gib` (`serve`, `run`, `ls`) | Metal's recommended working set; can only be lowered |
 | `MRUN_CONTEXT` | `--context` (`serve`, `run`) | The most that fits; `64K` or `65536` |
 | `MRUN_LANES` | `serve --lanes` | 2 when the context holds 32K tokens per lane, else 1; 1–4 |
+| `MRUN_POOL_PORT` | `serve --pool-port` | 8486 |
 | `MRUN_NO_CACHE` | `serve --no-cache` | off |
 | `MRUN_SPECULATION` | `--speculation` (`serve`, `run`) | `auto` |
+| `MRUN_VISION` | `serve --vision` | auto |
 | `MRUN_REJECT_TOOL_IMAGES` | `serve --reject-tool-images` | off |
 | `MRUN_DETACH` | `serve --detach` | off |
 | `MRUN_UI_PORT` | `ui --port` | 8485 (the window's own loopback port; the next free one when taken) |

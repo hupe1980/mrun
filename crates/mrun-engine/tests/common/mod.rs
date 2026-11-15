@@ -254,11 +254,12 @@ pub fn real_models() -> Vec<(String, PathBuf)> {
             };
             let dir = Path::new(repo);
             if dir.join("config.json").is_file() {
-                // A Hugging Face cache snapshot names its repo (`models--org--name/...`).
+                // A Hugging Face cache snapshot (`models--org--name/...`) or mrun's store
+                // (`org--name/<revision>`) names its repo.
                 let name = dir
                     .components()
                     .filter_map(|c| c.as_os_str().to_str())
-                    .find_map(|c| c.strip_prefix("models--"))
+                    .find(|c| c.contains("--"))
                     .and_then(|r| r.rsplit("--").next())
                     .map_or_else(
                         || dir.file_name().unwrap().to_string_lossy().into_owned(),
@@ -310,6 +311,7 @@ pub fn load_real(dir: &Path) -> NuvecEngine {
         LoadOptions {
             identity,
             calibration: mrun_engine::calibration::default_path(),
+            no_vision: std::env::var("MRUN_TEST_NO_VISION").is_ok(),
             ..LoadOptions::default()
         },
     )

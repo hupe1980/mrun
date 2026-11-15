@@ -234,6 +234,9 @@ pub enum Failure {
     /// The output could not be decoded to text. The cache is kept.
     #[error("cannot decode the output: {0}")]
     Detokenize(String),
+    /// An image could not be read (009). The cache is kept.
+    #[error("{0}")]
+    Image(String),
     /// The engine failed or its state is unknown; the whole state was reset.
     #[error("{0}")]
     Backend(String),
@@ -544,6 +547,46 @@ impl<'a> Job<'a> {
         Some(&self.request.prompt.tokens[self.at as usize..end as usize])
     }
 
+    /// Gives the selected lane this request's images (009); before every chunk and decoding,
+    /// since another request may have used the lane meanwhile.
+    pub fn media<E: Engine>(&self, engine: &mut E) -> Result<(), Failure> {
+        let spans: Vec<_> = self
+            .request
+            .prompt
+            .images
+            .iter()
+            .map(|p| p.span())
+            .collect();
+        engine.set_media(&spans).map_err(Failure::from)
+    }
+
+    /// Encodes the images the next chunk reaches that are not encoded yet; `Ok(false)` when
+    /// cancelled.
+    pub fn encode_for<E: Engine>(&self, engine: &mut E) -> Result<bool, Failure> {
+        let Some(&end) = self.chunk_ends.front() else {
+            return Ok(true);
+        };
+        let Some(vision) = engine.info().vision else {
+            return Ok(true);
+        };
+        for placed in &self.request.prompt.images {
+            let key = u64::from(placed.key);
+            let first = placed.start;
+            let past = first + placed.image.tokens();
+            if first >= end || past <= self.at || !engine.needs_image(key) {
+                continue;
+            }
+            let pixels = placed.image.pixels(&vision).map_err(Failure::Image)?;
+            if !engine
+                .encode_image(key, &pixels, &self.request.cancel)
+                .map_err(Failure::from)?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Delivers held events; whether they all left, wait, or the consumer is gone.
     pub fn flush(&mut self) -> Delivery {
         self.sink.flush()
@@ -561,6 +604,9 @@ impl<'a> Job<'a> {
             |message: String| Ok(Some(FinishReason::Rejected(Rejection::Invalid(message))));
         if prompt.is_empty() {
             return invalid("the prompt is empty".into());
+        }
+        if !prompt.images.is_empty() && engine.info().vision.is_none() {
+            return invalid("the served model reads no images".into());
         }
         if self.request.max_tokens == 0 {
             return invalid("max tokens must be at least 1".into());
@@ -614,6 +660,7 @@ impl<'a> Job<'a> {
         self.checkpoints = checkpoints;
         self.prefill_started = Instant::now();
         self.ready = Some((matcher, limit));
+        self.media(engine)?;
         if self.chunk_ends.is_empty() {
             self.begin_decode(engine);
         }

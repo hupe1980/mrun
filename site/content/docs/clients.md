@@ -110,7 +110,7 @@ state (`previous_response_id`) are refused.
 
 `launch` passes the configuration through `OPENCODE_CONFIG_CONTENT`, so no OpenCode file is
 written: an OpenAI-compatible provider named `mrun` at `http://127.0.0.1:8484/v1` with the model's
-context, input and output limits.
+context, input and output limits, and image input when the server reads images.
 
 - **`--standalone`**: OpenCode starts a private server that reads this configuration instead of
   its shared background service. Pass `--standalone` or `--server` yourself to override.

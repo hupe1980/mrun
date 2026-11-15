@@ -797,6 +797,18 @@ async fn tools_list_without_secrets_call_and_allow() {
         .await
         .unwrap();
     assert_eq!(again.status(), 409);
+    // Search with Exa needs no key and no dialog (029).
+    let search: serde_json::Value = client()
+        .post(url("/app/mcp/add"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({"kit": "search", "provider": "exa"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(search["added"], serde_json::json!(["search"]));
 
     let allowed: serde_json::Value = client()
         .post(url("/app/mcp/allow"))

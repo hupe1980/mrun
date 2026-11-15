@@ -25,13 +25,15 @@ pub mod testing;
 
 pub use engine::{
     ALIGN, BACKEND, Binding, CHUNK_ALIGN, CancelToken, Checkpoint, CheckpointId, ChunkProgress,
-    Engine, EngineError, GROWTH, LAYER_TIME_BOUND_MS, LayerKind, MAX_LANES, MIN_LANE_TOKENS,
-    MemoryBudget, ModelInfo, Numerics, Pick, Sampling, Segment, SegmentId, Step, TimeLen,
-    TokenMask, align, chunk_len, grown_capacity, verify_serially,
+    Engine, EngineError, GROWTH, ImageSpan, LAYER_TIME_BOUND_MS, LayerKind, MAX_IMAGE_TOKENS,
+    MAX_LANES, MIN_IMAGE_TOKENS, MIN_LANE_TOKENS, MemoryBudget, ModelInfo, Numerics, Pick, Pixels,
+    Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, Vision, align, chunk_len,
+    grown_capacity, verify_serially,
 };
 #[cfg(feature = "engine")]
 pub use models::Part;
 pub use models::SyntaxId;
+pub use models::{Pos, Run};
 #[cfg(feature = "engine")]
 pub use nuvec_engine::{FailPoint, LoadOptions, NuvecEngine, NuvecLoadError};
 #[cfg(feature = "engine")]

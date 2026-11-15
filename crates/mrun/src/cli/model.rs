@@ -193,6 +193,40 @@ pub fn preflight(model: &OpenModel, context: Option<u32>) -> Result<(), CliError
     hub::check_available(device, &model.name, model.weights, &model.info)
 }
 
+/// Whether to load the vision tower (009) for `--vision` `choice`: `on` and `off` as said;
+/// `auto` loads it unless it alone pushes the context below 64K tokens (or below `context`).
+pub fn vision(
+    model: &OpenModel,
+    choice: &str,
+    budget_gib: Option<u64>,
+    context: Option<u32>,
+) -> bool {
+    match choice {
+        "on" => true,
+        "off" => false,
+        _ => {
+            let Some(device) = hub::device_memory() else {
+                return true;
+            };
+            #[cfg(feature = "engine")]
+            let tower = mrun_engine::load::weights_bytes_of(
+                &model.dir,
+                mrun_engine::models::vision::is_vision_tensor,
+            );
+            #[cfg(not(feature = "engine"))]
+            let tower = 0;
+            if tower == 0 {
+                return true;
+            }
+            let budget = budget_gib.map(|g| g << 30);
+            let need = context.unwrap_or(hub::aliases::DEFAULT_MIN_CONTEXT);
+            let room =
+                |weights: u64| hub::fit_with(device, budget, weights, &model.info).max_context;
+            room(model.weights) >= need || room(model.weights.saturating_sub(tower)) < need
+        }
+    }
+}
+
 /// Refuses (E042) a context outside 4,096 to the model's maximum, or one whose estimated need
 /// exceeds the budget, before any weight is read. The engine checks again with its measured
 /// scratch.
@@ -265,6 +299,7 @@ pub fn engine_factory(
     model: &OpenModel,
     overrides: Overrides,
     lanes: Option<usize>,
+    vision: bool,
 ) -> impl FnOnce() -> Result<mrun_engine::NuvecEngine, String> + Send + 'static {
     let dir = model.dir.clone();
     let name = model.name.clone();
@@ -276,6 +311,7 @@ pub fn engine_factory(
         calibration: mrun_engine::calibration::default_path(),
         part: None,
         lanes,
+        no_vision: !vision,
     };
     move || {
         use mrun_engine::NuvecLoadError;

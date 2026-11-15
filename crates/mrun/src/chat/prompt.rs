@@ -30,6 +30,8 @@ pub struct RenderedPrompt {
     /// Start of the generation header, where the next turn's re-rendered reply diverges;
     /// `tokens.len()` when the prompt has none.
     pub generation_start: u32,
+    /// Its images (009) where their tokens start; image tokens are keys above the vocabulary.
+    pub images: Vec<super::media::Placed>,
 }
 
 impl RenderedPrompt {
@@ -41,6 +43,7 @@ impl RenderedPrompt {
             messages: Vec::new(),
             system_tools_end: 0,
             generation_start,
+            images: Vec::new(),
         }
     }
 

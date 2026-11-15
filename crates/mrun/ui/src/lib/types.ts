@@ -1,7 +1,7 @@
 // The shapes the page reads: `/mrun/status` (012, through the host's proxy) and the UI host's
 // `/app/*` routes (spec 018: the UI host contract and data model).
 
-export type Cause = "disabled" | "evicted" | "diverged" | "new" | "gap";
+export type Cause = "disabled" | "evicted" | "diverged" | "new" | "gap" | "image";
 export type Phase = "queued" | "prefill" | "generating";
 
 /** Speculative decoding's counts (006): draft tokens verified and kept, and verify passes. */
@@ -406,6 +406,8 @@ export interface Attachment {
   tokens: number;
   /** Counted without a server (`bytes / 3.5`), shown as "about". */
   estimated: boolean;
+  /** An image (009): sent inline as an `image` block; `text` is empty. */
+  image?: { media: string; data: string };
 }
 
 export interface Message {

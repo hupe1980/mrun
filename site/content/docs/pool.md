@@ -13,6 +13,7 @@ Mac that hosts the pool.
 
 ## What it does and does not do
 
+- **No images.** The vision tower needs the whole model on one Mac; a pool refuses images.
 - **Bigger models, not faster tokens.** Each token passes every Mac in turn, so a pool decodes at
   best as fast as one Mac with enough memory, minus the network's delay per hop.
 - **The network decides.** Thunderbolt and wired Ethernet keep a hop well under a millisecond;
@@ -29,8 +30,8 @@ mrun pool start                 # on the Mac that hosts: announce a pool on this
 mrun pool start --unencrypted   # the same, without encrypting the model's traffic (see Privacy)
 mrun pool join "Ben's pool"     # on another Mac: shows a code to compare
 mrun pool admit                 # on the host: admit the Mac whose code matches
-mrun pool plan qwen3.8-235b     # layers, memory, context and speed per Mac
-mrun pool serve qwen3.8-235b    # every Mac loads its layers
+mrun pool plan <org/name>       # layers, memory, context and speed per Mac
+mrun pool serve <org/name>      # every Mac loads its layers
 mrun pool leave                 # a member leaves; on the host, ends the pool
 mrun pool rejoin                # a member back after a loss or a restart, without a code
 mrun pool replan                # on the host: serve again on the Macs answering now

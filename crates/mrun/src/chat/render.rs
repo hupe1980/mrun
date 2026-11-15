@@ -288,17 +288,76 @@ pub fn render(request: &ChatRequest, ctx: &RenderContext<'_>) -> Result<Rendered
         |m| m.start,
     );
     let reasoning_open = reasoning_open(&text[header_at..]);
-    Ok(Rendered {
+    let mut rendered = Rendered {
         prompt: RenderedPrompt {
             tokens,
             messages: marks,
             system_tools_end,
             generation_start,
+            images: Vec::new(),
         },
         reasoning_open,
         logs,
         replies,
-    })
+    };
+    if !request.images.is_empty() {
+        expand_images(&mut rendered, request, ctx)?;
+    }
+    Ok(rendered)
+}
+
+/// Each image's `<|image_pad|>` becomes its tokens (009); every token index moves with them.
+fn expand_images(
+    rendered: &mut Rendered,
+    request: &ChatRequest,
+    ctx: &RenderContext<'_>,
+) -> Result<(), ApiError> {
+    let pad = ctx.tokenizer.token_id("<|image_pad|>").ok_or_else(|| {
+        ApiError::invalid("the served model's template has no image token", "messages")
+    })?;
+    let images: Vec<_> = request.images.iter().map(|i| i.image.clone()).collect();
+    let expanded = super::media::expand(&rendered.prompt.tokens, pad, &images)
+        .map_err(|e| ApiError::new(ErrorKind::Internal, e))?;
+    let map = |old| expanded.map(old);
+    let p = &mut rendered.prompt;
+    p.tokens = expanded.tokens.clone();
+    for mark in &mut p.messages {
+        mark.start = map(mark.start);
+    }
+    p.system_tools_end = map(p.system_tools_end);
+    p.generation_start = map(p.generation_start);
+    for reply in &mut rendered.replies {
+        reply.start = map(reply.start);
+        reply.end_of_turn = map(reply.end_of_turn);
+    }
+    p.images = expanded.placed.clone();
+    Ok(())
+}
+
+/// A message's content for the template: its text, or with images (009) text and image items
+/// in order, the text items probed.
+fn content(text: &str, images: &[usize], probe: &mut Probe) -> (Value, Value) {
+    if images.is_empty() {
+        return (json!(text), json!(probe.piece(text)));
+    }
+    let (mut value, mut probed) = (Vec::new(), Vec::new());
+    let mut from = 0;
+    for &at in images {
+        let piece = &text[from..at.min(text.len())];
+        if !piece.is_empty() {
+            value.push(json!({"type": "text", "text": piece}));
+            probed.push(json!({"type": "text", "text": probe.piece(piece)}));
+        }
+        value.push(json!({"type": "image"}));
+        probed.push(json!({"type": "image"}));
+        from = at.min(text.len());
+    }
+    let rest = &text[from..];
+    if !rest.is_empty() {
+        value.push(json!({"type": "text", "text": rest}));
+        probed.push(json!({"type": "text", "text": probe.piece(rest)}));
+    }
+    (Value::Array(value), Value::Array(probed))
 }
 
 /// The template entries of the first `count` messages (the system block first).
@@ -329,7 +388,15 @@ fn entries(
         let index = api_index(i);
         match &request.messages[i] {
             Message::User(text) => {
-                out.push(entry("user", text, Role::User, index, i, probe));
+                let at = images_of(request, i);
+                let (value, probed) = content(text, &at, probe);
+                out.push(Entry {
+                    value: json!({"role": "user", "content": value}),
+                    probe: json!({"role": "user", "content": probed}),
+                    role: Role::User,
+                    message: Some(index),
+                    source: Some(i),
+                });
             }
             Message::System(text) => {
                 // Qwen XML templates refuse non-leading system messages: render a user turn
@@ -353,6 +420,7 @@ fn entries(
                 out.push(tool_entry(
                     &result.call_id,
                     &result.content,
+                    &images_of(request, i),
                     result.is_error,
                     index,
                     i,
@@ -436,24 +504,37 @@ fn entry(
     }
 }
 
+/// Byte offsets of message `i`'s images (009).
+fn images_of(request: &ChatRequest, i: usize) -> Vec<usize> {
+    request
+        .images
+        .iter()
+        .filter(|m| m.message == i)
+        .map(|m| m.at)
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn tool_entry(
     call_id: &str,
-    content: &str,
+    text: &str,
+    images: &[usize],
     is_error: bool,
     index: u32,
     source: usize,
     probe: &mut Probe,
 ) -> Entry {
-    let message = |content: String| {
+    let message = |content: Value| {
         let mut m = json!({"role": "tool", "tool_call_id": call_id, "content": content});
         if is_error {
             m["is_error"] = true.into();
         }
         m
     };
+    let (value, probed) = content(text, images, probe);
     Entry {
-        value: message(content.to_string()),
-        probe: message(probe.piece(content)),
+        value: message(value),
+        probe: message(probed),
         role: Role::Tool,
         message: Some(index),
         source: Some(source),

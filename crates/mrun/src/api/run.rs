@@ -362,6 +362,8 @@ fn rejected(rejection: Rejection) -> ApiError {
 fn failed(failure: Failure) -> ApiError {
     match failure {
         Failure::OutOfMemory(message) => ApiError::new(ErrorKind::ContextLengthExceeded, message),
+        // A broken image (009) is the client's: the header read but the pixels did not.
+        Failure::Image(message) => ApiError::invalid(message, "messages"),
         other => ApiError::new(ErrorKind::Internal, other.to_string()),
     }
 }

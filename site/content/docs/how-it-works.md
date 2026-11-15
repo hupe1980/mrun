@@ -17,7 +17,8 @@ branch (subagents, titles, retries) and cancel often.
    translated to one internal request: messages, tools, sampling and limits.
 2. **Rendering.** The model's chat template renders the conversation. Template scaffolding is
    tokenized with special tokens recognized, message content without, so a `<|im_end|>` inside a
-   file stays text. Message boundary positions are kept for the cache.
+   file stays text. Message boundary positions are kept for the cache. Each image becomes its
+   tokens; the vision tower encodes it during prefill, and a cached image is not encoded again.
 3. **Splicing.** Where the current turn contains a reply the model generated earlier, mrun puts
    back the exact token ids it sampled, reasoning included (see
    [Prefix cache](@/docs/prefix-cache.md#tool-loops-always-hit)).
@@ -50,7 +51,7 @@ one layer at a time, so state is never held twice.
 
 The thread runs up to four live sequences, *lanes* (`--lanes`; two when the context holds 32K
 tokens for each). Coding agents send side requests beside the main turn and run subagents in
-parallel; with lanes they no longer wait for each other:
+parallel; lanes run them side by side:
 
 - **Decode** steps every decoding lane in one forward pass, so lanes share each read of the
   weights. Each lane's output is bit-identical to running its request alone.
@@ -73,17 +74,11 @@ One running request uses exactly the single-sequence path, with speculative deco
 mrun runs on [nuvec](https://crates.io/crates/nuvec), a pure-Rust port of Apple's
 [MLX](https://github.com/ml-explore/mlx). nuvec provides the arrays and the Metal kernels; mrun
 owns the model graphs, state layout, memory accounting, scheduling and the server. Model families
-are ported from [mlx-lm](https://github.com/ml-explore/mlx-lm) and checked token for token against
-it. The Metal kernels are compiled into the binary.
+are ported from [mlx-lm](https://github.com/ml-explore/mlx-lm) and checked against it
+([Benchmarks](@/docs/benchmarks.md)). The Metal kernels are compiled into the binary.
 
-M4 Pro with 48 GB, 4,350-token prompt, best of 2, against mlx-lm 0.32.0:
-
-| Model | Prefill, mrun / mlx-lm | Decode, mrun / mlx-lm |
-| --- | --- | --- |
-| Qwen3.6-35B-A3B 4-bit | 982 / 938 tok/s | 86.9 / 87.6 tok/s |
-| Qwen3-8B 4-bit | 433 / 444 tok/s | 45.7 / 46.4 tok/s |
-
-The first request's time to first token on a short prompt is about 0.13 s.
+Prefill and decode are within a few percent of mlx-lm 0.32.0 ([Benchmarks](@/docs/benchmarks.md));
+the first request's time to first token on a short prompt is about 0.13 s.
 
 On M5-class GPUs the Neural Accelerator (NAX) kernels run where MLX would use them
 (`NUVEC_NAX=off` keeps them off). Whether they are used is part of the engine identity shown by
@@ -107,7 +102,7 @@ to 7 tokens at a time. Each position is sampled exactly as plain decoding sample
 same random draw, and a drafted token is kept only where it equals that sample, so the reply is
 the same token for token. The pass runs nuvec's row-exact kernels: each row has the bits of a
 one-token step. A request drafts only while its speculative rounds are faster than its plain steps.
-`mrun ps`, Now and each chat reply show the tokens per pass. Pools and the CPU decode plainly.
+`mrun ps`, Now and each chat reply show the tokens per pass. Pools decode plainly.
 
 ## Design rules
 

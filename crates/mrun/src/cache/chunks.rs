@@ -72,6 +72,7 @@ mod tests {
                 .collect(),
             system_tools_end: 0,
             generation_start: len,
+            images: Vec::new(),
         }
     }
 

@@ -80,9 +80,14 @@ Query strings such as `?beta=true` and `anthropic-beta` headers are accepted on 
   ones get 5 seconds and are then cancelled.
 - **No server-side context editing.** Anthropic `context_management` is accepted and ignored;
   clients compact on their own at the reported context window.
-- **Images.** Images are not passed to the model. Images in user messages are refused, naming
-  the field; images inside tool results are replaced by a placeholder with an `image-omitted`
-  warning (`--reject-tool-images` refuses them instead).
+- **Images.** `qwen3.6` and `qwen3.5` read images in user messages and tool results: Anthropic
+  `image` blocks with a base64 `source`, Chat `image_url` and Responses `input_image` with a
+  `data:` URL; PNG, JPEG, WebP and GIF (first frame), at most 20 MB and 50 megapixels. mrun scales
+  each to at most 2,560 tokens (one per 32 × 32 pixels) and never fetches a URL: a remote image is
+  refused in a user message and replaced by a placeholder with an `image-omitted` warning in a
+  tool result. With `--vision off`, or a model without vision, images in user messages are
+  refused and those in tool results replaced (`--reject-tool-images` refuses them). `/v1/models`
+  lists `input_modalities`.
 
 ## mrun metadata
 
@@ -95,7 +100,7 @@ comment lines in streams:
 | `x-mrun-cache-processed` | Prompt tokens computed for this request |
 | `x-mrun-max-tokens` | The output limit applied |
 | `x-mrun-spliced` | Prompt tokens taken from the model's own earlier replies (only when non-zero) |
-| `x-mrun-cache-cause` | Miss cause: `new`, `diverged`, `evicted`, `gap` or `disabled` (absent on a full hit) |
+| `x-mrun-cache-cause` | Miss cause ([Prefix cache](@/docs/prefix-cache.md#why-a-miss-happened)); absent on a full hit |
 | `x-mrun-cache-divergence` | Token position where the prompt left the cached state |
 | `x-mrun-cache-message` | The message containing that position, as `index:role` |
 | `x-mrun-cache-gap` | Tokens computed again between a restored checkpoint and the match (hybrid models, only when non-zero) |
@@ -115,7 +120,7 @@ Warnings:
 | --- | --- |
 | `tool-args-invalid` | The model wrote tool arguments that are not a valid JSON object (or do not match a `strict` tool's schema) |
 | `max-tokens-clamped` | The requested output limit did not fit and was lowered |
-| `image-omitted` | An image inside a tool result was replaced by a placeholder |
+| `image-omitted` | An image inside a tool result was replaced by a placeholder (remote, or the model reads no images) |
 | `repetition-stopped` | The loop guard ended a repeating output |
 
 Other conditions, such as a call to an undeclared tool or a schema the constrained decoder cannot

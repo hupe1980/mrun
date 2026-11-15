@@ -5,9 +5,9 @@
 //! not parse can still become a plain text block instead of a broken `tool_use` (FR-004).
 
 use crate::api::decode::{
-    DecodeOptions, arr, check_counts, check_schema, declared, function_tool, ignore_unknown,
-    join_text_parts, obj, opt_bool, opt_f32, opt_str, opt_u32, raw_args, stops, str_field,
-    text_part, tool_image,
+    DecodeOptions, ImageSource, arr, check_counts, check_schema, declared, function_tool,
+    ignore_unknown, join_text_parts, obj, opt_bool, opt_f32, opt_str, opt_u32, raw_args, stops,
+    str_field, text_part, tool_image, user_image,
 };
 use crate::api::handler::{self, Api, StreamEncode};
 use crate::api::model::{
@@ -266,6 +266,13 @@ fn user(
                 }
                 text.push_str(block["text"].as_str().unwrap_or_default());
             }
+            Some("image") => {
+                text.push_str(&user_image(
+                    options,
+                    ImageSource::anthropic(&block["source"]),
+                    &bpath,
+                )?);
+            }
             Some("tool_result") => {
                 if !text.is_empty() {
                     out.push(Message::User(std::mem::take(&mut text)));
@@ -274,7 +281,7 @@ fn user(
             }
             _ => {
                 return Err(ApiError::invalid(
-                    "only text and tool_result blocks are supported in user messages",
+                    "only text, image and tool_result blocks are supported in user messages",
                     bpath,
                 ));
             }
@@ -304,8 +311,10 @@ fn tool_result(
                 match part["type"].as_str() {
                     Some("text") => content.push_str(part["text"].as_str().unwrap_or_default()),
                     Some("image") => {
-                        content.push_str(tool_image(options, &ppath)?);
-                        images_omitted += 1;
+                        let (text, omitted) =
+                            tool_image(options, ImageSource::anthropic(&part["source"]), &ppath)?;
+                        content.push_str(&text);
+                        images_omitted += u32::from(omitted);
                     }
                     // A tool search result (FR-028): the referenced tool's definition is
                     // rendered here, so the tools region and the cached prefix stay unchanged.
@@ -661,10 +670,8 @@ pub async fn count_tokens(
     bytes: Result<Bytes, BytesRejection>,
 ) -> Response {
     let result = async {
-        let request = decode(
-            &handler::parse(&handler::body(bytes)?)?,
-            state.decode_options(),
-        )?;
+        let body = handler::parse(&handler::body(bytes)?)?;
+        let request = crate::api::decode::with_images(|| decode(&body, state.decode_options()))?;
         let loaded = handler::ready(&state)?;
         let prepared = crate::api::run::prepare(&loaded, &request).await?;
         Ok::<_, ApiError>(prepared.rendered.prompt.len())
@@ -774,6 +781,7 @@ mod tests {
         // msg_reject_tool_images_flag
         let strict = DecodeOptions {
             reject_tool_images: true,
+            vision: None,
         };
         let body = json!({"messages": [{"role": "user", "content": [{"type": "tool_result",
             "tool_use_id": "t", "content": [{"type": "image"}]}]}]});

@@ -19,7 +19,8 @@ context = (state − 3 × linear-attention state) ÷ attention bytes per token, 
   thirds of memory on smaller Macs, more on larger ones. A raised wired-memory limit is honoured,
   but the budget stays at least 2 GiB below physical memory. `available − margin` is explained
   under [Other apps and VMs](#other-apps-and-vms).
-- **Weights** are estimated from file sizes before loading and measured after warm-up.
+- **Weights** are estimated from file sizes before loading and measured after warm-up, the vision
+  tower (0.9 GB) included when it loads.
 - **Scratch** is the temporary memory a request needs beyond its state:
   `(warm-up peak above the weights + computed term) × 1.25`. The computed term covers the largest
   prompt chunk's activations, expert routing and attention scores, one attention layer copy, one
@@ -85,8 +86,8 @@ the default model and admission:
 
 | Mac | Recommended working set | Default | `qwen3.5` context |
 | --- | --- | --- | --- |
-| 16 GB | ≈ 10.67 GiB | `qwen3.5` | 84,333 tokens |
-| 24 GB | 16 GiB | `qwen3.5` | 235,385 tokens |
+| 16 GB | ≈ 10.67 GiB | `qwen3.5` | 65,979 tokens |
+| 24 GB | 16 GiB | `qwen3.5` | 181,186 tokens |
 | 32 GB | ≈ 21.3 GiB | `qwen3.5` | — |
 | 48 GB (M4 Pro, measured) | 37.4 GiB | `qwen3.6` | 262,144 tokens |
 
@@ -101,12 +102,8 @@ Before a request touches the GPU, mrun checks that its prompt fits, evicting cac
 needed, and clamps the output limit to the space left (`x-mrun-max-tokens`). With several lanes,
 the prompts and output limits of the running requests share the context capacity; a request whose
 reservation does not fit beside them waits for a lane, and each lane beyond the first holds back
-its live recurrent state. A prompt that cannot
-fit is refused immediately with the token counts, in each API's error format (for example
-`context_length_exceeded`), and the cache is left intact. `GET /v1/models` reports the context
-capacity, and `mrun launch` passes it to the client so agents compact before the limit. `launch`
-refuses a model below the client's minimum (64K tokens for Claude Code) and names the budget it
-would need.
+its live recurrent state. A prompt that cannot fit is refused immediately with the token counts,
+in each API's error format (for example `context_length_exceeded`), and the cache is left intact.
 
 ## Who enforces it
 

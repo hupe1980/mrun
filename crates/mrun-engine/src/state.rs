@@ -127,6 +127,8 @@ pub struct KvTail {
 #[derive(Debug)]
 pub struct SeqState {
     pub layers: Vec<LayerState>,
+    /// The images of the sequence (009), set by the runtime per request.
+    pub media: Media,
     capacity: u32,
     kv_heads: i32,
     head_dim: i32,
@@ -147,6 +149,7 @@ impl SeqState {
                     }
                 })
                 .collect(),
+            media: Media::default(),
             capacity: 0,
             kv_heads: kv_heads as i32,
             head_dim: head_dim as i32,
@@ -169,6 +172,7 @@ impl SeqState {
                     LayerState::Kv(_) => LayerState::Kv(LayerKv::default()),
                 })
                 .collect(),
+            media: Media::default(),
             capacity: 0,
             kv_heads: self.kv_heads,
             head_dim: self.head_dim,
@@ -376,5 +380,181 @@ impl SeqState {
         }
         self.capacity = capacity;
         Ok(())
+    }
+}
+
+/// One image of a sequence (009): its tokens `[start, start + len)` (a merged grid `height` ×
+/// `width`, row-major) and, until they are prefilled, its features `[len, hidden]`.
+#[derive(Debug, Clone)]
+pub struct MediaSpan {
+    pub start: u32,
+    pub height: u32,
+    pub width: u32,
+    /// The runtime's key for the image.
+    pub key: u64,
+    pub features: Option<Array>,
+}
+
+impl MediaSpan {
+    /// Tokens of the image.
+    pub fn tokens(&self) -> u32 {
+        self.height * self.width
+    }
+
+    pub fn end(&self) -> u32 {
+        self.start + self.tokens()
+    }
+
+    /// Rotary positions the image takes (t = 1): its largest extent.
+    fn extent(&self) -> i32 {
+        self.height.max(self.width) as i32
+    }
+}
+
+/// The images of a sequence, in order, and the rotary positions they imply (M-RoPE): text after
+/// an image continues at the image's largest position + 1, so its rotary position is its slot
+/// plus the deltas of the images before it.
+#[derive(Debug, Clone, Default)]
+pub struct Media {
+    pub spans: Vec<MediaSpan>,
+}
+
+impl Media {
+    /// Rotary position minus slot of a text token at `at` (images ending at or before it).
+    pub fn delta(&self, at: u32) -> i32 {
+        self.spans
+            .iter()
+            .filter(|s| s.end() <= at)
+            .map(|s| s.extent() - s.tokens() as i32)
+            .sum()
+    }
+
+    /// The rotation runs of rows `[at, at + len)`: empty when no image overlaps them (every row
+    /// is text at `slot + delta(at)`).
+    pub fn runs(&self, at: u32, len: u32) -> Vec<crate::models::Run> {
+        use crate::models::Run;
+        let end = at + len;
+        if !self.spans.iter().any(|s| s.start < end && s.end() > at) {
+            return Vec::new();
+        }
+        let mut runs = Vec::new();
+        let mut row = at;
+        for s in self.spans.iter().filter(|s| s.start < end && s.end() > at) {
+            if s.start > row {
+                runs.push(Run::Text {
+                    len: (s.start - row) as i32,
+                    offset: row as i32 + self.delta(row),
+                });
+                row = s.start;
+            }
+            let stop = s.end().min(end);
+            runs.push(Run::Image {
+                len: (stop - row) as i32,
+                first: (row - s.start) as i32,
+                width: s.width as i32,
+                base: s.start as i32 + self.delta(s.start),
+            });
+            row = stop;
+        }
+        if row < end {
+            runs.push(Run::Text {
+                len: (end - row) as i32,
+                offset: row as i32 + self.delta(row),
+            });
+        }
+        runs
+    }
+
+    /// The image rows of `[at, at + len)`: `(row in the chunk, span, first token, count)`.
+    pub fn rows(&self, at: u32, len: u32) -> Vec<(u32, usize, u32, u32)> {
+        let end = at + len;
+        self.spans
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.start < end && s.end() > at)
+            .map(|(i, s)| {
+                let from = s.start.max(at);
+                let to = s.end().min(end);
+                (from - at, i, from - s.start, to - from)
+            })
+            .collect()
+    }
+
+    /// Drops the features of images whose tokens all lie before `len` (FR-004).
+    pub fn committed(&mut self, len: u32) {
+        for s in &mut self.spans {
+            if s.end() <= len {
+                s.features = None;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+    use crate::models::Run;
+
+    fn span(start: u32, height: u32, width: u32) -> MediaSpan {
+        MediaSpan {
+            start,
+            height,
+            width,
+            key: u64::from(start),
+            features: None,
+        }
+    }
+
+    #[test]
+    fn positions_follow_m_rope() {
+        // 5 text tokens, a 2 × 3 image (6 tokens, extent 3), then text.
+        let m = Media {
+            spans: vec![span(5, 2, 3)],
+        };
+        assert_eq!(m.delta(5), 0);
+        assert_eq!(
+            m.delta(11),
+            3 - 6,
+            "text after the image continues at 5 + 3"
+        );
+        assert!(m.runs(0, 5).is_empty());
+        assert!(m.runs(11, 4).is_empty());
+        assert_eq!(
+            m.runs(3, 10),
+            vec![
+                Run::Text { len: 2, offset: 3 },
+                Run::Image {
+                    len: 6,
+                    first: 0,
+                    width: 3,
+                    base: 5
+                },
+                Run::Text { len: 2, offset: 8 },
+            ]
+        );
+        // A chunk ending inside the image, and the next one.
+        assert_eq!(
+            m.runs(7, 2),
+            vec![Run::Image {
+                len: 2,
+                first: 2,
+                width: 3,
+                base: 5
+            }]
+        );
+        assert_eq!(m.rows(3, 10), vec![(2, 0, 0, 6)]);
+        assert_eq!(m.rows(7, 2), vec![(0, 0, 2, 2)]);
+    }
+
+    #[test]
+    fn two_images_add_their_deltas() {
+        let m = Media {
+            spans: vec![span(1, 2, 2), span(8, 1, 4)],
+        };
+        assert_eq!(m.delta(5), 2 - 4);
+        // The 1 × 4 image's extent equals its tokens: no change after it.
+        assert_eq!(m.delta(12), 2 - 4);
+        let runs = m.runs(5, 3);
+        assert_eq!(runs, Vec::new(), "text between the images rotates at 5 - 2");
     }
 }

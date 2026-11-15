@@ -30,14 +30,14 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::budget::{self, BudgetError, DeviceMemory, GIB, INITIAL_STATE_TOKENS, Overrides};
 use crate::calibration;
 use crate::engine::{
-    CancelToken, Checkpoint, CheckpointId, ChunkProgress, Engine, EngineError, LayerKind,
-    MAX_LANES, MIN_LANE_TOKENS, MemoryBudget, ModelInfo, Pick, Sampling, Segment, SegmentId, Step,
-    TimeLen, TokenMask, chunk_len, verify_serially,
+    CancelToken, Checkpoint, CheckpointId, ChunkProgress, Engine, EngineError, ImageSpan,
+    LayerKind, MAX_IMAGE_TOKENS, MAX_LANES, MIN_LANE_TOKENS, MemoryBudget, ModelInfo, Pick, Pixels,
+    Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, chunk_len, verify_serially,
 };
 use crate::identity::{self, IdentityError};
 use crate::ledger::Ledger;
 use crate::load::{self, Weights};
-use crate::models::{self, FamilyConfig, LoadError, Model, Part};
+use crate::models::{self, FamilyConfig, LoadError, Model, Part, Pos, Run};
 use crate::sample;
 use crate::state::{self, KvTail, LayerKv, LayerState, Recurrent, RecurrentState, SeqState};
 use crate::tensor::{self, Array, Pipe};
@@ -67,6 +67,8 @@ pub struct LoadOptions {
     /// Lanes to run (011, 1–4); `None` decides from the context capacity. A part of a pool runs
     /// one.
     pub lanes: Option<usize>,
+    /// Skip the vision tower even when the model has one (009 `--vision off`).
+    pub no_vision: bool,
 }
 
 /// Where an injected failure strikes (test hook for FR-028/SC-012, [`NuvecEngine::fail_next`]).
@@ -149,7 +151,10 @@ struct InFlight {
     tokens: Vec<u32>,
     x: Array,
     next: usize,
-    offset: i32,
+    /// The chunk's first slot, its delta and rotation runs (009).
+    at: u32,
+    delta: i32,
+    runs: Vec<Run>,
     previous: Option<Array>,
     capacity: u32,
     start: Option<RecurrentState>,
@@ -186,6 +191,9 @@ pub struct NuvecEngine {
     /// The chunk in flight, if any.
     /// Each lane's chunk in flight (011: a shorter prompt may take over between layers).
     chunks: Vec<Option<InFlight>>,
+    /// The vision tower (009) and its encoder scratch at the image cap.
+    vision: Option<models::vision::VisionTower>,
+    encoder: u64,
 }
 
 impl std::fmt::Debug for NuvecEngine {
@@ -262,7 +270,16 @@ impl NuvecEngine {
             }
             .into());
         }
-        let keep = |name: &str| !load::unused_tensor(name) && part.keeps(name);
+        // The vision tower (009): whole models of the Qwen3.5 families that ship one.
+        let whole_model = part == Part::whole(layers);
+        let vision_on = !options.no_vision
+            && whole_model
+            && config["vision_config"].is_object()
+            && matches!(family.family.name, "qwen3_5" | "qwen3_5_moe");
+        let keep = |name: &str| {
+            (vision_on && models::vision::is_vision_tensor(name))
+                || (!load::unused_tensor(name) && part.keeps(name))
+        };
         let weights_bytes = load::weights_bytes_of(dir, keep);
         let plan = budget::plan(device, options.overrides)?;
         // Refuse early, before reading gigabytes, when the files alone cannot fit.
@@ -273,13 +290,25 @@ impl NuvecEngine {
             .get("text_config")
             .filter(|t| t.is_object())
             .unwrap_or(&config);
-        let model = models::build(
-            family.family.name,
-            &config,
-            text_config,
-            Weights::load(dir, keep)?,
-            part,
-        )?;
+        let mut weights = Weights::load(dir, keep)?;
+        let vision = if vision_on {
+            Some(models::vision::VisionTower::load(
+                &mut weights,
+                &config["vision_config"],
+            )?)
+        } else {
+            None
+        };
+        info.vision = vision.as_ref().map(|v| {
+            let c = v.config();
+            crate::engine::Vision {
+                bytes: v.bytes(),
+                patch: c.patch as u32,
+                merge: c.merge as u32,
+                temporal: c.temporal as u32,
+            }
+        });
+        let model = models::build(family.family.name, &config, text_config, weights, part)?;
         if model.layer_kinds() != info.layer_kinds.as_slice() {
             return Err(LoadError::InvalidConfig {
                 key: "layer_types".into(),
@@ -303,7 +332,16 @@ impl NuvecEngine {
             .collect();
         let seq = SeqState::new(&linear, info.kv_heads, info.head_dim, model.state_dtype());
         // Refuse before the warm-up reads the weights when the analytic scratch cannot fit.
-        let initial = analytic_scratch(model.as_ref(), &info, part, INITIAL_STATE_TOKENS as u32);
+        let encoder = vision
+            .as_ref()
+            .map_or(0, |v| v.scratch(u64::from(MAX_IMAGE_TOKENS) * 4));
+        let initial = analytic_scratch(
+            model.as_ref(),
+            &info,
+            part,
+            INITIAL_STATE_TOKENS as u32,
+            encoder,
+        );
         budget::check_fits(&plan, weights_bytes, initial, &info)?;
         let mut engine = Self {
             ledger: Ledger::new(&info, plan),
@@ -320,11 +358,18 @@ impl NuvecEngine {
             lane: 0,
             parked: vec![None],
             chunks: vec![None],
+            vision,
+            encoder,
         };
         let (weights, peak) = engine.warm_up()?;
         let scratch = |depth: u32| {
-            let analytic =
-                analytic_scratch(engine.model.as_ref(), &engine.info, engine.part, depth);
+            let analytic = analytic_scratch(
+                engine.model.as_ref(),
+                &engine.info,
+                engine.part,
+                depth,
+                engine.encoder,
+            );
             ((peak + analytic) as f64 * SCRATCH_MARGIN) as u64
         };
         let plan = match options.overrides.context {
@@ -613,7 +658,7 @@ impl NuvecEngine {
                 LayerKind::Linear => LayerState::Recurrent(Recurrent::default()),
             };
             let start = Instant::now();
-            let out = self.model.layer(i, &x, &mut state, depth as i32)?;
+            let out = self.model.layer(i, &x, &mut state, Pos::at(depth as i32))?;
             let mut outputs = state.arrays();
             outputs.push(&out);
             tensor::eval(&outputs)?;
@@ -719,6 +764,15 @@ impl NuvecEngine {
         offsets: &[i32],
     ) -> Result<Array, EngineError> {
         let mut seqs: Vec<SeqState> = lanes.iter().map(|&l| self.take_seq(l)).collect();
+        let positions: Vec<Pos<'static>> = seqs
+            .iter()
+            .zip(offsets)
+            .map(|(s, &at)| Pos {
+                at,
+                delta: s.media.delta(at as u32),
+                runs: &[],
+            })
+            .collect();
         let first = self.part.first;
         let model = &self.model;
         let out = tensor::with_row_exact(|| {
@@ -726,7 +780,7 @@ impl NuvecEngine {
             for k in 0..seqs[0].layers.len() {
                 let mut states: Vec<&mut LayerState> =
                     seqs.iter_mut().map(|s| &mut s.layers[k]).collect();
-                x = model.layer_lanes(first + k, &x, &mut states, offsets)?;
+                x = model.layer_lanes(first + k, &x, &mut states, &positions)?;
             }
             model.logits_rows(&x)
         })
@@ -815,11 +869,11 @@ impl NuvecEngine {
     /// logits; the caller counts the position once the step is committed.
     fn feed(&mut self, ids: &Array) -> Result<Array, EngineError> {
         let mut x = self.input(ids)?;
-        let offset = self.ledger.len() as i32;
+        let pos = self.text_pos();
         for (k, layer) in self.seq.layers.iter_mut().enumerate() {
             x = self
                 .model
-                .layer(self.part.first + k, &x, layer, offset)
+                .layer(self.part.first + k, &x, layer, pos)
                 .map_err(backend)?;
         }
         // A step's hidden state goes round the ring: back to the head for the logits.
@@ -850,6 +904,61 @@ impl NuvecEngine {
             None => tensor::zeros(&shape, self.model.state_dtype()),
         }
         .map_err(backend)
+    }
+
+    /// Where the next text row sits: slot `len()`, its delta after the images so far.
+    fn text_pos(&self) -> Pos<'static> {
+        let at = self.ledger.len();
+        Pos {
+            at: at as i32,
+            delta: self.seq.media.delta(at),
+            runs: &[],
+        }
+    }
+
+    /// The input of a prefill chunk at `len()` (009): token embeddings, with the rows of images
+    /// replaced by their features (media keys are ids at or above the vocabulary).
+    fn chunk_input(&self, tokens: &[u32]) -> Result<Array, EngineError> {
+        let at = self.ledger.len();
+        let len = tokens.len() as i32;
+        let rows = self.seq.media.rows(at, tokens.len() as u32);
+        if rows.is_empty() {
+            return self.input(&Array::from_u32(tokens, &[1, len]));
+        }
+        if !self.part.head {
+            return Err(EngineError::Backend(
+                "images need the whole model on one Mac".into(),
+            ));
+        }
+        let vocab = self.info.vocab;
+        let text: Vec<u32> = tokens
+            .iter()
+            .map(|&t| if t >= vocab { 0 } else { t })
+            .collect();
+        let x = self.input(&Array::from_u32(&text, &[1, len]))?;
+        let hidden = self.model.hidden();
+        let mut pieces = Vec::new();
+        let mut row = 0i32;
+        for (r, span, first, count) in rows {
+            let (r, first, count) = (r as i32, first as i32, count as i32);
+            if r > row {
+                pieces.push(tensor::slice(&x, &[0, row, 0], &[1, r, hidden]).map_err(backend)?);
+            }
+            let features = self.seq.media.spans[span]
+                .features
+                .as_ref()
+                .ok_or_else(|| EngineError::Backend("an image reached prefill unencoded".into()))?;
+            let rows = tensor::slice(features, &[first, 0], &[first + count, hidden])
+                .and_then(|f| tensor::reshape(&f, &[1, count, hidden]))
+                .and_then(|f| tensor::astype(&f, x.dtype()))
+                .map_err(backend)?;
+            pieces.push(rows);
+            row = r + count;
+        }
+        if row < len {
+            pieces.push(tensor::slice(&x, &[0, row, 0], &[1, len, hidden]).map_err(backend)?);
+        }
+        tensor::concatenate(&pieces.iter().collect::<Vec<_>>(), 1).map_err(backend)
     }
 
     /// The layers this engine runs.
@@ -926,7 +1035,7 @@ impl NuvecEngine {
     /// them, row by row exact; returns the logits of every row and the recurrent state after each
     /// position but the last (the last is live).
     fn run_verify(&mut self, tokens: &[u32]) -> Result<(Array, Vec<RecurrentState>), EngineError> {
-        let offset = self.ledger.len() as i32;
+        let pos = self.text_pos();
         let ids = Array::from_u32(tokens, &[1, tokens.len() as i32]);
         tensor::with_row_exact(|| {
             let mut x = self.model.embed(&ids).map_err(backend)?;
@@ -935,7 +1044,7 @@ impl NuvecEngine {
                 let mut at = Vec::new();
                 x = self
                     .model
-                    .layer_verify(self.part.first + k, &x, layer, offset, &mut at)
+                    .layer_verify(self.part.first + k, &x, layer, pos, &mut at)
                     .map_err(backend)?;
                 for (state, r) in states.iter_mut().zip(at) {
                     state.push(r);
@@ -974,9 +1083,10 @@ impl NuvecEngine {
         splits: &[i32],
         captured: &mut Vec<RecurrentState>,
     ) -> Result<bool, EngineError> {
-        let ids = Array::from_u32(tokens, &[1, tokens.len() as i32]);
-        let mut x = self.input(&ids)?;
-        let offset = self.ledger.len() as i32;
+        let mut x = self.chunk_input(tokens)?;
+        let at = self.ledger.len();
+        let runs = self.seq.media.runs(at, tokens.len() as u32);
+        let delta = self.seq.media.delta(at);
         let mut previous: Option<Array> = None;
         captured.clear();
         captured.resize_with(splits.len(), Vec::new);
@@ -984,11 +1094,16 @@ impl NuvecEngine {
             let i = self.part.first + k;
             let layer = &mut self.seq.layers[k];
             let mut at_splits = Vec::new();
+            let pos = Pos {
+                at: at as i32,
+                delta,
+                runs: &runs,
+            };
             x = if splits.is_empty() {
-                self.model.layer(i, &x, layer, offset)
+                self.model.layer(i, &x, layer, pos)
             } else {
                 self.model
-                    .layer_split(i, &x, layer, offset, splits, &mut at_splits)
+                    .layer_split(i, &x, layer, pos, splits, &mut at_splits)
             }
             .map_err(backend)?;
             let mut outputs = layer.arrays();
@@ -1023,10 +1138,17 @@ impl NuvecEngine {
 /// Scratch beyond the warm-up peak (FR-017) for sequences up to `depth` positions: the family's
 /// largest chunk term over the chunk schedule up to `depth`, one attention layer at `depth` (the
 /// transient of growth and moves), one recurrent state (rollback copy) and the cache limit.
-fn analytic_scratch(model: &dyn Model, info: &ModelInfo, part: Part, depth: u32) -> u64 {
+fn analytic_scratch(
+    model: &dyn Model,
+    info: &ModelInfo,
+    part: Part,
+    depth: u32,
+    encoder: u64,
+) -> u64 {
     let depth = depth.min(info.max_position);
     let mut at = 0u32;
-    let mut chunk = 0;
+    // Encoding an image (009) runs between chunks: its activations never meet a chunk's.
+    let mut chunk = encoder;
     while at < depth {
         let len = chunk_len(at);
         chunk = chunk.max(model.chunk_scratch(len, at));
@@ -1066,6 +1188,73 @@ impl Engine for NuvecEngine {
         self.ledger.set_limit(total)?;
         self.draws = 0;
         Ok(())
+    }
+
+    fn set_media(&mut self, spans: &[ImageSpan]) -> Result<(), EngineError> {
+        if !spans.is_empty() && self.vision.is_none() {
+            return Err(EngineError::Backend("this model reads no images".into()));
+        }
+        let len = self.ledger.len();
+        let old = std::mem::take(&mut self.seq.media.spans);
+        self.seq.media.spans = spans
+            .iter()
+            .map(|s| state::MediaSpan {
+                start: s.start,
+                height: s.height,
+                width: s.width,
+                key: s.key,
+                features: old
+                    .iter()
+                    .find(|o| o.key == s.key && o.start == s.start)
+                    .and_then(|o| o.features.clone()),
+            })
+            .collect();
+        self.seq.media.committed(len);
+        Ok(())
+    }
+
+    fn needs_image(&self, key: u64) -> bool {
+        let len = self.ledger.len();
+        self.seq
+            .media
+            .spans
+            .iter()
+            .any(|s| s.key == key && s.end() > len && s.features.is_none())
+    }
+
+    fn encode_image(
+        &mut self,
+        key: u64,
+        pixels: &Pixels,
+        cancel: &CancelToken,
+    ) -> Result<bool, EngineError> {
+        let Some(tower) = &self.vision else {
+            return Err(EngineError::Backend("this model reads no images".into()));
+        };
+        let c = tower.config();
+        let (gh, gw) = (pixels.grid_h as i32, pixels.grid_w as i32);
+        let width = c.patch_values();
+        if pixels.data.len() != (gh * gw * width) as usize || gh % c.merge != 0 || gw % c.merge != 0
+        {
+            return Err(EngineError::Backend(
+                "image patches do not match their grid".into(),
+            ));
+        }
+        let tokens = (gh / c.merge) * (gw / c.merge);
+        if tokens as u32 > MAX_IMAGE_TOKENS {
+            return Err(EngineError::Backend("image above the token cap".into()));
+        }
+        let patches = Array::from_f32(&pixels.data, &[gh * gw, width]);
+        let Some(features) = tower.encode(&patches, gh, gw, cancel).map_err(backend)? else {
+            return Ok(false);
+        };
+        for s in self.seq.media.spans.iter_mut().filter(|s| s.key == key) {
+            if (s.height * s.width) as i32 != tokens {
+                return Err(EngineError::Backend("image span and grid disagree".into()));
+            }
+            s.features = Some(features.clone());
+        }
+        Ok(true)
     }
 
     fn prefill_chunk(&mut self, tokens: &[u32], cancel: &CancelToken) -> Result<bool, EngineError> {
@@ -1560,8 +1749,7 @@ impl Engine for NuvecEngine {
         // cancel or an error they come back. Attention positions written past `len` are
         // overwritten by the next prefill.
         let start = self.hybrid().then(|| self.seq.recurrent());
-        let ids = Array::from_u32(tokens, &[1, tokens.len() as i32]);
-        let x = match self.input(&ids) {
+        let x = match self.chunk_input(tokens) {
             Ok(x) => x,
             Err(e) => {
                 if let Some(start) = start {
@@ -1576,7 +1764,9 @@ impl Engine for NuvecEngine {
             tokens: tokens.to_vec(),
             x,
             next: 0,
-            offset: self.ledger.len() as i32,
+            at: self.ledger.len(),
+            delta: self.seq.media.delta(self.ledger.len()),
+            runs: self.seq.media.runs(self.ledger.len(), tokens.len() as u32),
             previous: None,
             capacity,
             start,
@@ -1609,7 +1799,16 @@ impl Engine for NuvecEngine {
             let layer = &mut self.seq.layers[k];
             let ran = self
                 .model
-                .layer(i, &chunk.x, layer, chunk.offset)
+                .layer(
+                    i,
+                    &chunk.x,
+                    layer,
+                    Pos {
+                        at: chunk.at as i32,
+                        delta: chunk.delta,
+                        runs: &chunk.runs,
+                    },
+                )
                 .and_then(|x| {
                     let mut outputs = layer.arrays();
                     outputs.push(&x);

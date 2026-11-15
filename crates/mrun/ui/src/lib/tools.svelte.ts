@@ -1,7 +1,7 @@
 // Tools in mrun's chats (028): the servers of ~/.mrun/mcp.json, shared by Chat and Settings ›
 // Tools, and how a call reads as a sentence on its card ("Run cargo test", "Edit src/a.rs").
 
-import { countTokens, host } from "./api";
+import { countTokens, host, type BrowserReach, type SearchProvider } from "./api";
 import type { McpList, McpServer, ToolCall } from "./types";
 
 class Tools {
@@ -39,8 +39,14 @@ class Tools {
     return this.added(await host.mcpAdd("fetch"));
   }
 
-  async addBrowser(): Promise<string | null> {
-    return this.added(await host.mcpAdd("browser"));
+  /** `only` asks for the sites in a dialog on the Mac. */
+  async addBrowser(reach: BrowserReach = "any"): Promise<string | null> {
+    return this.added(await host.mcpAdd("browser", undefined, undefined, reach));
+  }
+
+  /** Brave's key and SearXNG's address are asked for by a dialog on the Mac, not here. */
+  async addSearch(provider: SearchProvider = "exa"): Promise<string | null> {
+    return this.added(await host.mcpAdd("search", undefined, provider));
   }
 
   /** Copies another client's servers; the names added. */
@@ -99,6 +105,27 @@ class Tools {
 
 export const tools = new Tools();
 
+/** What a browser entry may reach, from its flags. */
+export function browserReach(command: string): string {
+  const sites = [...command.matchAll(/--origin (\S+)/g)].map((m) => hostOf(m[1]!));
+  const local = command.includes("--allow-local");
+  if (!sites.length) return local ? "Uses any site and local servers · sandboxed" : "Uses websites · pages sandboxed";
+  return `Uses only ${sites.join(", ")} · sandboxed`;
+}
+
+/** The service mrun's `search` sends queries to, from its command line (029). */
+export function serviceHost(server: McpServer | undefined): string | undefined {
+  const cmd = server?.command ?? "";
+  if (!cmd.startsWith("mrun mcp serve search")) return undefined;
+  const provider = /--provider (\S+)/.exec(cmd)?.[1] ?? "exa";
+  if (provider === "brave") return "api.search.brave.com";
+  if (provider === "searxng") {
+    const url = /--url (\S+)/.exec(cmd)?.[1];
+    return url ? hostOf(url) : undefined;
+  }
+  return "mcp.exa.ai";
+}
+
 /** mrun's own tools (`mrun mcp serve …`): their calls read as sentences. */
 export function builtin(server: McpServer | undefined): boolean {
   return Boolean(server?.command?.startsWith("mrun mcp serve"));
@@ -146,6 +173,8 @@ export function describe(call: ToolCall, server: McpServer | undefined, tool: st
         return { verb: "Run", subject: str(i.command).split("\n")[0]!, body: str(i.command).includes("\n") ? { kind: "code", text: str(i.command) } : undefined };
       case "fetch":
         return { verb: "Fetch", subject: str(i.url), reaches: hostOf(str(i.url)) };
+      case "search":
+        return { verb: "Search", subject: `“${str(i.query)}”`, reaches: serviceHost(server) };
     }
     const browsed = browsing(tool, i);
     if (browsed) return browsed;
@@ -221,7 +250,9 @@ export function cageWords(s: McpServer): string {
   if (s.kind === "http") return `Remote · ${s.host}`;
   if (s.sandbox === false) {
     if (s.command === "mrun mcp serve fetch") return "Reads the web · each call names the site";
-    if (s.command === "mrun mcp serve browser") return "Uses websites · pages sandboxed";
+    if (s.command?.startsWith("mrun mcp serve browser")) return browserReach(s.command);
+    const service = serviceHost(s);
+    if (service) return `Searches the web · ${service}`;
     return "Not sandboxed";
   }
   const where = s.sandbox.workspace ? s.sandbox.workspace.replace(/^\/Users\/[^/]+/, "~") : "~";

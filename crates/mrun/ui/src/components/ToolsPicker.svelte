@@ -62,6 +62,10 @@
         <Symbol name="globe" size={18} />
         <span><b>Fetch</b><small>Read web pages; each call names the site.</small></span>
       </button>
+      <button class="offer" disabled={busy} onclick={() => run(() => tools.addSearch())}>
+        <Symbol name="search" size={18} />
+        <span><b>Search</b><small>Search the web through Exa, no key; each call asks first.</small></span>
+      </button>
       <button class="offer" disabled={busy} onclick={() => run(() => tools.addBrowser())}>
         <Symbol name="browser" size={18} />
         <span><b>Browser</b><small>Open and use websites; pages run sandboxed.</small></span>

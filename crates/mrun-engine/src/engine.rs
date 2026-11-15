@@ -183,6 +183,53 @@ pub struct ModelInfo {
     pub numerics: Numerics,
     /// Calibrated time bound on chunk lengths (FR-007); unbounded until calibrated.
     pub time_len: TimeLen,
+    /// The vision tower when the engine reads images (009).
+    pub vision: Option<Vision>,
+}
+
+/// The most image tokens one image takes (009 FR-002): larger images are scaled down to it.
+pub const MAX_IMAGE_TOKENS: u32 = 2_560;
+/// The fewest image tokens one image takes; smaller images are scaled up to it.
+pub const MIN_IMAGE_TOKENS: u32 = 64;
+
+/// What the runtime needs to prepare images for the engine's tower (009).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Vision {
+    /// Bytes of the tower's weights.
+    pub bytes: u64,
+    /// Patch side in pixels (16).
+    pub patch: u32,
+    /// Patches per merged token side (2): one token per `patch · merge` pixels square.
+    pub merge: u32,
+    /// Frames per patch (2): a still image is repeated.
+    pub temporal: u32,
+}
+
+impl Vision {
+    /// Pixels per token side (32).
+    pub fn token_px(&self) -> u32 {
+        self.patch * self.merge
+    }
+}
+
+/// One image of the selected lane's sequence (009): its tokens `[start, start + height ·
+/// width)` of a merged grid, and the key the runtime encoded it under.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageSpan {
+    pub start: u32,
+    pub height: u32,
+    pub width: u32,
+    pub key: u64,
+}
+
+/// An image ready for the tower: `data` holds `patch_rows` rows of `t · p · p · 3` floats in
+/// [-1, 1], in merge order, each row laid out `(t, y, x, c)`; the patch grid is `grid_h` ×
+/// `grid_w` (twice the token grid).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pixels {
+    pub data: Vec<f32>,
+    pub grid_h: u32,
+    pub grid_w: u32,
 }
 
 impl ModelInfo {
@@ -605,6 +652,34 @@ pub trait Engine {
     /// flight, checking `cancel` after every layer. `Ok(true)`: committed; `Ok(false)`:
     /// cancelled, and like an error the state (allocation included) is as before the call.
     fn prefill_chunk(&mut self, tokens: &[u32], cancel: &CancelToken) -> Result<bool, EngineError>;
+
+    /// Replaces the selected lane's images (009). Prefill tokens at or above `info().vocab`
+    /// inside a span are its image rows; features already encoded for a key are kept.
+    fn set_media(&mut self, spans: &[ImageSpan]) -> Result<(), EngineError> {
+        if spans.is_empty() {
+            Ok(())
+        } else {
+            Err(EngineError::Backend("this engine reads no images".into()))
+        }
+    }
+
+    /// Whether the selected lane's image `key` must be encoded before prefill reaches it.
+    fn needs_image(&self, key: u64) -> bool {
+        let _ = key;
+        false
+    }
+
+    /// Encodes `pixels` for the selected lane's image `key`; `Ok(false)` when cancelled (checked
+    /// between the tower's blocks).
+    fn encode_image(
+        &mut self,
+        key: u64,
+        pixels: &Pixels,
+        cancel: &CancelToken,
+    ) -> Result<bool, EngineError> {
+        let _ = (key, pixels, cancel);
+        Err(EngineError::Backend("this engine reads no images".into()))
+    }
 
     /// Feeds `last` and computes the logits for the next position.
     fn forward(&mut self, last: u32) -> Result<Step, EngineError>;

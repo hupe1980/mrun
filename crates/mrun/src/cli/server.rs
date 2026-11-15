@@ -32,6 +32,8 @@ pub struct ServerInfo {
     pub max_output: u32,
     /// The server records requests (`--record`).
     pub recording: bool,
+    /// The served model reads images (009).
+    pub vision: bool,
 }
 
 impl ServerInfo {
@@ -56,6 +58,9 @@ impl ServerInfo {
             context: model["context_window"].as_u64().unwrap_or(0) as u32,
             max_output: model["max_output_tokens"].as_u64().unwrap_or(0) as u32,
             recording,
+            vision: model["input_modalities"]
+                .as_array()
+                .is_some_and(|m| m.iter().any(|v| v == "image")),
         })
     }
 }

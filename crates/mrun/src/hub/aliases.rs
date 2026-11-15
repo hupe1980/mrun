@@ -25,8 +25,7 @@ pub struct Alias {
     pub size: u64,
     /// Bytes of the `*.safetensors` files.
     pub weights: u64,
-    /// Tensor bytes of the vision tower inside `weights`; the engine skips them at load, so fit
-    /// leaves them out ([`Alias::loaded_weights`]).
+    /// Tensor bytes of the vision tower inside `weights` (009: loaded unless `--vision off`, or `auto` leaves it out).
     pub vision: u64,
     /// 001 `kv_bytes_per_token` of the pinned `config.json`.
     pub kv_bytes_per_token: u64,
@@ -68,23 +67,31 @@ impl Preview {
 }
 
 impl Alias {
-    /// Weight bytes the engine loads: the files minus the skipped vision tower.
+    /// Weight bytes the engine loads: every file, the vision tower included (009).
     pub fn loaded_weights(&self) -> u64 {
-        self.weights - self.vision
+        self.weights
     }
 
     /// Fit on `device` from the pinned numbers (nothing needs to be downloaded).
+    /// As `mrun serve --vision auto` loads it (009): with the vision tower when that still leaves
+    /// [`DEFAULT_MIN_CONTEXT`] tokens, else without.
     pub fn fit(&self, device: DeviceMemory) -> Fit {
-        fit(
-            device,
-            self.loaded_weights(),
-            &model_info(
-                self.family,
-                self.kv_bytes_per_token,
-                self.recurrent_bytes,
-                self.max_position,
-            ),
-        )
+        let info = model_info(
+            self.family,
+            self.kv_bytes_per_token,
+            self.recurrent_bytes,
+            self.max_position,
+        );
+        let with = fit(device, self.loaded_weights(), &info);
+        if with.max_context >= DEFAULT_MIN_CONTEXT || self.vision == 0 {
+            return with;
+        }
+        let without = fit(device, self.weights - self.vision, &info);
+        if without.max_context >= DEFAULT_MIN_CONTEXT {
+            without
+        } else {
+            with
+        }
     }
 
     /// The one line `show`, `launch` and `doctor` print for a preview alias, naming the largest
@@ -552,6 +559,11 @@ mod tests {
         let small = get("qwen3.5").unwrap();
         assert_eq!(pinned(small.repo, small.revision).unwrap().name, "qwen3.5");
         assert!(pinned(small.repo, &"a".repeat(40)).is_none());
-        assert_eq!(small.loaded_weights(), 5_038_200_112);
+        assert_eq!(
+            small.loaded_weights(),
+            small.weights,
+            "the vision tower is loaded"
+        );
+        assert_eq!(small.weights - small.vision, 5_038_200_112);
     }
 }

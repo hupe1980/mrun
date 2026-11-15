@@ -65,6 +65,11 @@ pub struct ServeArgs {
     /// [default: 2 when the context holds two lanes of 32K tokens, else 1].
     #[arg(long, env = "MRUN_LANES", value_parser = clap::value_parser!(u32).range(1..=4))]
     pub lanes: Option<u32>,
+    /// Image input (009): `auto` loads the vision tower unless that alone would leave less than
+    /// 64K tokens of context (or the requested `--context`); `off` refuses images in messages and
+    /// omits them from tool results, giving the tower's memory to the context.
+    #[arg(long, env = "MRUN_VISION", default_value = "auto", value_parser = ["auto", "on", "off"])]
+    pub vision: String,
     /// Disable prefix reuse across requests.
     #[arg(long, env = "MRUN_NO_CACHE")]
     pub no_cache: bool,
@@ -175,8 +180,13 @@ pub struct ServerState {
 
 impl ServerState {
     pub fn decode_options(&self) -> DecodeOptions {
+        let vision = match &*self.readiness.borrow() {
+            Readiness::Ready(loaded) => loaded.handle.info().vision.map(|v| v.token_px()),
+            _ => None,
+        };
         DecodeOptions {
             reject_tool_images: self.args.reject_tool_images,
+            vision,
         }
     }
 }
@@ -407,7 +417,12 @@ pub fn load_named(args: &ServeArgs, name: &str) -> Result<Loaded, CliError> {
     crate::cli::model::preflight(&model, args.context)?;
     let overrides = crate::cli::model::overrides(args.budget_gib, args.context);
     let handle = EngineHandle::spawn_with(
-        crate::cli::model::engine_factory(&model, overrides, args.lanes.map(|n| n as usize)),
+        crate::cli::model::engine_factory(
+            &model,
+            overrides,
+            args.lanes.map(|n| n as usize),
+            crate::cli::model::vision(&model, &args.vision, args.budget_gib, args.context),
+        ),
         model.tokenizer.clone(),
         crate::runtime::handle::DEFAULT_STALL_TIMEOUT,
         cache_policy(args),
@@ -655,8 +670,13 @@ pub fn run(args: ServeArgs, factory: EngineFactory) -> u8 {
             Ok(loaded) => {
                 let syntax = crate::chat::syntax::registry::ChatSyntax::get(loaded.syntax).name;
                 let lanes = loaded.handle.lanes();
+                let images = if loaded.handle.info().vision.is_some() {
+                    ", reads images"
+                } else {
+                    ""
+                };
                 eprintln!(
-                    "mrun serving {} ({}, {syntax}, {lanes} {}) at {url}",
+                    "mrun serving {} ({}, {syntax}, {lanes} {}{images}) at {url}",
                     loaded.model_id,
                     loaded.handle.info().family,
                     if lanes == 1 { "lane" } else { "lanes" }

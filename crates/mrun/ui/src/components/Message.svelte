@@ -147,7 +147,7 @@
     {:else}
       <div class="stack">
         <!-- One line: the bubble keeps white space (pre-wrap). -->
-        <div class="bubble">{#if message.attachments?.length}<span class="files">{#each message.attachments as a, i (a.name + i)}<span class="file"><Symbol name="doc" size={12} />{a.name}</span>{/each}</span>{/if}{message.text}</div>
+        <div class="bubble">{#if message.attachments?.length}<span class="files">{#each message.attachments as a, i (a.name + i)}{#if a.image}<img class="picture" src="data:{a.image.media};base64,{a.image.data}" alt={a.name} />{:else}<span class="file"><Symbol name="doc" size={12} />{a.name}</span>{/if}{/each}</span>{/if}{message.text}</div>
         {@render actions()}
       </div>
     {/if}
@@ -201,6 +201,14 @@
 {/if}
 
 <style>
+  .picture {
+    display: block;
+    max-width: min(320px, 100%);
+    max-height: 240px;
+    border-radius: 10px;
+    margin: 2px 0 6px;
+    object-fit: contain;
+  }
   .calls {
     display: grid;
     gap: 6px;

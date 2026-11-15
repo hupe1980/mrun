@@ -57,3 +57,75 @@ fn the_browser_lists_its_tools_from_a_caged_content_process() {
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }
+
+/// One JSON-RPC exchange with `mrun mcp serve browser <flags>`: the reply text of each call.
+fn calls(flags: &[&str], urls: &[String]) -> Vec<String> {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mrun"))
+        .args(["mcp", "serve", "browser"])
+        .args(flags)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":0,"method":"initialize","params":{{"protocolVersion":"2025-06-18","capabilities":{{}},"clientInfo":{{"name":"t","version":"0"}}}}}}"#
+    )
+    .unwrap();
+    for (i, url) in urls.iter().enumerate() {
+        let call = serde_json::json!({"jsonrpc": "2.0", "id": i + 1, "method": "tools/call",
+            "params": {"name": "browser_open", "arguments": {"url": url}}});
+        writeln!(stdin, "{call}").unwrap();
+    }
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    lines.next();
+    let out = (0..urls.len())
+        .map(|_| {
+            let v: serde_json::Value =
+                serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+            v["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    drop(stdin);
+    let _ = child.wait();
+    out
+}
+
+#[test]
+fn local_servers_open_only_when_allowed_and_origins_fence_the_rest() {
+    // A dev server on this Mac.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut s = stream;
+            let mut buf = [0u8; 2048];
+            let _ = std::io::Read::read(&mut s, &mut buf);
+            let body =
+                "<html><head><title>Dev</title></head><body><h1>local app</h1></body></html>";
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    let local = format!("http://{addr}/");
+    let refused = calls(&[], std::slice::from_ref(&local));
+    assert!(refused[0].contains("private network"), "{}", refused[0]);
+    let opened = calls(&["--allow-local"], std::slice::from_ref(&local));
+    assert!(opened[0].starts_with("ok open"), "{}", opened[0]);
+    assert!(opened[0].contains("local app"), "{}", opened[0]);
+    // Fenced to the dev server: another site is refused without a request.
+    let fenced = calls(
+        &["--allow-local", "--origin", &local],
+        &[local.clone(), "https://example.com/".into()],
+    );
+    assert!(fenced[0].starts_with("ok open"), "{}", fenced[0]);
+    assert!(!fenced[1].starts_with("ok open"), "{}", fenced[1]);
+}

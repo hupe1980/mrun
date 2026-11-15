@@ -71,6 +71,7 @@ system prompt and tools). No prompt text is logged.
 | `diverged` | At least one whole message matched, then the prompt differs: an edited, removed or replaced message, or an earlier turn rendered differently from what the model processed | Expected after edits, retries and once per new user message; if it happens every turn at the same message, check your client |
 | `evicted` | The request continues state that was dropped for memory, under memory pressure, or as a tail too short to keep | More memory, or fewer parallel conversations |
 | `gap` | A hybrid model resumed from a checkpoint more than 256 tokens before the match | Nothing |
+| `image` | The prompt differs at an image: other bytes, or text where an image was | Expected when a screenshot is replaced; the same bytes are always reused |
 | `disabled` | The server runs with `--no-cache` | — |
 
 Every report also gives **`unreused`**: tokens shared with state mrun holds or recently dropped

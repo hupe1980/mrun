@@ -21,14 +21,17 @@ pub enum Cause {
     New,
     /// A hybrid resumed from a checkpoint more than [`GAP_CAUSE`] tokens behind the match.
     Gap,
+    /// The prompt differs at an image (009): other bytes, or text where an image was.
+    Image,
 }
 
 impl Cause {
     /// Every cause in precedence order: the one list `/metrics` and `/mrun/status` label from
     /// (012 FR-013).
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Disabled,
         Self::Evicted,
+        Self::Image,
         Self::Diverged,
         Self::New,
         Self::Gap,
@@ -41,6 +44,7 @@ impl Cause {
             Self::Diverged => "diverged",
             Self::New => "new",
             Self::Gap => "gap",
+            Self::Image => "image",
         }
     }
 }
@@ -170,6 +174,13 @@ pub fn classify(prompt: &RenderedPrompt, found: Found) -> MissReport {
         Some(Cause::Disabled)
     } else if found.evicted {
         Some(Cause::Evicted)
+    } else if divergence.is_some_and(|at| {
+        prompt
+            .tokens
+            .get(at as usize)
+            .is_some_and(|&t| crate::chat::media::is_image(t))
+    }) {
+        Some(Cause::Image)
     } else if let Some(at) = divergence {
         Some(if in_conversation(at) {
             Cause::Diverged
@@ -222,6 +233,7 @@ mod tests {
             ],
             system_tools_end: 10,
             generation_start: 40,
+            images: Vec::new(),
         }
     }
 
@@ -232,6 +244,20 @@ mod tests {
             diverges,
             ..Found::default()
         }
+    }
+
+    #[test]
+    fn a_divergence_at_an_image_is_its_own_cause() {
+        let mut p = prompt();
+        p.tokens[30] = crate::chat::media::FIRST_KEY;
+        let f = Found {
+            matched: 30,
+            resume: 30,
+            diverges: true,
+            ..Found::default()
+        };
+        assert_eq!(classify(&p, f).cause, Some(Cause::Image));
+        assert_eq!(Cause::Image.as_str(), "image");
     }
 
     #[test]

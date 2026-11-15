@@ -220,6 +220,13 @@ fn opencode_config(server: &ServerInfo) -> serde_json::Value {
         "input": server.context.saturating_sub(server.max_output),
         "output": server.max_output,
     });
+    // OpenCode treats a custom model as text-only unless it says otherwise (009).
+    let input = if server.vision {
+        json!(["text", "image"])
+    } else {
+        json!(["text"])
+    };
+    let modalities = json!({"input": input, "output": ["text"]});
     json!({
         "$schema": "https://opencode.ai/config.json",
         "provider": {"mrun": {
@@ -227,11 +234,18 @@ fn opencode_config(server: &ServerInfo) -> serde_json::Value {
             "name": "mrun",
             "options": {"baseURL": format!("{}/v1", server.base_url()), "apiKey": TOKEN},
             "models": {
-                id.as_str(): {"name": id, "limit": limit},
+                id.as_str(): {
+                    "name": id,
+                    "limit": limit,
+                    "attachment": server.vision,
+                    "modalities": modalities,
+                },
                 quick.as_str(): {
                     "id": id,
                     "name": format!("{id} (no thinking)"),
                     "limit": limit,
+                    "attachment": server.vision,
+                    "modalities": modalities,
                     "options": {"chat_template_kwargs": {"enable_thinking": false}},
                 },
             },
@@ -403,7 +417,7 @@ fn zed_settings(server: &ServerInfo) -> serde_json::Value {
             "max_output_tokens": server.max_output,
             "capabilities": {
                 "tools": true,
-                "images": false,
+                "images": server.vision,
                 "parallel_tool_calls": false,
                 "prompt_cache_key": false,
             },
@@ -536,6 +550,7 @@ mod tests {
             context,
             max_output: 16_384,
             recording: false,
+            vision: false,
         }
     }
 

@@ -202,6 +202,24 @@ impl<'a, T> Lanes<'a, T> {
         store.select(engine, lane);
         let running = self.jobs[lane].as_mut().expect("busy");
         let cancel = running.job.request.cancel.clone();
+        // Images (009): this lane's spans, and the next chunk's images encoded first.
+        if !running.in_flight {
+            let ready = running
+                .job
+                .media(engine)
+                .and_then(|()| running.job.encode_for(engine));
+            match ready {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.settle(engine, store, lane, Ok(Some(FinishReason::Cancelled)));
+                    return true;
+                }
+                Err(failure) => {
+                    self.end(engine, store, lane, Err(failure));
+                    return true;
+                }
+            }
+        }
         if engine.lanes() == 1 {
             // One lane: the whole chunk, as one lane always ran it.
             let tokens = running.job.next_chunk().expect("reading").to_vec();

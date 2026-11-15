@@ -264,6 +264,8 @@ fn defaults(port: u16) -> ServerInfo {
         context,
         max_output: crate::api::run::DEFAULT_MAX_OUTPUT,
         recording: false,
+        // Every alias's model reads images (009); a `--vision off` server says so when running.
+        vision: true,
     }
 }
 
@@ -629,6 +631,7 @@ mod tests {
             context: 70_000,
             max_output: 16_384,
             recording: false,
+            vision: false,
         }
     }
 
