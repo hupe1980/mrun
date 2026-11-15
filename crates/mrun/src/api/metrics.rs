@@ -521,7 +521,15 @@ mod tests {
         assert_eq!(metrics.prompt[1].load(Ordering::Relaxed), 100);
         assert_eq!(metrics.spliced.load(Ordering::Relaxed), 7);
         assert_eq!(metrics.unreused.load(Ordering::Relaxed), 12);
-        assert_eq!(metrics.misses[2].load(Ordering::Relaxed), 1, "diverged");
+        let diverged = Cause::ALL
+            .iter()
+            .position(|&c| c == Cause::Diverged)
+            .unwrap();
+        assert_eq!(
+            metrics.misses[diverged].load(Ordering::Relaxed),
+            1,
+            "diverged"
+        );
         assert_eq!(
             metrics.requests[0][Outcome::Rejected as usize].load(Ordering::Relaxed),
             1

@@ -139,7 +139,9 @@ pub async fn serve<A: Api>(
         }
         value
     });
-    let mut request = match parsed.and_then(|value| A::decode(&value, state.decode_options())) {
+    let mut request = match parsed.and_then(|value| {
+        crate::api::decode::with_images(|| A::decode(&value, state.decode_options()))
+    }) {
         Ok(request) => request,
         Err(e) => return rejected(&e),
     };

@@ -11,8 +11,10 @@ same Mac. Comparisons report every cell, including the ones mrun loses.
 
 M4 Pro, 48 GB, macOS 26.
 
-**Parity with mlx-lm 0.32.0.** Greedy output on 22 prompts up to 8K tokens (256 tokens each):
-Qwen3-8B 22 of 22 and Qwen3.5-9B 22 of 22 token-identical.
+**Parity with mlx-lm 0.32.0.** Greedy output on 22 prompts up to 8K tokens (256 tokens each),
+Qwen3.5-9B on nuvec 0.12.0: 9 of 22 identical or parted at an exact tie; 13 part after 41–227
+tokens where mlx-lm's top two tokens are one bf16 step apart. Qwen3-8B is not measured on this
+nuvec.
 
 **Speed against mlx-lm 0.32.0** (mrun / mlx-lm, best of 2, under background load):
 
@@ -20,6 +22,8 @@ Qwen3-8B 22 of 22 and Qwen3.5-9B 22 of 22 token-identical.
 | --- | --- | --- | --- | --- |
 | Qwen3-8B 4-bit | 96.8 % | 98.2 % | 99.4 % | 101 % |
 | Qwen3.5-9B 4-bit | 91.6 % | 95.7 % | 93.7 % ¹ | 108 % |
+
+Qwen3.6-35B-A3B 4-bit on a 4,350-token prompt: prefill 982 / 938 tok/s, decode 86.9 / 87.6 tok/s.
 
 ¹ Under a load average of up to 14; 104 % on a quiet machine.
 
@@ -55,8 +59,7 @@ Each lane's output is identical to running its request alone. A 30-minute soak o
 subagent fan-outs and titles stayed within the budget, every subagent prefix and main turn
 cached.
 
-**Small Macs (simulated).** `qwen3.5` fits 84,333 tokens of context at a 16 GB Mac's working set
-and 235,385 at a 24 GB Mac's ([Memory](@/docs/memory.md#smaller-macs)).
+**Small Macs (simulated).** See [Memory](@/docs/memory.md#smaller-macs).
 
 ## Quick check against Ollama
 

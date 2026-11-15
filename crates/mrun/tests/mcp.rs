@@ -198,3 +198,39 @@ async fn a_server_that_cannot_start_says_why() {
     let call = registry.call("nothere", "x", json!({})).await;
     assert!(call.is_error && call.text.contains("no server nothere"));
 }
+
+/// 029 SC-003: a search key reaches mcp.json's env and nothing else the user or a log sees.
+#[test]
+fn a_search_key_never_leaves_mcp_json() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str], key: Option<&str>| {
+        let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_mrun"));
+        c.args(args)
+            .env("MRUN_HOME", home.path())
+            .env_remove("BRAVE_API_KEY");
+        if let Some(k) = key {
+            c.env("BRAVE_API_KEY", k);
+        }
+        c.output().unwrap()
+    };
+    let missing = run(&["mcp", "add", "search", "--provider", "brave"], None);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("BRAVE_API_KEY"));
+    let added = run(
+        &["mcp", "add", "search", "--provider", "brave"],
+        Some("sentinel-key-029"),
+    );
+    assert!(added.status.success(), "{added:?}");
+    let out = String::from_utf8_lossy(&added.stdout);
+    assert!(out.contains("Brave Search (api.search.brave.com)"), "{out}");
+    let file = std::fs::read_to_string(home.path().join("mcp.json")).unwrap();
+    assert!(file.contains("sentinel-key-029"));
+    let ls = run(&["mcp", "ls", "--json"], None);
+    for text in [
+        out.to_string(),
+        String::from_utf8_lossy(&ls.stdout).into(),
+        String::from_utf8_lossy(&ls.stderr).into(),
+    ] {
+        assert!(!text.contains("sentinel-key-029"), "{text}");
+    }
+}

@@ -21,8 +21,12 @@
 {#if items.length || refused.length}
   <div class="attachments" aria-label="Attached files">
     {#each items as a, i (a.name + i)}
-      <span class="chip" title="{a.name} · {a.bytes.toLocaleString('en-US')} bytes">
-        <Symbol name="doc" size={13} />
+      <span class="chip" class:picture={a.image} title="{a.name} · {a.bytes.toLocaleString('en-US')} bytes">
+        {#if a.image}
+          <img class="thumb" src="data:{a.image.media};base64,{a.image.data}" alt="" />
+        {:else}
+          <Symbol name="doc" size={13} />
+        {/if}
         <span class="name">{a.name}</span>
         <span class="count num">{a.estimated ? "about " : ""}{tokens(a.tokens)} tokens</span>
         <button class="x" onclick={() => onremove(i)} aria-label="Remove {a.name}"><Symbol name="xmark" size={10} weight={2} /></button>
@@ -42,6 +46,14 @@
 {/if}
 
 <style>
+  .thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
+    object-fit: cover;
+    margin: -2px 0 -2px -5px;
+    box-shadow: 0 0 0 0.5px var(--separator, rgba(0, 0, 0, 0.15));
+  }
   .attachments {
     flex-basis: 100%;
     display: flex;

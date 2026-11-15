@@ -49,6 +49,7 @@ The window's Chat and `mrun run` are MCP clients. Their servers are in `~/.mrun/
 mrun mcp add workspace          # mrun's own tools in this folder
 mrun mcp add fetch              # web pages as text
 mrun mcp add browser            # websites in a sandboxed browser
+mrun mcp add search             # web search (Exa, no key)
 mrun mcp import claude-code     # or claude-desktop: their servers, names you have are kept
 mrun mcp ls                     # each server with its tools, sandbox and errors
 mrun run qwen3.6 --mcp workspace
@@ -65,15 +66,27 @@ times; then it stops and says so. In `mrun run` the question is `[y]es / [a]lway
 
 **mrun's own tools.** `workspace` has `read`, `write`, `edit` (replaces one exact string),
 `glob`, `grep` and `bash` (120 s, 30,000 characters of output), every path inside its folder.
-`fetch` reads a page as text. `browser` is [pageon](https://github.com/hupe1980/pageon), a browser
-engine built for agents, inside mrun: it opens a page, shows it to the model as a compact list of
-elements with refs (`button e12 "Pay now"`), and clicks, types, scrolls, switches tabs, takes
-screenshots and rewinds. Use it when a page needs JavaScript or interaction, and `fetch` when the
-text is enough. Pages run in pageon's own sandbox, a process with no files, network or programs;
-local and private-network addresses are refused. The card names each step (*Open
-shop.example/cart*, *Click e12*, *Type into e5*). All three are ordinary MCP servers (`mrun mcp
-serve workspace --root DIR`, `mrun mcp serve fetch`, `mrun mcp serve browser`), so any agent can
-use them.
+`search` finds pages: up to 8 results with title, URL, date and a passage. Queries go to
+[Exa](https://exa.ai) without a key (`EXA_API_KEY` if set), or to a service you choose: `--provider brave` with
+`BRAVE_API_KEY`, or `--provider searxng --url http://127.0.0.1:8888` for your own SearXNG
+instance (`json` in its `search.formats`). The card and the privacy line name the service; keys stay in
+`mcp.json`. `fetch` reads a page as text; a redirect to another host is returned, not
+followed, so the next call names that host. `browser` ([pageon](https://github.com/hupe1980/pageon), built in)
+is for pages that need JavaScript or interaction: it shows the page as elements with refs
+(`button e12 "Pay now"`) and clicks, types, scrolls, uses tabs and rewinds.
+Page content runs in a sandbox with no files, network or programs of its own; private-network addresses are
+refused unless the entry allows them:
+
+```sh
+mrun mcp add browser --allow-local                      # also localhost and your dev servers
+mrun mcp add browser --origin github.com --origin docs.rs   # only these sites
+PAGEON_SECRET_SHOP=… mrun mcp add browser --secret shop@shop.example   # a login
+```
+
+The model types a secret as `secret://shop`; it never sees the value, which stays in the entry's
+`env` in `mcp.json`. In the window, *Add Browser…* offers any site, any site and local servers, or
+only the sites you name. All four are ordinary MCP servers (`mrun mcp serve workspace --root DIR`, `mrun mcp
+serve fetch`, `mrun mcp serve browser`, `mrun mcp serve search`), so any agent can use them.
 
 **Sandboxed by default.** Local servers run in a [procage](https://github.com/hupe1980/procage)
 sandbox (Seatbelt on macOS, Landlock on Linux): their folder (`cwd`, else your home) read-only,

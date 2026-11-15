@@ -117,6 +117,7 @@ impl Conv {
             messages: self.marks.clone(),
             system_tools_end: self.system_tools_end,
             generation_start: self.tokens.len() as u32,
+            images: Vec::new(),
         }
     }
 }

@@ -365,7 +365,7 @@ impl Tracker {
 }
 
 /// The models `/v1/models` lists: the served one, or while loading the one being loaded.
-fn listed_model(state: &ServerState) -> Option<(String, Option<u32>, Option<u32>)> {
+fn listed_model(state: &ServerState) -> Option<(String, Option<u32>, Option<u32>, bool)> {
     match &*state.readiness.borrow() {
         Readiness::Ready(loaded) => {
             let capacity = loaded.handle.budget().kv_capacity_tokens;
@@ -374,14 +374,20 @@ fn listed_model(state: &ServerState) -> Option<(String, Option<u32>, Option<u32>
                 loaded.model_id.clone(),
                 Some(capacity),
                 Some(max_output.min(capacity.saturating_sub(1))),
+                loaded.handle.info().vision.is_some(),
             ))
         }
-        Readiness::Loading => state.args.model.clone().map(|id| (id, None, None)),
+        Readiness::Loading => state.args.model.clone().map(|id| (id, None, None, false)),
         Readiness::Failed(_) => None,
     }
 }
 
-pub(crate) fn model_json(id: &str, capacity: Option<u32>, max_output: Option<u32>) -> Value {
+pub(crate) fn model_json(
+    id: &str,
+    capacity: Option<u32>,
+    max_output: Option<u32>,
+    vision: bool,
+) -> Value {
     let mut model = json!({
         "id": id,
         "type": "model",
@@ -396,6 +402,12 @@ pub(crate) fn model_json(id: &str, capacity: Option<u32>, max_output: Option<u32
         // The vLLM-style field OpenCode's local discovery reads.
         model["max_model_len"] = capacity.into();
         model["max_output_tokens"] = max_output.into();
+        // What the model reads (009): clients that ask send images only when it does.
+        model["input_modalities"] = if vision {
+            json!(["text", "image"])
+        } else {
+            json!(["text"])
+        };
     }
     model
 }
@@ -405,7 +417,7 @@ pub(crate) fn model_json(id: &str, capacity: Option<u32>, max_output: Option<u32
 /// read; while loading the model being loaded, without capacity fields.
 pub async fn models(State(state): State<ServerState>) -> Response {
     let data: Vec<Value> = listed_model(&state)
-        .map(|(id, capacity, max_output)| model_json(&id, capacity, max_output))
+        .map(|(id, capacity, max_output, vision)| model_json(&id, capacity, max_output, vision))
         .into_iter()
         .collect();
     let first = data.first().map(|m| m["id"].clone()).unwrap_or(Value::Null);
@@ -423,8 +435,8 @@ pub async fn models(State(state): State<ServerState>) -> Response {
 /// requests do), or 404.
 pub async fn model(State(state): State<ServerState>, Path(id): Path<String>) -> Response {
     match listed_model(&state) {
-        Some((_, capacity, max_output)) => {
-            let mut model = model_json(&id, capacity, max_output);
+        Some((_, capacity, max_output, vision)) => {
+            let mut model = model_json(&id, capacity, max_output, vision);
             // The model's own sampling defaults and thinking mode, for the window's chat
             // inspector (018 FR-010a): mrun's extension, additive.
             if let Ok(loaded) = handler::ready(&state) {

@@ -43,7 +43,7 @@ No. mrun drafts the next tokens from earlier text in the prompt and the reply (a
 rewrites, an `Edit`'s old text), checks up to 7 at once on the GPU, and keeps a drafted token only
 where plain decoding would have produced it, sampled with the same random draw. Replies are
 identical with `--speculation off`; it only saves passes. It drafts only while that is measured
-faster on the request, so a reply that copies nothing decodes as before.
+faster on the request, so a reply that copies nothing decodes plainly.
 
 ## Which models are supported?
 
@@ -55,8 +55,8 @@ id. See [Models](@/docs/models.md). Larger models run on a rented GPU with
 ## What does my Mac need?
 
 Apple Silicon (M1 or later), macOS 15 or newer and 16 GB or more. With 48 GB, Qwen3.6 gets its
-full 262K context; on a 16 GB Mac, Qwen3.5-9B gets 84,333 tokens. `mrun ls` shows what each alias
-gets on your Mac.
+full 262K context; on a 16 GB Mac, Qwen3.5-9B ([Smaller Macs](@/docs/memory.md#smaller-macs)).
+`mrun ls` shows what each alias gets on your Mac.
 
 ## Which Macs has mrun been tested on?
 
@@ -91,7 +91,8 @@ Each lane keeps its conversation, and the prefix cache keeps the others as branc
 ## Does mrun send any data anywhere?
 
 No. It listens on loopback only, has no telemetry and does not log prompts. After `mrun pull` it
-works offline. Tools run inside your agent. Two opt-in exceptions: a
+works offline. Agents run their own tools; in mrun's chats, `search`, `fetch`, `browser` and
+remote MCP servers reach the network only on a call you allow. Two opt-in exceptions: a
 [Mac pool](@/docs/pool.md) sends a member's prompts to the host Mac, and
 [`mrun cloud`](@/docs/cloud.md) sends prompts to a rented RunPod GPU.
 

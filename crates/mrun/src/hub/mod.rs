@@ -450,9 +450,8 @@ impl Manifest {
             .sum()
     }
 
-    /// Weight bytes the engine loads: an alias's pinned number (vision tower excluded), else the
-    /// `*.safetensors` sizes. For a model pulled by repo id that carries a vision tower the
-    /// engine skips, this overestimates by the tower's size (≈ 0.9 GB for Qwen3.5/3.6).
+    /// Weight bytes the engine loads: an alias's pinned number, else the `*.safetensors`
+    /// sizes; the vision tower is loaded (009), so both include it.
     pub fn loaded_weights(&self) -> u64 {
         match aliases::pinned(&self.repo, &self.revision) {
             Some(alias) => alias.loaded_weights(),

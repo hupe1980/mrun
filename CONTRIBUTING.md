@@ -2,10 +2,9 @@
 
 mrun is 0.x: minor versions may break.
 
-You need Rust (the version in `rust-toolchain.toml`; rustup installs it) and, on a Mac, Xcode with
-its Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`), which compiles the engine's
-GPU kernels into the binary. Nothing else: no C++ build. Without the Metal toolchain mrun
-still builds and compiles its kernels when it starts (`mrun doctor` says so).
+You need Rust (the version in `rust-toolchain.toml`) and, on a Mac, Xcode's Metal toolchain
+(`xcodebuild -downloadComponent MetalToolchain`), which compiles the GPU kernels into the binary;
+without it they compile at first start (`mrun doctor` says so).
 
 ```sh
 cargo build --release      # the binary, with the engine (nuvec)
@@ -81,5 +80,4 @@ If you have one of these Macs, a report helps everyone:
 
 Contributed results are listed on the
 [benchmarks page](https://hupe1980.github.io/mrun/docs/benchmarks/) by contributor, chip and date,
-with your handle if you want credit. They are community data, not release gates: a contributed
-result never blocks a release, and it is never presented as the qualification measurement.
+with your handle if you want. They never gate a release.

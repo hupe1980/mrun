@@ -44,7 +44,9 @@ fn run(model: &dyn Model, x: Array, range: std::ops::Range<usize>, dir: &Path) -
             ),
             LayerKind::Linear => LayerState::Recurrent(Recurrent::default()),
         };
-        x = model.layer(i, &x, &mut state, 0).unwrap();
+        x = model
+            .layer(i, &x, &mut state, mrun_engine::Pos::at(0))
+            .unwrap();
     }
     x
 }

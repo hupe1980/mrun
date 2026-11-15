@@ -1,5 +1,5 @@
 import { describe as group, expect, it } from "vitest";
-import { cageWords, describe } from "../src/lib/tools.svelte";
+import { browserReach, cageWords, describe, serviceHost } from "../src/lib/tools.svelte";
 import type { McpServer, ToolCall } from "../src/lib/types";
 
 const browser = { name: "browser", kind: "stdio", command: "mrun mcp serve browser", env: [], sandbox: false } as unknown as McpServer;
@@ -16,5 +16,27 @@ group("mrun's browser tools (pageon)", () => {
 
   it("says the pages run sandboxed", () => {
     expect(cageWords(browser)).toBe("Uses websites · pages sandboxed");
+  });
+});
+
+group("mrun's search tool (029)", () => {
+  const search = (command: string) => ({ name: "search", kind: "stdio", command, env: [], sandbox: false }) as unknown as McpServer;
+  it("names the query and the service that receives it", () => {
+    const exa = search("mrun mcp serve search --provider exa");
+    expect(describe(call({ query: "tokio 1.48" }), exa, "search")).toEqual({ verb: "Search", subject: "“tokio 1.48”", reaches: "mcp.exa.ai" });
+    expect(cageWords(exa)).toBe("Searches the web · mcp.exa.ai");
+    expect(serviceHost(search("mrun mcp serve search --provider brave"))).toBe("api.search.brave.com");
+    expect(serviceHost(search("mrun mcp serve search --provider searxng --url http://127.0.0.1:8888"))).toBe("127.0.0.1:8888");
+    expect(serviceHost(browser)).toBeUndefined();
+  });
+});
+
+group("the browser's reach", () => {
+  it("says which sites the browser may use", () => {
+    expect(browserReach("mrun mcp serve browser")).toBe("Uses websites · pages sandboxed");
+    expect(browserReach("mrun mcp serve browser --allow-local")).toBe("Uses any site and local servers · sandboxed");
+    expect(browserReach("mrun mcp serve browser --origin https://github.com --origin http://localhost:3000 --allow-local")).toBe(
+      "Uses only github.com, localhost:3000 · sandboxed",
+    );
   });
 });

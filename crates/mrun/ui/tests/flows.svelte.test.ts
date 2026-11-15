@@ -202,7 +202,7 @@ describe("files in the chat (020 US1)", () => {
     await settle(40);
     const notes = [...target.querySelectorAll(".chip.refused")].map((n) => n.textContent?.replace(/\s+/g, " ").trim());
     expect(notes[0]).toMatch(/big\.log [\d,]+ tokens; [\d,]+ are left in this chat's context\./);
-    expect(notes[1]).toContain("Images need a vision model");
+    expect(notes[1]).toContain("The served model reads no images");
     expect(target.querySelectorAll(".attachments .chip:not(.refused)").length).toBe(0);
   });
 });

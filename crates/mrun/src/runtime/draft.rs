@@ -105,7 +105,12 @@ impl Drafter {
             return Vec::new();
         };
         let len = (matched - 1).clamp(1, max).min(n - 1 - end);
-        self.tokens[end + 1..end + 1 + len].to_vec()
+        // Image tokens are inputs only (009 FR-008): a draft ends before one.
+        self.tokens[end + 1..end + 1 + len]
+            .iter()
+            .copied()
+            .take_while(|&t| !crate::chat::media::is_image(t))
+            .collect()
     }
 }
 
@@ -185,6 +190,16 @@ mod tests {
 
     fn drafter(tokens: &[u32]) -> Drafter {
         Drafter::new(tokens)
+    }
+
+    #[test]
+    fn drafts_stop_before_image_tokens() {
+        let key = crate::chat::media::FIRST_KEY;
+        // "a b" then an image, later "a b" again: the continuation would be the image.
+        let d = Drafter::new(&[1, 2, key, key + 1, 3, 1, 2]);
+        assert!(d.draft(4).is_empty(), "no image token is ever drafted");
+        let d = Drafter::new(&[1, 2, 7, key, 3, 1, 2]);
+        assert_eq!(d.draft(4), [7]);
     }
 
     #[test]

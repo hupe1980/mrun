@@ -202,7 +202,12 @@
       <div class="buttons wrap">
         <button class="btn" disabled={toolBusy} onclick={() => toolAction(() => tools.addWorkspace(), "")} title="mrun mcp add workspace <folder>">Add Workspace…</button>
         <button class="btn" disabled={toolBusy || Boolean(tools.server("fetch"))} onclick={() => toolAction(() => tools.addFetch(), "")} title="mrun mcp add fetch">Add Fetch</button>
-        <button class="btn" disabled={toolBusy || Boolean(tools.server("browser"))} onclick={() => toolAction(() => tools.addBrowser(), "")} title="mrun mcp add browser">Add Browser</button>
+        <button class="btn" disabled={toolBusy || Boolean(tools.server("browser"))} aria-haspopup="menu" title="mrun mcp add browser [--allow-local] [--origin SITE]" onclick={(e) => void contextMenu(e, [{ id: "any", title: "Any Site" }, { id: "local", title: "Any Site and Local Servers" }, { id: "only", title: "Only These Sites…" }]).then((id) => {
+          if (id === "any" || id === "local" || id === "only") void toolAction(() => tools.addBrowser(id), "");
+        })}>Add Browser…</button>
+        <button class="btn" disabled={toolBusy || Boolean(tools.server("search"))} aria-haspopup="menu" title="mrun mcp add search [--provider brave|searxng]" onclick={(e) => void contextMenu(e, [{ id: "exa", title: "Exa (no key)" }, { id: "brave", title: "Brave Search…" }, { id: "searxng", title: "SearXNG…" }]).then((id) => {
+          if (id === "exa" || id === "brave" || id === "searxng") void toolAction(() => tools.addSearch(id), "");
+        })}>Add Search…</button>
         <button class="btn" disabled={toolBusy} aria-haspopup="menu" onclick={(e) => void contextMenu(e, [{ id: "claude-code", title: "From Claude Code" }, { id: "claude-desktop", title: "From Claude Desktop" }]).then((id) => {
           if (id === "claude-code" || id === "claude-desktop") void toolAction(() => tools.importFrom(id), id === "claude-code" ? "Claude Code" : "Claude Desktop");
         })} title="mrun mcp import claude-code | claude-desktop">Import…</button>

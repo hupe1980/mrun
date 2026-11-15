@@ -233,6 +233,7 @@ mod tests {
             &body,
             DecodeOptions {
                 reject_tool_images: true,
+                vision: None,
             },
         )
         .unwrap_err();

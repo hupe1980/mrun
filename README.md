@@ -18,13 +18,13 @@ the Anthropic Messages, OpenAI Chat Completions and OpenAI Responses APIs on `12
 
 ## Status
 
-**0.6**: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
+**0.7**: `brew install hupe1980/tap/mrun`. mrun is qualified on one Mac
 (M4 Pro, 48 GB); smaller Macs are simulated there with `--budget-gib`.
 
 - **Models**: `qwen3.6` (Qwen3.6-35B-A3B 4-bit), the default wherever it leaves at least 64K
   tokens of context, and `qwen3.5` (Qwen3.5-9B 4-bit, a preview) on smaller Macs; also Qwen3-8B
   and the Qwen3-Coder family by repo name. See [Models](https://hupe1980.github.io/mrun/docs/models/).
-- **Measured**: token-for-token parity with mlx-lm, speed against mlx-lm and Ollama,
+- **Measured**: greedy parity with mlx-lm (equal up to near-ties), speed against mlx-lm and Ollama,
   cancellation latency, speculative decoding (1.43× on copy-heavy replies with `qwen3.6`) and
   parallel lanes (a title's first token in 2.1 s during a 19K-token prompt instead of 28.5 s) are
   on [Benchmarks](https://hupe1980.github.io/mrun/docs/benchmarks/).
@@ -41,11 +41,11 @@ Each is measured on the target Mac ([Benchmarks](https://hupe1980.github.io/mrun
 - **Exact reuse, proven**: a request served from the cache gets bit-identical output to
   recomputing its prompt with the same chunk plan.
 - **Every miss explained**: each response reports cached and processed tokens, and a miss names
-  its cause (`new`, `diverged`, `evicted`, `gap`, `disabled`) and the message where the prompt
+  its cause (`new`, `diverged`, `evicted`, `gap`, `image`, `disabled`) and the message where the prompt
   changed.
 - **Tool loops always hit**: the model's own generated tokens are spliced back into the next
   prompt, also on hybrid models.
-- **Side requests never wait**: titles, summaries and subagents decode beside the main turn, up
+- **Side requests run beside the main turn**: titles, summaries and subagents decode beside the main turn, up
   to four at once in one shared pass, each bit-identical to running alone.
 - **Speculative decoding that changes nothing**: tokens drafted from the prompt are kept only
   where plain decoding would produce them, bit for bit, greedy or seeded.
@@ -83,7 +83,7 @@ machine, the server and the clients.
 
 `mrun ui` opens a native window and a menu bar item (`--browser`: in a browser): what the server
 is doing, each agent session with every miss and the text that changed, the Mac pool, a chat
-that takes files and calls tools (a workspace, the web and a built-in browser, sandboxed MCP
+that takes files and images and calls tools (a workspace, web search and fetch, a built-in browser, sandboxed MCP
 servers, each call asked first), models with a fit verdict (any repo by name), one-click agent setup and code
 for your own apps. Every action is an `mrun` command; Copy as Command shows it. See
 [The mrun window](https://hupe1980.github.io/mrun/docs/ui/).

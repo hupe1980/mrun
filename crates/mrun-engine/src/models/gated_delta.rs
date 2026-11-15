@@ -50,16 +50,9 @@ pub fn update(
         Some(state) => state.clone(),
         None => tensor::zeros(&[q.dim(0), hv, dv, dk], Dtype::Float32)?,
     };
+    // Kept long after `y` is used (live, in checkpoints and branches); since nuvec 0.12 an
+    // evaluated output frees its data when its last handle goes, whatever its siblings do.
     let (y, next) = fast::gated_delta(q, k, v, &g, &beta, &state)?;
-    // The state is kept (live, in checkpoints and branches) long after `y` is used, but as a
-    // sibling output it keeps `y` alive too: `T` positions of `[Hv, Dv]` per layer, 0.5 GB for a
-    // 2,048-token chunk of Qwen3.6 (FEEDBACK_NUVEC B7). A copy of its own drops it; one decode
-    // token's `y` is too small to matter.
-    let next = if q.dim(1) > 1 {
-        tensor::deep_copy(&next)?
-    } else {
-        next
-    };
     Ok((y, next))
 }
 

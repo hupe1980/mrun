@@ -8,13 +8,13 @@
   import Message from "../components/Message.svelte";
   import Symbol from "../components/Symbol.svelte";
   import ToolsPicker from "../components/ToolsPicker.svelte";
-  import { content, estimate, fence, readAttachment } from "../lib/attach";
+  import { blocks, estimate, fence, readAttachment } from "../lib/attach";
   import { countTokens, host, streamMessages } from "../lib/api";
   import { exportMarkdown, searchHit, tokens } from "../lib/format";
   import { copyText } from "../lib/clipboard";
   import { live } from "../lib/live.svelte";
   import { contextMenu } from "../lib/native.svelte";
-  import { tools } from "../lib/tools.svelte";
+  import { serviceHost, tools } from "../lib/tools.svelte";
   import type { Attachment, Chat, Message as Msg, Sampling, Stats, ToolCall } from "../lib/types";
 
   let { active }: { active: boolean } = $props();
@@ -46,6 +46,8 @@
   let editing = $state<number | null>(null);
   /** Files waiting for the next message, and the ones refused with their reason (020 US1). */
   let pending = $state<Attachment[]>([]);
+  /** The served model reads images (009, `/v1/models` `input_modalities`). */
+  let vision = $state(false);
   let refused = $state<{ name: string; reason: string }[]>([]);
   let picker: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
@@ -77,7 +79,10 @@
   const toolsOn = $derived(current.tools ?? []);
   // The privacy line names the remote hosts this chat's tools reach (FR-008).
   $effect(() => {
-    tools.hosts = toolsOn.map((n) => tools.server(n)).filter((s) => s?.kind === "http" && s.host).map((s) => s!.host!);
+    tools.hosts = toolsOn
+      .map((n) => tools.server(n))
+      .map((s) => (s?.kind === "http" ? s.host : serviceHost(s)))
+      .filter((h): h is string => Boolean(h));
   });
   $effect(() => {
     if (toolsOn.length && !tools.list) void tools.load("start");
@@ -108,6 +113,7 @@
         const d = (info as any).defaults;
         if (d) defaults = d;
         thinkingFamily = Boolean((info as any).thinking);
+        vision = ((info as any).input_modalities ?? []).includes("image");
       })
       .catch(() => {});
   });
@@ -147,7 +153,7 @@
 
   /** A message as the API's turns: a reply that called tools is followed by their results. */
   function turn(m: Msg): Record<string, unknown>[] {
-    if (m.role === "user") return [{ role: "user", content: content(m) }];
+    if (m.role === "user") return [{ role: "user", content: blocks(m) }];
     if (!m.tools?.length) return [{ role: "assistant", content: m.text }];
     return [
       {
@@ -184,7 +190,8 @@
   let overhead: { model: string; tokens: number } | null = null;
   async function fileTokens(a: Attachment): Promise<number> {
     if (overhead?.model !== model) overhead = { model: model!, tokens: await countTokens({ model, messages: [{ role: "user", content: "" }] }) };
-    const all = await countTokens({ model, messages: [{ role: "user", content: fence(a.name, a.text) }] });
+    const one = a.image ? blocks({ text: "", attachments: [a] }) : fence(a.name, a.text);
+    const all = await countTokens({ model, messages: [{ role: "user", content: one }] });
     return Math.max(0, all - overhead.tokens);
   }
 
@@ -200,7 +207,7 @@
   async function addFiles(files: Iterable<File>) {
     const capacity = live.status?.budget?.kv_capacity_tokens ?? null;
     for (const file of files) {
-      const read = await readAttachment(file);
+      const read = await readAttachment(file, vision);
       if (!read.ok) {
         refused = [...refused, { name: read.name, reason: read.reason }];
         continue;
@@ -641,7 +648,7 @@
 
     <form class="composer" class:has-files={pending.length || refused.length} onsubmit={(e) => { e.preventDefault(); void send(); }}>
       <Attachments items={pending} {refused} onremove={(i) => (pending = pending.filter((_, j) => j !== i))} ondismiss={() => (refused = [])} />
-      <button type="button" class="btn plain icon" onclick={() => picker?.click()} aria-label="Attach files" title="Attach Files">
+      <button type="button" class="btn plain icon" onclick={() => picker?.click()} aria-label={vision ? "Attach files or images" : "Attach files"} title={vision ? "Attach Files or Images" : "Attach Files"}>
         <Symbol name="clip" size={16} />
       </button>
       <input bind:this={picker} type="file" multiple hidden tabindex="-1" aria-label="Files to attach" onchange={(e) => { const f = e.currentTarget.files; if (f) void addFiles([...f]); e.currentTarget.value = ""; }} />

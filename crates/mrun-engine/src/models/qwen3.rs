@@ -6,7 +6,7 @@
 use serde_json::Value;
 
 use super::common::{self, Attention, AttentionConfig, Head, Mlp, int, num};
-use super::{LoadError, Model, Part};
+use super::{LoadError, Model, Part, Pos};
 use crate::engine::LayerKind;
 use crate::load::{Quantization, RmsNorm, Weights, invalid};
 use crate::state::LayerState;
@@ -61,6 +61,7 @@ pub fn attention_config(config: &Value) -> Result<AttentionConfig, LoadError> {
         rope_scale: 1.0,
         eps: num(config, "rms_norm_eps")? as f32,
         gated: false,
+        mrope: None,
     })
 }
 
@@ -134,11 +135,11 @@ impl Model for Qwen3 {
         i: usize,
         x: &Array,
         state: &mut LayerState,
-        offset: i32,
+        pos: Pos<'_>,
     ) -> tensor::Result<Array> {
         let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
-        let x = tensor::add(x, &layer.attention.forward(&h, state.kv()?, offset)?)?;
+        let x = tensor::add(x, &layer.attention.forward(&h, state.kv()?, pos)?)?;
         let h = layer.post_attention_layernorm.forward(&x)?;
         tensor::add(&x, &layer.mlp.forward(&h)?)
     }
@@ -148,7 +149,7 @@ impl Model for Qwen3 {
         i: usize,
         x: &Array,
         states: &mut [&mut LayerState],
-        offsets: &[i32],
+        positions: &[Pos<'_>],
     ) -> tensor::Result<Array> {
         let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
@@ -156,7 +157,7 @@ impl Model for Qwen3 {
             .iter_mut()
             .map(|s| s.kv())
             .collect::<tensor::Result<Vec<_>>>()?;
-        let x = tensor::add(x, &layer.attention.forward_lanes(&h, &mut kvs, offsets)?)?;
+        let x = tensor::add(x, &layer.attention.forward_lanes(&h, &mut kvs, positions)?)?;
         let h = layer.post_attention_layernorm.forward(&x)?;
         tensor::add(&x, &layer.mlp.forward(&h)?)
     }

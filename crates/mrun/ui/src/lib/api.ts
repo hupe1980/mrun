@@ -4,6 +4,11 @@
 
 import type { AgentEntry, AppEntry, AppState, Chat, CloudListing, ConfigView, Denial, Excerpt, Job, McpList, Miss, ModelEntry, Offer, Plan, PoolPlan, PoolView, Prefs, Sessions, Speculation, Status } from "./types";
 
+/** Where `search` sends queries (029). */
+export type SearchProvider = "exa" | "brave" | "searxng";
+/** Where the browser may go: every site, also this Mac's servers, or sites asked for. */
+export type BrowserReach = "any" | "local" | "only";
+
 const KEY = "mrun.token";
 
 /** Moves `#t=<token>` into sessionStorage and clears it from the address. */
@@ -114,7 +119,8 @@ export const host = {
     call<{ text: string; is_error: boolean; denials?: Denial[] }>("/app/mcp/call", json("POST", { server, tool, arguments: args })),
   mcpAllow: (server: string, fix: NonNullable<Denial["fix"]>) => call<{ command: string }>("/app/mcp/allow", json("POST", { server, fix })),
   mcpImport: (client: "claude-code" | "claude-desktop") => call<{ added: string[] }>("/app/mcp/import", json("POST", { client })),
-  mcpAdd: (kit: "workspace" | "fetch" | "browser", dir?: string) => call<{ added: string[] }>("/app/mcp/add", json("POST", { kit, dir })),
+  mcpAdd: (kit: "workspace" | "fetch" | "browser" | "search", dir?: string, provider?: SearchProvider, reach?: BrowserReach) =>
+    call<{ added: string[] }>("/app/mcp/add", json("POST", { kit, dir, provider, reach })),
   mcpChoose: () => call<{ dir: string | null }>("/app/mcp/choose", { method: "POST" }),
 };
 

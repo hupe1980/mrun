@@ -15,6 +15,8 @@ pub mod qwen3_5_moe;
 #[cfg(feature = "engine")]
 pub mod qwen3_moe;
 pub mod registry;
+#[cfg(feature = "engine")]
+pub mod vision;
 
 #[cfg(feature = "engine")]
 #[doc(hidden)]
@@ -26,9 +28,69 @@ pub(crate) use graph::per_row;
 #[cfg(feature = "engine")]
 pub use graph::{Model, build};
 
+/// Where a chunk's rows sit (009): row `r` is KV slot `at + r`. Without `runs` every row is text
+/// at rotary position `at + r + delta`; with `runs` each run says how its rows rotate.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pos<'a> {
+    /// The KV slot of the first row.
+    pub at: i32,
+    /// Rotary position minus slot of text rows when `runs` is empty (images before shorten it).
+    pub delta: i32,
+    /// The chunk's rows in order, when any is an image row; empty for text-only chunks.
+    pub runs: &'a [Run],
+}
+
+impl Pos<'static> {
+    /// Text at slot `at`, rotary position `at`.
+    pub fn at(at: i32) -> Self {
+        Self {
+            at,
+            delta: 0,
+            runs: &[],
+        }
+    }
+}
+
+impl Pos<'_> {
+    /// The same rows `by` slots later (a later piece of the same chunk).
+    pub fn shifted(self, by: i32) -> Pos<'static> {
+        assert!(self.runs.is_empty(), "image chunks are not split");
+        Pos {
+            at: self.at + by,
+            delta: self.delta,
+            runs: &[],
+        }
+    }
+}
+
+/// Consecutive rows of a chunk with one rotation rule.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Run {
+    /// `len` text rows; the first at rotary position `offset`.
+    Text { len: i32, offset: i32 },
+    /// `len` rows of an image whose merged grid is `width` wide; the run's first row is the
+    /// image's token `first`, and every row of the image has temporal position `base`, height
+    /// `base + k / width` and width `base + k % width` for its token `k`.
+    Image {
+        len: i32,
+        first: i32,
+        width: i32,
+        base: i32,
+    },
+}
+
+impl Run {
+    /// Rows of the run.
+    pub fn rows(&self) -> i32 {
+        match *self {
+            Run::Text { len, .. } | Run::Image { len, .. } => len,
+        }
+    }
+}
+
 #[cfg(feature = "engine")]
 mod graph {
-    use super::{LoadError, Part};
+    use super::{LoadError, Part, Pos};
     use crate::engine::LayerKind;
     use crate::load::Weights;
     use crate::state::LayerState;
@@ -51,13 +113,13 @@ mod graph {
         }
         /// Token ids `[1, L]` → hidden states `[1, L, hidden]`.
         fn embed(&self, ids: &Array) -> tensor::Result<Array>;
-        /// Decoder layer `i` over `x` at absolute position `offset`, updating its state.
+        /// Decoder layer `i` over `x` at `pos`, updating its state.
         fn layer(
             &self,
             i: usize,
             x: &Array,
             state: &mut LayerState,
-            offset: i32,
+            pos: Pos<'_>,
         ) -> tensor::Result<Array>;
         /// [`Model::layer`] with linear layers' recurrence run in segments ending at the
         /// chunk-relative positions `splits` (003 SC-009), pushing the recurrent state after each
@@ -68,12 +130,12 @@ mod graph {
             i: usize,
             x: &Array,
             state: &mut LayerState,
-            offset: i32,
+            pos: Pos<'_>,
             splits: &[i32],
             captured: &mut Vec<crate::state::Recurrent>,
         ) -> tensor::Result<Array> {
             let _ = (splits, captured);
-            self.layer(i, x, state, offset)
+            self.layer(i, x, state, pos)
         }
         /// [`Model::layer`] for a verify pass (006 FR-001): every row computed as the decode step
         /// at its position computes it, the state after each position but the last pushed to
@@ -83,14 +145,14 @@ mod graph {
             i: usize,
             x: &Array,
             state: &mut LayerState,
-            offset: i32,
+            pos: Pos<'_>,
             captured: &mut Vec<crate::state::Recurrent>,
         ) -> tensor::Result<Array> {
             let splits: Vec<i32> = (1..x.dim(1)).collect();
-            self.layer_split(i, x, state, offset, &splits, captured)
+            self.layer_split(i, x, state, pos, &splits, captured)
         }
         /// Decoder layer `i` for one decode step of several lanes (011): row `b` of `x`
-        /// `[1, B, hidden]` is lane `b`'s token at `offsets[b]` with its state `states[b]`. Each
+        /// `[1, B, hidden]` is lane `b`'s token at `positions[b]` with its state `states[b]`. Each
         /// row equals [`Model::layer`] on that lane alone, bit for bit, under
         /// `tensor::with_row_exact`. The default runs the rows one by one; families share their
         /// weight passes across the rows.
@@ -99,9 +161,9 @@ mod graph {
             i: usize,
             x: &Array,
             states: &mut [&mut LayerState],
-            offsets: &[i32],
+            positions: &[Pos<'_>],
         ) -> tensor::Result<Array> {
-            let rows = per_row(x, |b, row| self.layer(i, row, states[b], offsets[b]))?;
+            let rows = per_row(x, |b, row| self.layer(i, row, states[b], positions[b]))?;
             tensor::concatenate(&rows.iter().collect::<Vec<_>>(), 1)
         }
         /// Hidden states `[1, L, hidden]` → logits of the last position `[1, vocab]`.

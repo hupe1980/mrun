@@ -64,6 +64,19 @@ pub struct ChatRequest {
     /// A side request (011 FR-005): Claude Code's `x-claude-code-request-class` other than
     /// `main` (titles, summaries, memory recall).
     pub auxiliary: bool,
+    /// Images of user messages and tool results, in order (009): where each sits in its
+    /// message's text.
+    pub images: Vec<MessageImage>,
+}
+
+/// An image placed in a message.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MessageImage {
+    /// Index in `messages`.
+    pub message: usize,
+    /// Byte offset in the message's text (a tool result's content).
+    pub at: usize,
+    pub image: std::sync::Arc<crate::chat::image::Image>,
 }
 
 impl ChatRequest {
@@ -90,6 +103,7 @@ impl ChatRequest {
             client: "other".into(),
             member: None,
             auxiliary: false,
+            images: Vec::new(),
         }
     }
 

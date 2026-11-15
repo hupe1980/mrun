@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use super::common::{self, Attention, AttentionConfig, Head, Mlp, int};
 use super::moe::{Ffn, MoeConfig, SparseMoe};
-use super::{LoadError, Model, Part, activations, gated_delta};
+use super::{LoadError, Model, Part, Pos, activations, gated_delta};
 use crate::engine::LayerKind;
 use crate::load::{Linear, Quantization, RmsNorm, Weights, invalid};
 use crate::state::{LayerState, Recurrent};
@@ -433,6 +433,13 @@ impl Qwen3_5Moe {
             rope_scale: common::rope_scale(Some(scaling))?,
             eps,
             gated: true,
+            mrope: rope
+                .and_then(|r| r["mrope_section"].as_array())
+                .filter(|s| s.len() == 3)
+                .map(|s| {
+                    let n = |i: usize| s[i].as_i64().unwrap_or(0) as i32;
+                    [n(0), n(1), n(2)]
+                }),
         };
         let delta = DeltaConfig {
             k_heads: int(config, "linear_num_key_heads")?,
@@ -560,7 +567,7 @@ impl Qwen3_5Moe {
         i: usize,
         x: &Array,
         state: &mut LayerState,
-        offset: i32,
+        pos: Pos<'_>,
         splits: &[i32],
         captured: &mut Vec<Recurrent>,
         rows: bool,
@@ -571,7 +578,7 @@ impl Qwen3_5Moe {
             Mixer::Linear(gdn) => {
                 gdn.forward_split(&h, state.recurrent()?, splits, captured, rows)?
             }
-            Mixer::Attention(attn) => attn.forward(&h, state.kv()?, offset)?,
+            Mixer::Attention(attn) => attn.forward(&h, state.kv()?, pos)?,
         };
         let x = tensor::add(x, &r)?;
         let h = layer.post_attention_layernorm.forward(&x)?;
@@ -607,13 +614,13 @@ impl Model for Qwen3_5Moe {
         i: usize,
         x: &Array,
         state: &mut LayerState,
-        offset: i32,
+        pos: Pos<'_>,
     ) -> tensor::Result<Array> {
         let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
         let r = match &layer.mixer {
             Mixer::Linear(gdn) => gdn.forward(&h, state.recurrent()?)?,
-            Mixer::Attention(attn) => attn.forward(&h, state.kv()?, offset)?,
+            Mixer::Attention(attn) => attn.forward(&h, state.kv()?, pos)?,
         };
         let x = tensor::add(x, &r)?;
         let h = layer.post_attention_layernorm.forward(&x)?;
@@ -625,7 +632,7 @@ impl Model for Qwen3_5Moe {
         i: usize,
         x: &Array,
         states: &mut [&mut LayerState],
-        offsets: &[i32],
+        positions: &[Pos<'_>],
     ) -> tensor::Result<Array> {
         let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
@@ -642,7 +649,7 @@ impl Model for Qwen3_5Moe {
                     .iter_mut()
                     .map(|s| s.kv())
                     .collect::<tensor::Result<Vec<_>>>()?;
-                attn.forward_lanes(&h, &mut kvs, offsets)?
+                attn.forward_lanes(&h, &mut kvs, positions)?
             }
         };
         let x = tensor::add(x, &r)?;
@@ -667,11 +674,11 @@ impl Model for Qwen3_5Moe {
         i: usize,
         x: &Array,
         state: &mut LayerState,
-        offset: i32,
+        pos: Pos<'_>,
         splits: &[i32],
         captured: &mut Vec<Recurrent>,
     ) -> tensor::Result<Array> {
-        self.layer_with(i, x, state, offset, splits, captured, false)
+        self.layer_with(i, x, state, pos, splits, captured, false)
     }
 
     fn layer_verify(
@@ -679,11 +686,11 @@ impl Model for Qwen3_5Moe {
         i: usize,
         x: &Array,
         state: &mut LayerState,
-        offset: i32,
+        pos: Pos<'_>,
         captured: &mut Vec<Recurrent>,
     ) -> tensor::Result<Array> {
         let splits: Vec<i32> = (1..x.dim(1)).collect();
-        self.layer_with(i, x, state, offset, &splits, captured, true)
+        self.layer_with(i, x, state, pos, &splits, captured, true)
     }
 
     fn chunk_scratch(&self, len: u32, depth: u32) -> u64 {

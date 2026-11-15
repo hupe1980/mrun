@@ -27,7 +27,7 @@ A line that says what mrun is doing, for example *qwen3.6 is ready*. Under it:
   the prompt is solid; the computed part is lighter and labelled with why.
   - **Grey**, expected: a new conversation, new tokens at the end, your own edit (*edited at
     message 12, user*), a resume from a checkpoint, or a re-rendered earlier reply (*reply
-    re-rendered at message 2, assistant*).
+    re-rendered at message 2, assistant*), or *another image at message 4, user*.
   - **Amber**, worth fixing: *dropped from memory earlier*, *the cache is off*, or *client changed
     message 7 (tool)*, where an agent re-sent an earlier message differently.
 
@@ -47,7 +47,8 @@ tokens per pass when it was drafted, and stop reason; choosing it opens the repl
 
 **Files**: drag, paste or attach a file. It goes into your message whole, as text, and
 follow-ups reuse it from the cache. The chip shows its token count. A file that would overflow the
-context is refused with both numbers. Images and PDFs are refused; the models read text only.
+context is refused with both numbers. Images (PNG, JPEG, WebP, GIF) go in as images when the
+model reads them, shown as thumbnails; PDFs are refused.
 
 Hover over a message, or right-click it, for its actions:
 - **Copy**: copies a reply or a question; code blocks have their own Copy.
@@ -110,7 +111,7 @@ for the model in use Apply restarts it (`mrun serve --context`).
 downloaded, whether the model is supported and the verdict (`mrun pull <repo> --dry-run`).
 
 **On a rented GPU**: models too big for this Mac, on RunPod (opt-in; see
-[Remote GPU](../cloud/)). Run… shows the fitting GPUs with price and stock, asks for the RunPod
+[Remote GPU](@/docs/cloud.md)). Run… shows the fitting GPUs with price and stock, asks for the RunPod
 key once if none is set, and follows the start step by step. While a pod serves, Now shows its
 cost and when it stops itself, and the menu bar shows the spend.
 
@@ -173,6 +174,6 @@ rings.
 ## Privacy
 
 The window talks only to mrun on this Mac and makes no network requests except downloads you
-start. No account, telemetry or update check. Its controls need a key mrun gives only to its own
+start and tool calls you allow. No account, telemetry or update check. Its controls need a key mrun gives only to its own
 window. In remote mode (`mrun cloud`) the window shows a distinct colour and says that prompts go
 to your pod.

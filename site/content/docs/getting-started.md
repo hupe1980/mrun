@@ -15,6 +15,7 @@ weight = 10
 - Tested on one Mac (M4 Pro, 48 GB, macOS 26); smaller Macs are simulated with `--budget-gib`. A
   [hardware report](https://github.com/hupe1980/mrun/blob/main/CONTRIBUTING.md#hardware-reports)
   from another Mac helps.
+
 ## Install
 
 ```sh
@@ -35,9 +36,6 @@ cargo install mrun                  # or from a clone: cargo install --path crat
 A clean release build takes about 72 s on an M4 Pro. The Metal kernels are compiled into the
 `mrun` binary, which needs no other files. Without the Metal toolchain they are compiled at first
 start instead, and `mrun doctor` warns and names the command above.
-
-On an M5-class Mac the Neural Accelerator (NAX) kernels run where MLX would use them;
-`NUVEC_NAX=off` keeps them off.
 
 ## Download a model
 
@@ -84,11 +82,8 @@ loaded, or reports why loading failed.
 mrun launch claude-code    # or: codex, opencode
 ```
 
-`launch` starts the client pointed at mrun, for that process only; your client settings stay
-untouched. Without a server it offers, in one confirmation, to pull this Mac's default model and
-start the server; a server that is still loading is waited for. It refuses a model that leaves
-less context than the client needs (64K tokens for Claude Code) and names the budget that model
-would need.
+`launch` starts the client pointed at mrun, for that process only, and pulls the model and
+starts the server if needed ([Clients](@/docs/clients.md)).
 
 To configure a client permanently, `mrun connect <client>` prints the settings; `--write` writes
 them with a backup and `--restore` undoes that. See [Clients](@/docs/clients.md).

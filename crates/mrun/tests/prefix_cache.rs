@@ -38,6 +38,7 @@ fn conv(messages: &[(Role, u32, u32)]) -> RenderedPrompt {
         messages: marks,
         system_tools_end,
         generation_start,
+        images: Vec::new(),
     }
 }
 

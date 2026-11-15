@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::common::{self, Attention, Head, Mlp, int};
 use super::moe::{Ffn, MoeConfig, SparseMoe};
 use super::qwen3::attention_config;
-use super::{LoadError, Model, Part};
+use super::{LoadError, Model, Part, Pos};
 use crate::engine::LayerKind;
 use crate::load::{Quantization, RmsNorm, Weights, invalid};
 use crate::state::LayerState;
@@ -164,11 +164,11 @@ impl Model for Qwen3Moe {
         i: usize,
         x: &Array,
         state: &mut LayerState,
-        offset: i32,
+        pos: Pos<'_>,
     ) -> tensor::Result<Array> {
         let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
-        let x = tensor::add(x, &layer.attention.forward(&h, state.kv()?, offset)?)?;
+        let x = tensor::add(x, &layer.attention.forward(&h, state.kv()?, pos)?)?;
         let h = layer.post_attention_layernorm.forward(&x)?;
         tensor::add(&x, &layer.ffn.forward(&h)?)
     }
@@ -178,7 +178,7 @@ impl Model for Qwen3Moe {
         i: usize,
         x: &Array,
         states: &mut [&mut LayerState],
-        offsets: &[i32],
+        positions: &[Pos<'_>],
     ) -> tensor::Result<Array> {
         let layer = &self.layers[i - self.first];
         let h = layer.input_layernorm.forward(x)?;
@@ -186,7 +186,7 @@ impl Model for Qwen3Moe {
             .iter_mut()
             .map(|s| s.kv())
             .collect::<tensor::Result<Vec<_>>>()?;
-        let x = tensor::add(x, &layer.attention.forward_lanes(&h, &mut kvs, offsets)?)?;
+        let x = tensor::add(x, &layer.attention.forward_lanes(&h, &mut kvs, positions)?)?;
         let h = layer.post_attention_layernorm.forward(&x)?;
         tensor::add(&x, &layer.ffn.forward(&h)?)
     }

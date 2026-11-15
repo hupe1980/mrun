@@ -20,7 +20,7 @@ describe("files in the chat (US1, FR-003, FR-004)", () => {
       readAttachment(file("huge.log", new Uint8Array(MAX_BYTES + 1).fill(65))),
     ]);
     expect(reasons.map((r) => (r.ok ? "ok" : r.reason))).toEqual([
-      "Images need a vision model; mrun's models read text only for now.",
+      "The served model reads no images.",
       "PDFs aren't read; paste the text instead.",
       "Not a text file.",
       "Not a text file (not UTF-8).",

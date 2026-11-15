@@ -20,6 +20,7 @@ const SKIP: [&str; 4] = [".git", "node_modules", "target", ".venv"];
 pub enum Kit {
     Workspace(PathBuf),
     Fetch,
+    Search(super::search::Provider),
 }
 
 impl Kit {
@@ -27,6 +28,7 @@ impl Kit {
         match self {
             Kit::Workspace(_) => "workspace",
             Kit::Fetch => "fetch",
+            Kit::Search(_) => "search",
         }
     }
 
@@ -81,9 +83,19 @@ impl Kit {
             ]),
             Kit::Fetch => json!([tool(
                 "fetch",
-                "Fetch a web page (http or https) as text; HTML is reduced to its readable text.",
+                "Read a web page you have the URL of (http or https) as text; HTML is reduced to its readable text. Without a URL, use search first; for pages that need JavaScript or clicks, use the browser tools. A redirect to another site is returned, not followed: fetch that URL to read it.",
                 json!({"url": s("The URL")}),
                 &["url"]
+            ),]),
+            Kit::Search(provider) => json!([tool(
+                "search",
+                &format!(
+                    "Search the web through {} and get up to 8 results with title, URL, date and a passage. Use it when you do not know the URL or need current facts; the year is {}. Then fetch the best result to read it; use the browser tools only for pages that need JavaScript or interaction.",
+                    provider.name(),
+                    this_year()
+                ),
+                json!({"query": s("What to look for, as a description of the page you want"), "count": n("Results, 1-8 (default 8)")}),
+                &["query"]
             ),]),
         }
     }
@@ -208,6 +220,17 @@ impl Kit {
             }
             (Kit::Workspace(root), "bash") => bash(root, arg("command")?, BASH_TIMEOUT).await,
             (Kit::Fetch, "fetch") => fetch(arg("url")?).await,
+            (Kit::Search(provider), "search") => {
+                let query = arg("query")?.trim();
+                if query.is_empty() {
+                    return Err("query is empty".into());
+                }
+                let count = args["count"]
+                    .as_u64()
+                    .map_or(super::search::MAX_RESULTS, |c| c as usize);
+                let hits = provider.search(query, count).await?;
+                Ok(cut(super::search::render(query, &hits)))
+            }
             _ => Err(format!("no tool {tool}")),
         }
     }
@@ -416,13 +439,51 @@ fn kill_group(pgid: u32) {
     }
 }
 
+/// The most redirects `fetch` follows on one host.
+const MAX_REDIRECTS: usize = 10;
+
+/// The current year (UTC), for the search tool's description.
+fn this_year() -> i64 {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() / 86_400) as i64;
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let m = (5 * doy + 2) / 153 + if (5 * doy + 2) / 153 < 10 { 3 } else { -9 };
+    yoe + era * 400 + i64::from(m <= 2)
+}
+
 async fn fetch(url: &str) -> Result<String, String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("{url}: {e}"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err("only http and https URLs".into());
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("URLs with a user name or password are refused".into());
+    }
+    // The card named this host: redirects stay on it (http → https allowed); another host is
+    // returned to the model, so its own call names it (029 FR-009).
+    let host = parsed.host_str().map(str::to_string);
+    let port = parsed.port_or_known_default();
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        let next = attempt.url();
+        let same = next.host_str().map(str::to_string) == host
+            && (next.port_or_known_default() == port || next.scheme() == "https");
+        if attempt.previous().len() > MAX_REDIRECTS {
+            attempt.error("more than 10 redirects")
+        } else if same && next.username().is_empty() {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    });
     let resp = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .redirect(policy)
         .user_agent(concat!("mrun/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())?
@@ -431,6 +492,15 @@ async fn fetch(url: &str) -> Result<String, String> {
         .await
         .map_err(|e| e.without_url().to_string())?;
     let status = resp.status();
+    if status.is_redirection()
+        && let Some(target) = resp
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|l| resp.url().join(l).ok())
+    {
+        return Ok(format!("redirected to {target}; fetch it to read it"));
+    }
     let kind = resp
         .headers()
         .get("content-type")
@@ -733,6 +803,79 @@ mod tests {
     fn html_becomes_readable_text() {
         let html = "<html><head><title>t</title><style>p{}</style></head><body><h1>Hi</h1><script>x()</script><p>a &amp; b</p><p>c</p></body></html>";
         assert_eq!(readable(html), "Hi\na & b\nc");
+    }
+
+    #[tokio::test]
+    async fn fetch_stays_on_the_host_the_card_named() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let other_hits = Arc::new(AtomicUsize::new(0));
+        let hits = other_hits.clone();
+        let other = axum::Router::new().fallback(move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+            async { "secret admin page" }
+        });
+        // Another host name for the same machine: the policy compares hosts, not addresses.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other_addr = format!("localhost:{}", listener.local_addr().unwrap().port());
+        tokio::spawn(async move { axum::serve(listener, other).await });
+        let target = format!("http://{other_addr}/admin");
+        let app = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::get(|| async { axum::response::Redirect::temporary("/end") }),
+            )
+            .route("/end", axum::routing::get(|| async { "arrived" }))
+            .route(
+                "/away",
+                axum::routing::get(
+                    move || async move { axum::response::Redirect::temporary(&target) },
+                ),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let get = |path: &str| json!({"url": format!("http://{addr}{path}")});
+        assert_eq!(
+            Kit::Fetch.call("fetch", &get("/")).await.unwrap(),
+            "arrived"
+        );
+        let away = Kit::Fetch.call("fetch", &get("/away")).await.unwrap();
+        assert_eq!(
+            away,
+            format!("redirected to http://{other_addr}/admin; fetch it to read it")
+        );
+        assert_eq!(
+            other_hits.load(Ordering::SeqCst),
+            0,
+            "the other host is never contacted"
+        );
+        let creds = Kit::Fetch
+            .call("fetch", &json!({"url": format!("http://user:pw@{addr}/")}))
+            .await
+            .unwrap_err();
+        assert!(creds.contains("user name or password"), "{creds}");
+    }
+
+    #[test]
+    fn the_search_tool_states_the_year_and_the_tiers() {
+        let kit = Kit::Search(super::super::search::Provider::new("exa", None, |_| None).unwrap());
+        let tools = kit.tools();
+        let d = tools[0]["description"].as_str().unwrap();
+        assert!(d.contains(&format!("the year is {}", this_year())), "{d}");
+        assert!(this_year() >= 2026);
+        assert!(d.contains("fetch") && d.contains("browser"), "{d}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_search_is_an_argument_error() {
+        let kit = Kit::Search(super::super::search::Provider::new("exa", None, |_| None).unwrap());
+        assert_eq!(
+            kit.call("search", &json!({"query": "  "}))
+                .await
+                .unwrap_err(),
+            "query is empty"
+        );
     }
 
     #[tokio::test]

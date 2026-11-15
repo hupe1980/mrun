@@ -337,10 +337,9 @@ pub fn servers_in(file: &Path) -> Result<Vec<(String, Value)>, String> {
     Ok(servers_of(&value))
 }
 
-/// mrun's own tools (028): the `workspace` tools in `root` (read, write, edit, list, glob, grep,
-/// bash; caged, writing allowed there), `fetch` (web pages; it needs the network, so uncaged,
-/// and every call names its host) and `browser` (pageon: it needs the network too, and runs the
-/// pages in its own sandbox).
+/// mrun's own tools (028): `workspace` in `root` (read, write, edit, glob, grep, bash; caged,
+/// writing allowed there), `fetch` (uncaged, every call names its host) and `browser` (pageon,
+/// which sandboxes its pages). [`search`] and [`browser`] take options.
 pub fn builtin(kind: &str, root: Option<&Path>) -> Option<(String, Value)> {
     match (kind, root) {
         ("workspace", Some(root)) => Some((
@@ -355,17 +354,201 @@ pub fn builtin(kind: &str, root: Option<&Path>) -> Option<(String, Value)> {
             "fetch".into(),
             json!({"command": "mrun", "args": ["mcp", "serve", "fetch"], "sandbox": false}),
         )),
-        ("browser", _) if cfg!(feature = "browser") => Some((
-            "browser".into(),
-            json!({"command": "mrun", "args": ["mcp", "serve", "browser"], "sandbox": false}),
-        )),
+        ("browser", _) if cfg!(feature = "browser") => {
+            browser(&BrowserOptions::default(), |_| None).ok()
+        }
         _ => None,
     }
+}
+
+/// What mrun's `browser` (pageon) may do: the sites it may use (none: every site), whether it
+/// may reach this Mac and the private network (dev servers), and logins it can type without the
+/// model seeing them (`NAME@ORIGIN`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BrowserOptions {
+    pub origins: Vec<String>,
+    pub allow_local: bool,
+    pub secrets: Vec<String>,
+}
+
+impl BrowserOptions {
+    /// Checks and normalizes: an origin without a scheme is `https://`; a secret is
+    /// `NAME@ORIGIN` with a name of letters, digits and `_`.
+    pub fn checked(mut self) -> Result<Self, String> {
+        for origin in &mut self.origins {
+            *origin = origin_of(origin)?;
+        }
+        for spec in &mut self.secrets {
+            let (name, origin) = spec.split_once('@').ok_or_else(|| {
+                format!("{spec}: a secret is NAME@ORIGIN, e.g. shop@https://shop.example")
+            })?;
+            let plain = name.split(':').next().unwrap_or(name);
+            if plain.is_empty() || !plain.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return Err(format!("{spec}: the name may hold letters, digits and _"));
+            }
+            *spec = format!("{name}@{}", origin_of(origin)?);
+        }
+        Ok(self)
+    }
+
+    /// The environment variable that holds a secret's value (pageon's `PAGEON_SECRET_<NAME>`).
+    pub fn secret_var(spec: &str) -> String {
+        let name = spec.split(['@', ':']).next().unwrap_or(spec);
+        format!("PAGEON_SECRET_{}", name.to_ascii_uppercase())
+    }
+
+    /// `mrun mcp serve browser`'s flags for these options.
+    pub fn args(&self) -> Vec<String> {
+        let mut args = vec!["mcp".into(), "serve".into(), "browser".into()];
+        for origin in &self.origins {
+            args.extend(["--origin".into(), origin.clone()]);
+        }
+        if self.allow_local {
+            args.push("--allow-local".into());
+        }
+        for secret in &self.secrets {
+            args.extend(["--secret".into(), secret.clone()]);
+        }
+        args
+    }
+}
+
+/// `https://host[:port]` from `host`, `https://host/path` or `http://localhost:3000`.
+fn origin_of(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    let full = if text.contains("://") {
+        text.to_string()
+    } else {
+        format!("https://{text}")
+    };
+    let url = reqwest::Url::parse(&full).map_err(|e| format!("{text}: {e}"))?;
+    match (url.scheme(), url.host_str()) {
+        ("http" | "https", Some(_)) => Ok(url.origin().ascii_serialization()),
+        _ => Err(format!("{text}: not an http or https site")),
+    }
+}
+
+/// mrun's `browser` server (pageon) with `options`; each secret's value from `env` goes into the
+/// entry's `env`, never its args.
+pub fn browser(
+    options: &BrowserOptions,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<(String, Value), String> {
+    let options = options.clone().checked()?;
+    let mut entry = json!({"command": "mrun", "args": options.args(), "sandbox": false});
+    let mut values = Map::new();
+    for spec in &options.secrets {
+        let var = BrowserOptions::secret_var(spec);
+        let value = env(&var)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| format!("{spec}: set {var} to the value"))?;
+        values.insert(var, value.into());
+    }
+    if !values.is_empty() {
+        entry["env"] = Value::Object(values);
+    }
+    Ok(("browser".into(), entry))
+}
+
+/// mrun's `search` server (029) for a provider: `exa` (no key unless `EXA_API_KEY`), `brave`
+/// (`BRAVE_API_KEY`) or `searxng` (`url`). The key goes into the entry's `env`, never its args.
+pub fn search(
+    provider: &str,
+    url: Option<&str>,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<((String, Value), super::search::Provider), String> {
+    let chosen = super::search::Provider::new(provider, url, &env)?;
+    let mut args = vec!["mcp", "serve", "search", "--provider", provider];
+    if let Some(u) = url {
+        args.extend(["--url", u]);
+    }
+    let mut entry = json!({"command": "mrun", "args": args, "sandbox": false});
+    let key = match provider {
+        "exa" => Some("EXA_API_KEY"),
+        "brave" => Some("BRAVE_API_KEY"),
+        _ => None,
+    };
+    if let Some(name) = key
+        && let Some(value) = env(name).filter(|v| !v.trim().is_empty())
+    {
+        entry["env"] = json!({name: value});
+    }
+    Ok((("search".into(), entry), chosen))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_options_become_flags_and_secrets_stay_in_env() {
+        let options = BrowserOptions {
+            origins: vec!["github.com".into(), "http://localhost:3000/app".into()],
+            allow_local: true,
+            secrets: vec!["shop@shop.example".into()],
+        };
+        let env = |k: &str| (k == "PAGEON_SECRET_SHOP").then(|| "sentinel-pw".to_string());
+        let (name, entry) = browser(&options, env).unwrap();
+        assert_eq!(name, "browser");
+        assert_eq!(
+            entry["args"],
+            json!([
+                "mcp",
+                "serve",
+                "browser",
+                "--origin",
+                "https://github.com",
+                "--origin",
+                "http://localhost:3000",
+                "--allow-local",
+                "--secret",
+                "shop@https://shop.example"
+            ])
+        );
+        assert_eq!(entry["env"]["PAGEON_SECRET_SHOP"], "sentinel-pw");
+        assert!(!entry["args"].to_string().contains("sentinel"));
+        let missing = browser(&options, |_| None).unwrap_err();
+        assert!(missing.contains("PAGEON_SECRET_SHOP"), "{missing}");
+        assert!(
+            BrowserOptions {
+                secrets: vec!["no-origin".into()],
+                ..Default::default()
+            }
+            .checked()
+            .is_err()
+        );
+        assert!(
+            BrowserOptions {
+                origins: vec!["ftp://x".into()],
+                ..Default::default()
+            }
+            .checked()
+            .is_err()
+        );
+        let (_, plain) = browser(&BrowserOptions::default(), |_| None).unwrap();
+        assert_eq!(plain["args"], json!(["mcp", "serve", "browser"]));
+        assert!(plain.get("env").is_none());
+    }
+
+    #[test]
+    fn a_search_entry_keeps_its_key_in_env_only() {
+        let env = |k: &str| (k == "BRAVE_API_KEY").then(|| "sentinel-key".to_string());
+        let ((name, entry), provider) = search("brave", None, env).unwrap();
+        assert_eq!(name, "search");
+        assert_eq!(
+            entry["args"],
+            json!(["mcp", "serve", "search", "--provider", "brave"])
+        );
+        assert_eq!(entry["env"]["BRAVE_API_KEY"], "sentinel-key");
+        assert_eq!(entry["sandbox"], false);
+        assert!(!entry["args"].to_string().contains("sentinel"));
+        assert_eq!(provider.host(), "api.search.brave.com");
+        let ((_, exa), _) = search("exa", None, |_| None).unwrap();
+        assert!(exa.get("env").is_none());
+        let ((_, sx), _) = search("searxng", Some("http://127.0.0.1:8888"), |_| None).unwrap();
+        assert_eq!(sx["args"][6], "http://127.0.0.1:8888");
+        assert!(search("brave", None, |_| None).is_err());
+    }
 
     fn write(home: &Path, text: &str) {
         std::fs::write(path(home), text).unwrap();

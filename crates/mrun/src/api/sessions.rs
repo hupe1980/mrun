@@ -470,6 +470,7 @@ mod tests {
             messages: marks,
             system_tools_end: system.len() as u32,
             generation_start,
+            images: Vec::new(),
         }
     }
 

@@ -31,7 +31,7 @@
         <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
         <a class="button ghost" href="{{ config.extra.repo }}" rel="noopener">Star on GitHub</a>
       </div>
-      <p class="status-pill"><span class="dot" aria-hidden="true"></span>0.4 · <code>brew install hupe1980/tap/mrun</code></p>
+      <p class="status-pill"><span class="dot" aria-hidden="true"></span>{{ config.extra.release }} · <code>brew install hupe1980/tap/mrun</code></p>
     </div>
     <figure class="terminal" aria-label="Example terminal session">
       <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -58,14 +58,14 @@
       </article>
       <article class="card">
         <h3>Every miss explained</h3>
-        <p>Each response reports cached and processed tokens. When reuse breaks, mrun names the cause (<code>new</code>, <code>diverged</code>, <code>evicted</code>, <code>gap</code>, <code>disabled</code>) and the message where the prompt changed, so you can fix it.</p>
+        <p>Each response reports cached and processed tokens. When reuse breaks, mrun names the cause (<code>new</code>, <code>diverged</code>, <code>evicted</code>, <code>gap</code>, <code>image</code>, <code>disabled</code>) and the message where the prompt changed, so you can fix it.</p>
       </article>
       <article class="card">
         <h3>Predictable memory</h3>
         <p>Weights, sequence state, cache and scratch are budgeted at startup against unified memory, or set by the context you need (<code>--context 64K</code>). Requests that cannot fit are refused up front with the numbers. Under memory pressure, mrun sheds cache first.</p>
       </article>
       <article class="card">
-        <h3>Nothing waits in line</h3>
+        <h3>Side requests run beside</h3>
         <p>Titles, summaries and subagents run beside the main turn, up to four at once in one shared pass, each bit-identical to running alone. Cancellation is checked after every layer and token, and finished prompt chunks are kept for the retry.</p>
       </article>
       <article class="card">
@@ -74,7 +74,7 @@
       </article>
       <article class="card">
         <h3>Private by default</h3>
-        <p>Loopback only, no telemetry, no prompt logging, offline after <code>mrun pull</code>. A model too big for your Mac can run across your Macs or on a rented GPU: opt-in, and the window says where prompts go. Tool servers in mrun's own chats run sandboxed.</p>
+        <p>Loopback only, no telemetry, no prompt logging, offline after <code>mrun pull</code> unless a chat tool you allow reads the web. A model too big for your Mac can run across your Macs or on a rented GPU: opt-in, and the window says where prompts go. Tools in mrun's own chats run sandboxed.</p>
       </article>
     </div>
   </div>
@@ -83,7 +83,7 @@
 <section class="section alt">
   <div class="wrap">
     <h2 class="section-title">See what the cache does</h2>
-    <p class="section-lead"><code>mrun ui</code> opens a window and a menu bar item: the memory budget, every request's reuse and why any part was recomputed, each agent session's requests, a chat with the local model that can call tools (sandboxed, each call asked first), models that fit your Mac or your pool, and one-click agent setup.</p>
+    <p class="section-lead"><code>mrun ui</code> opens a window and a menu bar item: the memory budget, every request's reuse and why any part was recomputed, each agent session's requests, a chat that reads files and images and uses tools (a folder, web search, a browser; sandboxed, each call asked first), models that fit your Mac or your pool, and one-click agent setup.</p>
     {%- set shots = [
       ["now.png", "Now: the memory budget, a prompt being read, and the reuse of recent requests"],
       ["chat.png", "Chat: each reply's reuse, time to first token and speed"],
@@ -137,7 +137,7 @@
       <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#claude-code"><strong>Claude Code</strong><span>Anthropic Messages</span></a>
       <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#codex"><strong>Codex CLI</strong><span>OpenAI Responses</span></a>
       <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#opencode"><strong>OpenCode</strong><span>Chat Completions</span></a>
-      <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#other-clients"><strong>Aider, Continue, Cline, Zed…</strong><span>Chat Completions</span></a>
+      <a class="client" href="{{ get_url(path='@/docs/clients.md') }}#other-clients"><strong>Aider, Continue, Zed…</strong><span>Chat Completions</span></a>
     </div>
   </div>
 </section>

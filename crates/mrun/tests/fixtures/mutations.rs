@@ -197,6 +197,7 @@ pub fn run(
             messages: Vec::new(),
             system_tools_end: 0,
             generation_start: 0,
+            images: Vec::new(),
         };
         push(&mut prompt, Role::System, system, header);
         prompt.system_tools_end = prompt.generation_start;

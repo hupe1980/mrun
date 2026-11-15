@@ -23,7 +23,7 @@ variables.
 | `mrun ps` | Show the running server: model, budget, requests, cache and the last miss |
 | `mrun doctor` | Check this Mac, the server and the clients; prints a fix for each problem |
 | `mrun pool` | `start [--unencrypted]`, `ls`, `join <pool>`, `confirm <code>`, `admit [<mac>]`, `decline <mac>`, `leave`, `remove <mac>`, `plan <model>`, `serve <model>`, `rejoin`, `replan`; `--json`, `--port`. A member's part of a model shows in `mrun ls` as `layers a–b · for pools`. See [Mac pool](@/docs/pool.md) |
-| `mrun mcp` | `ls [--json]`, `import <claude-code\|claude-desktop>`, `add <workspace [DIR]\|fetch\|browser>`, `allow <server> --read\|--write\|--exec <PATH>` or `--host <HOST>`, `serve <workspace --root DIR\|fetch\|browser>`: tools for mrun's own chats; see [Tools in mrun's chats](@/docs/mcp-and-skills.md#tools-in-mrun-s-chats) |
+| `mrun mcp` | `ls [--json]`, `import <claude-code\|claude-desktop>`, `add <workspace [DIR]\|fetch\|browser [--origin SITE]… [--allow-local] [--secret NAME@SITE]…\|search [--provider exa\|brave\|searxng] [--url URL]>`, `allow <server> --read\|--write\|--exec <PATH>` or `--host <HOST>`, `serve <workspace --root DIR\|fetch\|browser\|search>` (with `add`'s flags): tools for mrun's own chats; see [Tools in mrun's chats](@/docs/mcp-and-skills.md#tools-in-mrun-s-chats) |
 | `mrun stop` | Stop a server started with `mrun serve --detach`, also while it generates; exits 0 when nothing runs |
 | `mrun logs` | Show the log of servers started in the background |
 | `mrun cache clear` | Drop all cached state of the running server, the live conversation included (after the running request) |
@@ -33,7 +33,7 @@ variables.
 | `mrun rm <MODEL>` | Remove a pulled model from mrun's store |
 | `mrun verify <MODEL>` | Re-hash every file of a pulled model against its manifest |
 | `mrun bench` | Measure mrun and, with `--compare`, other local servers; see [Benchmarks](@/docs/benchmarks.md) |
-| `mrun cloud up\|down\|status\|logs\|gpus\|models` | Opt-in: serve a model from a rented RunPod GPU behind the same local APIs; see [Remote GPU](@/docs/cloud.md) |
+| `mrun cloud up\|down\|status\|logs\|gpus\|models\|login\|logout` | Opt-in: serve a model from a rented RunPod GPU behind the same local APIs; see [Remote GPU](@/docs/cloud.md) |
 | `mrun ui` | Open mrun's window and menu bar item; see [The mrun window](@/docs/ui.md) |
 | `mrun config path\|show\|schema` | The config file's path, every setting with its source, a JSON Schema; see [Configuration](@/docs/configuration.md#config-file) |
 | `mrun completions <SHELL>` | Print a shell completion script (`bash`, `elvish`, `fish`, `powershell`, `zsh`) |
@@ -61,7 +61,7 @@ mrun run [OPTIONS] [MODEL]
 | `--context <TOKENS>` | The most that fits | Memory for this many tokens of context, `64K` or `65536` (`MRUN_CONTEXT`); not with `--budget-gib` |
 | `--speculation <auto\|off>` | `auto` | Speculative decoding, as for `serve` |
 | `--info` | off | Print the memory budget breakdown after loading and exit |
-| `--mcp <NAMES>` | — | Tool servers of `~/.mrun/mcp.json` the model may call (`workspace,fetch,browser`); each call asks `[y]es / [a]lways / [n]o` |
+| `--mcp <NAMES>` | — | Tool servers of `~/.mrun/mcp.json` the model may call (`workspace,fetch,browser,search`); each call asks `[y]es / [a]lways / [n]o` |
 
 In an interactive session, `/clear` starts a new conversation, `/info` prints the memory budget
 and `/exit` (or `/quit`, `/bye`) quits. Turns reuse the prefix cache.
@@ -77,9 +77,11 @@ and `/exit` (or `/quit`, `/bye`) quits. Turns reuse the prefix cache.
 | `--queue-wait-s <S>` | `MRUN_QUEUE_WAIT_S` | 240 | Seconds a non-streaming request may wait; one whose estimated wait is longer is refused at once. Streaming requests never time out in the queue. At least 1 |
 | `--budget-gib <GIB>` | `MRUN_BUDGET_GIB` | Metal's recommended working set | A lower memory budget; a value above the automatic one is refused (see [Memory](@/docs/memory.md#tuning)) |
 | `--context <TOKENS>` | `MRUN_CONTEXT` | The most that fits | The budget this many tokens of context need, `64K` or `65536`; refused with E042 when it does not fit; not with `--budget-gib` ([Memory](@/docs/memory.md#context)) |
-| `--lanes <N>` | `MRUN_LANES` | 2 when the context holds 32K tokens per lane, else 1 | Requests decoded at once, 1–4; refused with E042 when they do not fit. One per Mac in a pool |
+| `--lanes <N>` | `MRUN_LANES` | 2 when the context holds 32K tokens per lane, else 1 | Requests decoded at once, 1–4; refused with E042 when they do not fit. Always 1 in a pool |
+| `--pool-port <PORT>` | `MRUN_POOL_PORT` | 8486 | Port the other Macs of a pool reach this one at; listens only while a pool runs |
 | `--no-cache` | `MRUN_NO_CACHE` | off | Disable prefix reuse across requests |
 | `--speculation <auto\|off>` | `MRUN_SPECULATION` | `auto` | Speculative decoding: drafts from the prompt, keeps only what plain decoding would produce, while it is faster ([How it works](@/docs/how-it-works.md#speculative-decoding)) |
+| `--vision <auto\|on\|off>` | `MRUN_VISION` | auto | Load the vision tower: `auto` unless it alone leaves less than 64K tokens (or `--context`) |
 | `--reject-tool-images` | `MRUN_REJECT_TOOL_IMAGES` | off | Refuse images inside tool results instead of omitting them |
 | `--record <DIR>` | — | off | Record requests and responses as JSON lines into this directory |
 | `--detach` | `MRUN_DETACH` | off | Run in the background (stop it with `mrun stop`) |
@@ -115,15 +117,15 @@ refused with E040 before anything is pulled or started. See [Clients](@/docs/cli
 | --- | --- |
 | `mrun connect <CLIENT>` | `--write` writes the configuration (diff, confirmation, backup in `~/.mrun/backups/<client>/`, server check; not for `crush` and `zed`); `--restore` puts the newest backup back; `-y, --yes`; `--port <PORT>` (8484, `MRUN_PORT`). `--json` prints the client's state, the files changed (or that `--write` would change) and `blocks` (`path`, `note`, `text`) |
 | `mrun ps` | `--json` prints the status JSON; `--port`. `--sessions` prints the sessions of coding agents and chats with their rows and reuse (`--json`: `/mrun/sessions`). `-w, --watch` keeps polling: it redraws twice a second on a terminal and prints one JSON line per poll otherwise (or with `--json`); Ctrl-C ends it with exit 0 |
-| `mrun doctor` | `--port` |
+| `mrun doctor` | `--port`; `--report` prints the findings with chip, memory, macOS and models as Markdown for an issue |
 | `mrun stop` | `--port`. Stops a generating server too: new requests are refused, running ones get 5 seconds, then are cancelled. Nothing running is a note, exit 0 |
 | `mrun logs` | `-f, --follow` keeps printing new lines; `-n, --lines <N>` lines from the end (50) |
 | `mrun cache clear` | — |
 | `mrun pull <MODEL>` | `MODEL` is an alias or `org/name[@revision]`. `-y, --yes` downloads even when the model does not fit. `--json` prints one JSON line per event (`plan`, `progress`, `done`, `error`; `confirm` without `--yes`). `--dry-run` prints the plan (with `--json`: one `plan` event with size, `family` and fit) and exits 0 without downloading |
-| `mrun ls` | `--json`, with each model's `fit` (`fits`, `tight`, `wont_fit`), `verdict` and `recommended`; `--budget-gib` shows the verdicts for a smaller budget; `--context <TOKENS>` the memory each model needs for that context (rows carry `memory: {fixed, per_token}` and `budget`); `--port <PORT>` the server whose model is marked `serving` (8484, `MRUN_PORT`) |
+| `mrun ls` | `--json`, with each model's `fit` (`fits`, `tight`, `wont_fit`), `verdict` and `recommended`; `--budget-gib` shows the verdicts for a smaller budget; `--context <TOKENS>` the memory each model needs for that context (rows carry `memory: {fixed, per_token}` and `budget`); `--port <PORT>` the server whose model is marked `serving` (8484, `MRUN_PORT`); `--all` also lists aliases not pulled |
 | `mrun show <MODEL>`, `mrun verify <MODEL>` | `MODEL` is an alias or `org/name[@revision]` of a pulled model |
 | `mrun rm <MODEL>` | `-y, --yes` removes without asking. Removing the model the running server serves needs its own confirmation. The Hugging Face cache is not touched |
-| `mrun bench` | `--suite`, `--trace`, `--system`, `--compare`, `--reps`, `--out`; see [Benchmarks](@/docs/benchmarks.md) |
+| `mrun bench` | `--suite`, `--trace`, `--system`, `--compare`, `--reps`, `--out`; `bench trace` turns a recording into a trace; see [Benchmarks](@/docs/benchmarks.md) |
 | `mrun ui` | `--browser` opens it in the default browser; `--background` shows only the menu bar item (used by Open at Login); `--port <PORT>` the window's loopback port (8485, `MRUN_UI_PORT`; the next free one when taken); `--server-port <PORT>` the server it shows and starts (8484, `MRUN_PORT`). A second `mrun ui` brings the open window forward |
 | `mrun config path` | The config file mrun reads and whether it exists; works when the file does not parse |
 | `mrun config show` | `--json`. Every setting with its value and source (`default`, `file:<line>`, `env MRUN_*`), as valid TOML |
@@ -131,8 +133,8 @@ refused with E040 before anything is pulled or started. See [Clients](@/docs/cli
 
 ## `mrun cloud`
 
-Opt-in ([Remote GPU](@/docs/cloud.md)); the RunPod key comes from `RUNPOD_API_KEY` in the
-environment or `./.env`. Prompts and code are sent to RunPod.
+Opt-in ([Remote GPU](@/docs/cloud.md)); the RunPod key comes from `RUNPOD_API_KEY`, `./.env`
+or the Keychain (`mrun cloud login`). Prompts and code are sent to RunPod.
 
 | Command | Flags |
 | --- | --- |

@@ -73,6 +73,10 @@ jobs:
           if ! grep -q "^## \[${version}\]" CHANGELOG.md; then
             echo "CHANGELOG.md has no section for ${version}" >&2; exit 1
           fi
+          site="$(grep -m1 '^release = ' site/config.toml | cut -d'"' -f2)"
+          if [[ "${site}" != "${version%.*}" ]]; then
+            echo "site/config.toml release ${site} does not match ${version%.*}" >&2; exit 1
+          fi
           echo "version=${tag}" >> "${GITHUB_OUTPUT}"
           if [[ "${tag}" == *-rc.* ]]; then echo "prerelease=true" >> "${GITHUB_OUTPUT}"; else echo "prerelease=false" >> "${GITHUB_OUTPUT}"; fi
 

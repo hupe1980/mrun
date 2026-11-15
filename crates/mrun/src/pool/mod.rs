@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// The pool port's default.
-pub const DEFAULT_PORT: u16 = 8485;
+pub const DEFAULT_PORT: u16 = 8486;
 
 /// The header that names the member a relayed request came from, set by the host's pool port
 /// from the member's certificate.

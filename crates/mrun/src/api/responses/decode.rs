@@ -4,9 +4,9 @@
 use super::naming::TOOL_SEARCH;
 use crate::api::chat_completions::openai_effort;
 use crate::api::decode::{
-    DecodeOptions, arr, check_counts, function_tool, join_text_parts, obj, openai_tool_choice,
-    opt_bool, opt_f32, opt_str, opt_u32, raw_args, response_format, str_field, text_part,
-    tool_image,
+    DecodeOptions, arr, check_counts, function_tool, join_text_parts, obj, openai_image_url,
+    openai_tool_choice, openai_user_content, opt_bool, opt_f32, opt_str, opt_u32, raw_args,
+    response_format, str_field, text_part, tool_image,
 };
 use crate::api::model::{
     ApiError, ApiKind, AssistantPart, ChatRequest, Message, NAMESPACE_SEP, ToolDef, ToolResult,
@@ -194,7 +194,16 @@ fn decode_items(
                     }
                     "user" | "system" | "developer" => {
                         flush(&mut assistant, &mut request.messages);
-                        let text = content_text(&item["content"], &path, role == "user")?;
+                        let text = if role == "user" {
+                            openai_user_content(
+                                &item["content"],
+                                &path,
+                                options,
+                                &["input_text", "output_text", "text"],
+                            )?
+                        } else {
+                            content_text(&item["content"], &path, false)?
+                        };
                         if role == "user" {
                             request.messages.push(Message::User(text));
                         } else if request.messages.is_empty() {
@@ -360,7 +369,7 @@ fn content_text(content: &Value, path: &str, user: bool) -> Result<String, ApiEr
             Some("refusal") if !user => Some(part["refusal"].as_str().unwrap_or_default()),
             _ => text_part(part, &["input_text", "output_text", "text"]),
         },
-        "only text content is supported (the model has no vision input)",
+        "only text content is supported here (images go in user messages)",
     )
 }
 
@@ -384,8 +393,10 @@ fn output_content(
                         text.push_str(part["text"].as_str().unwrap_or_default());
                     }
                     Some("input_image") => {
-                        text.push_str(tool_image(options, &part_path)?);
-                        images += 1;
+                        let (part, omitted) =
+                            tool_image(options, openai_image_url(part), &part_path)?;
+                        text.push_str(&part);
+                        images += u32::from(omitted);
                     }
                     _ => {
                         return Err(ApiError::invalid(

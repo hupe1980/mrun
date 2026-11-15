@@ -51,6 +51,8 @@ export function cause(miss: Pick<Miss, "cause" | "message" | "divergence">): str
       return "a new conversation";
     case "gap":
       return "resumed from an earlier checkpoint";
+    case "image":
+      return at ? `another image at ${at}` : "another image";
     case "disabled":
       return "the cache is off";
     default:
@@ -274,6 +276,8 @@ export function hint(miss: Pick<Miss, "cause" | "message">): string {
       return "The cache is off (--no-cache). Start the server without it to reuse prompts.";
     case "gap":
       return "The model resumed from its nearest checkpoint; the tokens since then were computed again.";
+    case "image":
+      return "An image differs from the one sent before (other bytes, or text in its place); everything after it is computed again.";
     case "new":
       return "Nothing earlier matched: a new conversation, a subagent or a side request.";
     case "diverged":
