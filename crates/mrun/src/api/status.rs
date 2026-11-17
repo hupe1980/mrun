@@ -509,6 +509,16 @@ pub async fn clear_cache(State(state): State<ServerState>) -> Response {
     .into_response()
 }
 
+/// `dflash` when a drafter is loaded, `lookup` when only prompt lookup drafts, `null` when
+/// speculation is off (030).
+pub fn drafter_label(on: bool, drafter: Option<&mrun_engine::Drafter>) -> Value {
+    match (on, drafter) {
+        (false, _) => Value::Null,
+        (true, Some(_)) => "dflash".into(),
+        (true, None) => "lookup".into(),
+    }
+}
+
 /// The engine's backend (016 FR-008): nuvec, the numerics class from the engine, the version and
 /// kernel mode from this build (`null` without an engine).
 fn backend_json(numerics: &mrun_engine::engine::Numerics) -> Value {
@@ -570,8 +580,12 @@ pub async fn status(State(state): State<ServerState>) -> Response {
         body["queued"] = loaded.handle.queue().waiting().into();
         let total = |c: &std::sync::atomic::AtomicU64| c.load(std::sync::atomic::Ordering::Relaxed);
         let metrics = &state.tracker.metrics;
+        let on = loaded.handle.speculation();
         body["speculation"] = json!({
-            "mode": if loaded.handle.speculation() { "auto" } else { "off" },
+            "mode": if on { state.args.speculation.as_str() } else { "off" },
+            // Who drafts (030): the model's DFlash drafter, or prompt lookup.
+            "drafter": drafter_label(on, info.drafter.as_ref()),
+            "drafter_repo": info.drafter.as_ref().map(|d| d.name.as_str()),
             "drafted": total(&metrics.drafted),
             "accepted": total(&metrics.accepted),
             "passes": total(&metrics.passes),

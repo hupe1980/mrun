@@ -137,6 +137,11 @@ export function perPass(s: Speculation): string {
   return `${((s.accepted + s.passes) / s.passes).toFixed(1)} tokens per pass`;
 }
 
+/** Who drafted (030): "drafted by DFlash" or "drafted from the prompt". */
+export function draftedBy(drafter: string | null | undefined): string {
+  return drafter === "dflash" ? "drafted by DFlash" : "drafted from the prompt";
+}
+
 /** What speculative decoding kept: "412 of 530 drafted tokens kept". */
 export function keptWords(s: Speculation): string {
   return `${tokens(s.accepted)} of ${tokens(s.drafted)} drafted tokens kept`;

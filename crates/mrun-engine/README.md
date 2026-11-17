@@ -10,7 +10,7 @@ Apple Silicon).
 | Feature | What it adds |
 |---|---|
 | (none, the default here) | The contract, identity, budget and registry only. Builds anywhere in seconds; `mrun --no-default-features` and the Linux CI job use it. |
-| `engine` | The engine on [nuvec](https://crates.io/crates/nuvec) 0.12.0, a pure-Rust port of MLX. Off by default here; `mrun` turns it on. |
+| `engine` | The engine on [nuvec](https://crates.io/crates/nuvec) 0.14.0, a pure-Rust port of MLX. Off by default here; `mrun` turns it on. |
 | `test-support` | Tiny random-weight checkpoints for tests (with a backend). |
 
 ## Building with `engine`

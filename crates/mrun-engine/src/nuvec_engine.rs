@@ -37,6 +37,7 @@ use crate::engine::{
 use crate::identity::{self, IdentityError};
 use crate::ledger::Ledger;
 use crate::load::{self, Weights};
+use crate::models::dflash::{self, DFlash, DraftContext};
 use crate::models::{self, FamilyConfig, LoadError, Model, Part, Pos, Run};
 use crate::sample;
 use crate::state::{self, KvTail, LayerKv, LayerState, Recurrent, RecurrentState, SeqState};
@@ -69,6 +70,9 @@ pub struct LoadOptions {
     pub lanes: Option<usize>,
     /// Skip the vision tower even when the model has one (009 `--vision off`).
     pub no_vision: bool,
+    /// A DFlash drafter's directory to load beside the model (030); ignored for a part of a
+    /// pool.
+    pub drafter: Option<PathBuf>,
 }
 
 /// Where an injected failure strikes (test hook for FR-028/SC-012, [`NuvecEngine::fail_next`]).
@@ -131,6 +135,8 @@ struct StoredSegment {
     recurrent: Option<RecurrentState>,
     /// The token ids of the segment's positions (for the repetition penalty).
     ids: Vec<u32>,
+    /// The drafter's context for the segment's last positions (030).
+    draft: Option<DraftContext>,
 }
 
 /// A lane's own state while another lane is selected (011); the ledger parks its live fields.
@@ -141,6 +147,7 @@ struct LaneSlot {
     draws: u64,
     ids: Vec<u32>,
     verified: Vec<RecurrentState>,
+    draft: Option<DraftContext>,
 }
 
 /// A prefill chunk run a few layers at a time (011): the hidden state between layers, the next
@@ -158,6 +165,8 @@ struct InFlight {
     previous: Option<Array>,
     capacity: u32,
     start: Option<RecurrentState>,
+    /// The drafter's taps of the layers run so far (030).
+    taps: Vec<Array>,
 }
 
 pub struct NuvecEngine {
@@ -194,6 +203,11 @@ pub struct NuvecEngine {
     /// The vision tower (009) and its encoder scratch at the image cap.
     vision: Option<models::vision::VisionTower>,
     encoder: u64,
+    /// The DFlash drafter (030), the layers it reads (`tapped[k]`: layer `k`'s output) and the
+    /// selected lane's context (the other lanes' are parked with them).
+    drafter: Option<DFlash>,
+    tapped: Vec<bool>,
+    draft: Option<DraftContext>,
 }
 
 impl std::fmt::Debug for NuvecEngine {
@@ -214,6 +228,44 @@ fn key_at(seed: Option<u64>, draw: u64) -> tensor::Result<Array> {
             .map_or(0, |d| d.as_nanos() as u64)
     });
     tensor::random_key(base.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(draw))
+}
+
+/// A verify pass's logits rows, the recurrent states after each position, and the drafter's
+/// taps (030).
+type Verified = (Array, Vec<RecurrentState>, Vec<Array>);
+
+/// Feeds `features` of positions from `at` to `ctx` (030). The drafter only proposes, so a
+/// failure clears its context instead of failing the step.
+fn feed_drafter(
+    drafter: Option<&DFlash>,
+    ctx: Option<&mut DraftContext>,
+    features: tensor::Result<Array>,
+    at: u32,
+) {
+    let (Some(drafter), Some(ctx)) = (drafter, ctx) else {
+        return;
+    };
+    if features.and_then(|f| drafter.extend(ctx, &f, at)).is_err() {
+        ctx.clear();
+    }
+}
+
+/// The name of a drafter directory: `org/name` from the store's `org--name/<commit>` layout,
+/// else the directory's own name.
+fn drafter_name(dir: &Path) -> String {
+    let parent = dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .filter(|n| n.contains("--"));
+    match parent {
+        Some(repo) => repo.replacen("--", "/", 1),
+        None => dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("drafter")
+            .to_owned(),
+    }
 }
 
 fn backend(error: tensor::Error) -> EngineError {
@@ -316,6 +368,29 @@ impl NuvecEngine {
             }
             .into());
         }
+        // The drafter (030) reads the whole model's layers on this Mac.
+        let drafter = match options.drafter.as_deref().filter(|_| whole_model) {
+            Some(dir) => {
+                let target = dflash::Target {
+                    hidden: model.hidden(),
+                    vocab: info.vocab,
+                    layers,
+                };
+                Some((dir, DFlash::load(dir, target)?))
+            }
+            None => None,
+        };
+        info.drafter = drafter.as_ref().map(|(dir, d)| crate::engine::Drafter {
+            name: drafter_name(dir),
+            bytes: d.bytes(),
+            context_bytes: d.config().context_bytes(),
+            window: d.config().keep() + 1,
+        });
+        let drafter = drafter.map(|(_, d)| d);
+        let tapped: Vec<bool> = match &drafter {
+            Some(d) => (0..layers).map(|i| d.taps().contains(&i)).collect(),
+            None => Vec::new(),
+        };
         // The state's real dtype decides its size (a config's `torch_dtype` may disagree); a part
         // holds the state of its own layers only.
         let attention = part_kinds(&info.layer_kinds, part)
@@ -360,6 +435,9 @@ impl NuvecEngine {
             chunks: vec![None],
             vision,
             encoder,
+            draft: drafter.as_ref().map(DFlash::context),
+            drafter,
+            tapped,
         };
         let (weights, peak) = engine.warm_up()?;
         let scratch = |depth: u32| {
@@ -384,9 +462,12 @@ impl NuvecEngine {
             // two more recurrent states: one a pipelined step rolls back to, one its chunk does.
             let paused = u64::from(chunk_len(0)) * engine.model.hidden() as u64 * 4
                 + 2 * engine.info.recurrent_bytes;
+            // Each lane beyond the first also holds its drafter context (030); the warm-up's peak
+            // counted the first one.
+            let contexts = rows * engine.info.drafter.as_ref().map_or(0, |d| d.context_bytes);
             let scratch = |depth: u32| {
                 let row = engine.model.chunk_scratch(1, depth) + paused;
-                scratch(depth) + ((rows * row) as f64 * SCRATCH_MARGIN) as u64
+                scratch(depth) + ((rows * row) as f64 * SCRATCH_MARGIN) as u64 + contexts
             };
             budget::with_state_capacity(plan, weights, &scratch, &engine.info)
                 .map(|b| budget::with_lanes(b, lanes, &engine.info))
@@ -548,6 +629,12 @@ impl NuvecEngine {
         Ok(Some(checkpoints))
     }
 
+    /// The selected lane's drafter context: its first and end position (030 tests).
+    #[doc(hidden)]
+    pub fn draft_span(&self) -> Option<(u32, u32)> {
+        self.draft.as_ref().map(DraftContext::span)
+    }
+
     /// Runs `lanes` empty lanes whatever the capacity (tests: the tiny fixtures hold fewer than
     /// [`MIN_LANE_TOKENS`] positions).
     #[doc(hidden)]
@@ -686,6 +773,11 @@ impl NuvecEngine {
             .map_err(backend)?;
         let step = self.forward(0).map_err(backend)?;
         self.current_logits(&step).map_err(backend)?.eval()?;
+        // A draft (030): its kernels compile here and its scratch counts in the peak.
+        if self.drafter.is_some() {
+            let max = self.max_draft();
+            self.draft(0, max).map_err(backend)?;
+        }
         // The state is accounted for separately; the peak counts it once already.
         let state = self.ledger.allocated();
         self.reset();
@@ -713,6 +805,7 @@ impl NuvecEngine {
                     draws: 0,
                     ids: Vec::new(),
                     verified: Vec::new(),
+                    draft: self.drafter.as_ref().map(DFlash::context),
                 })
             })
             .collect();
@@ -730,6 +823,7 @@ impl NuvecEngine {
             draws: std::mem::replace(&mut self.draws, incoming.draws),
             ids: std::mem::replace(&mut self.ids, incoming.ids),
             verified: std::mem::replace(&mut self.verified, incoming.verified),
+            draft: std::mem::replace(&mut self.draft, incoming.draft),
         };
         self.parked[self.lane] = Some(outgoing);
         self.lane = lane;
@@ -775,12 +869,17 @@ impl NuvecEngine {
             .collect();
         let first = self.part.first;
         let model = &self.model;
+        let tapped = &self.tapped;
+        let mut taps = Vec::new();
         let out = tensor::with_row_exact(|| {
             let mut x = model.embed(ids)?;
             for k in 0..seqs[0].layers.len() {
                 let mut states: Vec<&mut LayerState> =
                     seqs.iter_mut().map(|s| &mut s.layers[k]).collect();
                 x = model.layer_lanes(first + k, &x, &mut states, &positions)?;
+                if tapped.get(k) == Some(&true) {
+                    taps.push(x.clone());
+                }
             }
             model.logits_rows(&x)
         })
@@ -788,7 +887,37 @@ impl NuvecEngine {
         for (&lane, seq) in lanes.iter().zip(seqs) {
             self.put_seq(lane, seq);
         }
+        if out.is_ok() && !taps.is_empty() {
+            let features = tensor::concatenate(&taps.iter().collect::<Vec<_>>(), 2);
+            for (b, (&lane, &at)) in lanes.iter().zip(offsets).enumerate() {
+                let row = features.as_ref().map_err(Clone::clone).and_then(|f| {
+                    let shape = f.shape();
+                    tensor::slice(f, &[0, b as i32, 0], &[1, b as i32 + 1, shape[2]])
+                });
+                let mut ctx = self.lane_draft(lane).take();
+                feed_drafter(self.drafter.as_ref(), ctx.as_mut(), row, at as u32);
+                *self.lane_draft(lane) = ctx;
+            }
+        }
         out
+    }
+
+    /// Lane `lane`'s drafter context slot (030).
+    fn lane_draft(&mut self, lane: usize) -> &mut Option<DraftContext> {
+        if lane == self.lane {
+            &mut self.draft
+        } else {
+            &mut self.parked[lane].as_mut().expect("a parked lane").draft
+        }
+    }
+
+    /// Feeds the selected lane's drafter the concatenated `taps` of positions from `at` (030).
+    fn feed_draft(&mut self, taps: Vec<Array>, at: u32) {
+        if taps.is_empty() {
+            return;
+        }
+        let features = tensor::concatenate(&taps.iter().collect::<Vec<_>>(), 2);
+        feed_drafter(self.drafter.as_ref(), self.draft.as_mut(), features, at);
     }
 
     /// Row `r` of `[B, vocab]` logits as `[1, vocab]`.
@@ -870,12 +999,18 @@ impl NuvecEngine {
     fn feed(&mut self, ids: &Array) -> Result<Array, EngineError> {
         let mut x = self.input(ids)?;
         let pos = self.text_pos();
+        let mut taps = Vec::new();
         for (k, layer) in self.seq.layers.iter_mut().enumerate() {
             x = self
                 .model
                 .layer(self.part.first + k, &x, layer, pos)
                 .map_err(backend)?;
+            if self.tapped.get(k) == Some(&true) {
+                taps.push(x.clone());
+            }
         }
+        // The drafter sees the position at once (a rolled-back step is cut on the next feed).
+        self.feed_draft(taps, pos.at as u32);
         // A step's hidden state goes round the ring: back to the head for the logits.
         match (&self.pipe, self.part.head) {
             (None, _) if !self.part.head => Ok(x),
@@ -1034,12 +1169,13 @@ impl NuvecEngine {
     /// The verify pass (006): `tokens` through every layer at `len()` as decode steps would run
     /// them, row by row exact; returns the logits of every row and the recurrent state after each
     /// position but the last (the last is live).
-    fn run_verify(&mut self, tokens: &[u32]) -> Result<(Array, Vec<RecurrentState>), EngineError> {
+    fn run_verify(&mut self, tokens: &[u32]) -> Result<Verified, EngineError> {
         let pos = self.text_pos();
         let ids = Array::from_u32(tokens, &[1, tokens.len() as i32]);
         tensor::with_row_exact(|| {
             let mut x = self.model.embed(&ids).map_err(backend)?;
             let mut states = vec![Vec::new(); tokens.len() - 1];
+            let mut taps = Vec::new();
             for (k, layer) in self.seq.layers.iter_mut().enumerate() {
                 let mut at = Vec::new();
                 x = self
@@ -1048,6 +1184,9 @@ impl NuvecEngine {
                     .map_err(backend)?;
                 for (state, r) in states.iter_mut().zip(at) {
                     state.push(r);
+                }
+                if self.tapped.get(k) == Some(&true) {
+                    taps.push(x.clone());
                 }
             }
             let rows = self.model.logits_rows(&x).map_err(backend)?;
@@ -1062,7 +1201,7 @@ impl NuvecEngine {
                     .flat_map(|r| r.conv.iter().chain(&r.state)),
             );
             tensor::eval(&outputs).map_err(backend)?;
-            Ok((rows, states))
+            Ok((rows, states, taps))
         })
     }
 
@@ -1467,7 +1606,8 @@ impl Engine for NuvecEngine {
             [&[last][..], draft].concat()
         };
         let at_pass = hybrid.then(|| self.seq.recurrent());
-        let (rows, captured) = match self.run_verify(&fed) {
+        let run_at = self.ledger.len();
+        let (rows, captured, taps) = match self.run_verify(&fed) {
             Ok(pass) => pass,
             Err(e) => {
                 if let Some(state) = at_pass {
@@ -1520,6 +1660,15 @@ impl Engine for NuvecEngine {
             self.ledger.advance(kept as u32 + 1);
         }
         self.record(start, &[&[last][..], &draft[..kept]].concat());
+        // The drafter sees the committed rows (a reused pending step's row is already in it).
+        let rows_kept = if reused { kept } else { kept + 1 };
+        if rows_kept > 0 && !taps.is_empty() {
+            let features = tensor::concatenate(&taps.iter().collect::<Vec<_>>(), 2).and_then(|f| {
+                let width = f.dim(2);
+                tensor::slice(&f, &[0, 0, 0], &[1, rows_kept as i32, width])
+            });
+            feed_drafter(self.drafter.as_ref(), self.draft.as_mut(), features, run_at);
+        }
         if let Some(at_pass) = at_pass {
             let live = self.seq.recurrent();
             let mut states = Vec::with_capacity(draft.len() + 2);
@@ -1533,8 +1682,10 @@ impl Engine for NuvecEngine {
             self.seq.set_recurrent(states[kept + 1].clone());
             self.verified = states;
         }
-        // Pipeline the final sample as `sample` does.
-        if self.ledger.has_room() && self.pipe.is_none() {
+        // Pipeline the final sample as `sample` does. With a drafter (030) the next round's
+        // verify takes it as its first row instead: a pass of its own would cost a whole step
+        // per round, and the drafter drafts from the positions before it.
+        if self.ledger.has_room() && self.pipe.is_none() && self.drafter.is_none() {
             let before = hybrid.then(|| self.seq.recurrent());
             let fed = self
                 .feed(&Array::from_u32(&[next], &[1, 1]))
@@ -1567,6 +1718,20 @@ impl Engine for NuvecEngine {
         let mut committed = draft[..kept].to_vec();
         committed.push(next);
         Ok(committed)
+    }
+
+    fn draft(&mut self, last: u32, max: u32) -> Result<Vec<u32>, EngineError> {
+        let (Some(drafter), Some(ctx)) = (&self.drafter, &self.draft) else {
+            return Ok(Vec::new());
+        };
+        // `last` sits at the pending step's position when it was fed already, else next.
+        let at = match self.ledger.pending() {
+            Some(p) if p.token == last => self.ledger.len() - 1,
+            _ => self.ledger.len(),
+        };
+        drafter
+            .draft(ctx, self.model.as_ref(), last, at, max as usize)
+            .map_err(backend)
     }
 
     fn top_logprobs(&mut self, step: &Step, n: usize) -> Result<Vec<(u32, f32)>, EngineError> {
@@ -1647,7 +1812,8 @@ impl Engine for NuvecEngine {
 
     fn detach_tail(&mut self, at: u32) -> Result<Segment, EngineError> {
         self.end_verify();
-        let plan = self.ledger.plan_detach(at)?;
+        let extra = self.draft.as_ref().map_or(0, |c| c.tail_bytes(at));
+        let plan = self.ledger.plan_detach_with(at, extra)?;
         self.roll_back();
         self.step = None;
         if self.strikes(FailPoint::Detach) {
@@ -1662,12 +1828,21 @@ impl Engine for NuvecEngine {
         let ids = self
             .ids
             .split_off((plan.start as usize).min(self.ids.len()));
+        // The drafter's context for the segment's positions goes with it; a failure only costs
+        // drafts.
+        let draft = self.draft.as_mut().map(|c| {
+            c.split_off(plan.start).unwrap_or_else(|_| {
+                c.clear();
+                c.split_off(plan.start).expect("an empty context splits")
+            })
+        });
         Ok(self.ledger.commit_detach(
             plan,
             StoredSegment {
                 tail,
                 recurrent,
                 ids,
+                draft,
             },
         ))
     }
@@ -1692,6 +1867,11 @@ impl Engine for NuvecEngine {
             self.seq.set_recurrent(recurrent);
         }
         self.record(plan.segment.start, &stored.ids);
+        if let (Some(ctx), Some(part)) = (self.draft.as_mut(), stored.draft)
+            && ctx.append(part).is_err()
+        {
+            ctx.clear();
+        }
         self.ledger.commit_attach(plan);
         Ok(())
     }
@@ -1704,6 +1884,9 @@ impl Engine for NuvecEngine {
 
     fn reset(&mut self) {
         self.end_verify();
+        if let Some(ctx) = self.draft.as_mut() {
+            ctx.clear();
+        }
         self.seq.clear();
         self.ledger.reset();
         self.step = None;
@@ -1770,6 +1953,7 @@ impl Engine for NuvecEngine {
             previous: None,
             capacity,
             start,
+            taps: Vec::new(),
         });
         Ok(())
     }
@@ -1829,6 +2013,9 @@ impl Engine for NuvecEngine {
                     return Err(e);
                 }
             };
+            if self.tapped.get(k) == Some(&true) {
+                chunk.taps.push(x.clone());
+            }
             chunk.x = x;
             chunk.next += 1;
             // Layer k is queued; wait for layer k − 1, then check for cancellation.
@@ -1865,6 +2052,7 @@ impl Engine for NuvecEngine {
         let start = self.ledger.len();
         self.ledger.advance(chunk.tokens.len() as u32);
         self.record(start, &chunk.tokens);
+        self.feed_draft(std::mem::take(&mut chunk.taps), start);
         tensor::memory::clear_cache();
         Ok(ChunkProgress::Done)
     }

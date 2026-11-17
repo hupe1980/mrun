@@ -119,14 +119,19 @@ const BACKOFF_FIRST: u32 = 16;
 const BACKOFF_MAX: u32 = 256;
 /// Weight of a new sample in the moving rates.
 const WEIGHT: f64 = 0.25;
+/// Speculative rounds a probe averages before it decides (acceptance comes in bursts).
+const PROBE: u32 = 4;
 
 /// Whether speculating pays on this request: moving rates (tokens per second) of plain steps
-/// and of speculative rounds. Drafting goes on while the speculative rate keeps up with the plain
-/// one; after a losing round it pauses for a back-off of plain steps that doubles each time.
+/// and of speculative rounds. Drafting starts once a plain step has run and goes on while the
+/// speculative rate, averaged over at least [`PROBE`] rounds, keeps up with the plain one; when it
+/// falls behind, drafting pauses for a back-off of plain steps that doubles each time.
 #[derive(Debug)]
 pub struct Pace {
     plain: Option<f64>,
     spec: Option<f64>,
+    /// Rounds in `spec` since the last probe began.
+    rounds: u32,
     skip: u32,
     backoff: u32,
 }
@@ -136,6 +141,7 @@ impl Default for Pace {
         Self {
             plain: None,
             spec: None,
+            rounds: 0,
             skip: 0,
             backoff: BACKOFF_FIRST,
         }
@@ -147,9 +153,10 @@ fn mix(average: Option<f64>, sample: f64) -> f64 {
 }
 
 impl Pace {
-    /// Whether to draft now.
+    /// Whether to draft now: once a plain step has set the rate to beat (030: a drafter
+    /// drafts every round, so no plain step would come otherwise), and not while paused.
     pub fn drafting(&self) -> bool {
-        self.skip == 0
+        self.skip == 0 && self.plain.is_some()
     }
 
     /// A plain step of `took`.
@@ -166,12 +173,16 @@ impl Pace {
             return;
         };
         self.spec = Some(mix(self.spec, rate));
-        if let (Some(plain), Some(spec)) = (self.plain, self.spec) {
+        self.rounds += 1;
+        if let (Some(plain), Some(spec)) = (self.plain, self.spec)
+            && self.rounds >= PROBE
+        {
             if spec < plain {
                 self.skip = self.backoff;
                 self.backoff = (self.backoff * 2).min(BACKOFF_MAX);
                 // Probe afresh after the pause.
                 self.spec = None;
+                self.rounds = 0;
             } else {
                 self.backoff = BACKOFF_FIRST;
             }
@@ -249,9 +260,21 @@ mod tests {
     #[test]
     fn the_pace_keeps_drafting_while_it_pays() {
         let mut pace = Pace::default();
-        assert!(pace.drafting(), "the first round probes");
+        assert!(!pace.drafting(), "a plain step first sets the rate to beat");
         pace.plain(20 * MS); // 50 tok/s
+        assert!(pace.drafting(), "then it probes");
         pace.round(3, 30 * MS); // 100 tok/s
+        assert!(pace.drafting());
+    }
+
+    #[test]
+    fn one_bad_round_in_a_probe_does_not_stop_it() {
+        let mut pace = Pace::default();
+        pace.plain(20 * MS); // 50 tok/s
+        pace.round(1, 40 * MS); // 25 tok/s
+        for _ in 1..PROBE {
+            pace.round(6, 40 * MS); // 150 tok/s
+        }
         assert!(pace.drafting());
     }
 
@@ -259,22 +282,30 @@ mod tests {
     fn a_losing_round_pauses_drafting_with_a_growing_backoff() {
         let mut pace = Pace::default();
         pace.plain(20 * MS); // 50 tok/s
-        pace.round(1, 40 * MS); // 25 tok/s: loses
+        let lose = |pace: &mut Pace| {
+            for _ in 0..PROBE {
+                assert!(pace.drafting(), "a probe takes {PROBE} rounds");
+                pace.round(1, 40 * MS); // 25 tok/s: loses
+            }
+        };
+        lose(&mut pace);
         assert!(!pace.drafting());
         for _ in 0..BACKOFF_FIRST {
             pace.plain(20 * MS);
         }
         assert!(pace.drafting(), "a probe after 16 plain steps");
-        pace.round(1, 40 * MS);
+        lose(&mut pace);
         for _ in 0..2 * BACKOFF_FIRST - 1 {
             pace.plain(20 * MS);
         }
         assert!(!pace.drafting(), "the second pause is 32 steps");
         pace.plain(20 * MS);
         assert!(pace.drafting());
-        // A winning round resets the back-off; the moving rate then needs several losing
+        // Winning rounds reset the back-off; the moving rate then needs several losing
         // rounds to fall below plain decoding's, and the next pause is 16 steps again.
-        pace.round(4, 40 * MS);
+        for _ in 0..PROBE {
+            pace.round(4, 40 * MS);
+        }
         let mut losing = 0;
         while pace.drafting() {
             pace.round(1, 40 * MS);

@@ -56,6 +56,29 @@ pub fn update(
     Ok((y, next))
 }
 
+/// [`update`] that also returns the state after every step, `[1, T, Hv, Dv, Dk]`, in one kernel
+/// (a verify's rollback points, 030).
+#[allow(clippy::too_many_arguments)]
+pub fn update_steps(
+    q: &Array,
+    k: &Array,
+    v: &Array,
+    a: &Array,
+    b: &Array,
+    a_log: &Array,
+    dt_bias: &Array,
+    state: Option<&Array>,
+) -> tensor::Result<(Array, Array)> {
+    let beta = tensor::sigmoid(b)?;
+    let g = activations::compute_g(a_log, a, dt_bias)?;
+    let (dk, dv, hv) = (k.dim(-1), v.dim(-1), v.dim(-2));
+    let state = match state {
+        Some(state) => state.clone(),
+        None => tensor::zeros(&[q.dim(0), hv, dv, dk], Dtype::Float32)?,
+    };
+    fast::gated_delta_steps(q, k, v, &g, &beta, &state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +154,50 @@ mod tests {
                 assert_eq!(bits(&state), bits(&s2), "{what}");
                 assert_eq!(bits(&part(&y, 0, 3)), bits(&y1), "{what}");
                 assert_eq!(bits(&part(&y, 3, 6)), bits(&y2), "{what}");
+            }
+        }
+    }
+    /// One `update_steps` over 8 positions equals 8 one-position `update`s bit for bit: every
+    /// output and every intermediate state (a verify's rows and rollback points, 030).
+    #[test]
+    fn steps_equal_one_position_updates() {
+        let devices: &[Device] = if tensor::metal_available() {
+            &[Device::Cpu, Device::Default]
+        } else {
+            &[Device::Cpu]
+        };
+        for &device in devices {
+            use_device(device);
+            for (dk, dtype) in [
+                (128, Dtype::Bfloat16),
+                (128, Dtype::Float32),
+                (64, Dtype::Float32),
+            ] {
+                let mut seed = 11;
+                let cast = |a: Array| tensor::astype(&a, dtype).unwrap();
+                let (t, hk, hv, dv) = (8, 2, 4, 32);
+                let q = cast(noise(&mut seed, &[1, t, hk, dk], 1.0));
+                let k = cast(noise(&mut seed, &[1, t, hk, dk], 1.0));
+                let (q, k) = normalize_qk(&q, &k, f64::from(dk).powf(-0.5), 1e-6).unwrap();
+                let v = cast(noise(&mut seed, &[1, t, hv, dv], 1.0));
+                let a = cast(noise(&mut seed, &[1, t, hv], 2.0));
+                let b = cast(noise(&mut seed, &[1, t, hv], 3.0));
+                let a_log = noise(&mut seed, &[hv], 1.0);
+                let dt_bias = cast(noise(&mut seed, &[hv], 1.0));
+                let start = noise(&mut seed, &[1, hv, dv, dk], 0.5);
+                let (y, tape) =
+                    update_steps(&q, &k, &v, &a, &b, &a_log, &dt_bias, Some(&start)).unwrap();
+                let what = format!("{device:?} dk {dk} {dtype:?}");
+                let mut state = start.clone();
+                for i in 0..t {
+                    let [q, k, v, a, b] = [&q, &k, &v, &a, &b].map(|x| part(x, i, i + 1));
+                    let (yi, next) =
+                        update(&q, &k, &v, &a, &b, &a_log, &dt_bias, Some(&state)).unwrap();
+                    assert_eq!(bits(&part(&y, i, i + 1)), bits(&yi), "{what} y {i}");
+                    let step = tensor::reshape(&part(&tape, i, i + 1), &[1, hv, dv, dk]).unwrap();
+                    assert_eq!(bits(&step), bits(&next), "{what} state {i}");
+                    state = next;
+                }
             }
         }
     }

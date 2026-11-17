@@ -526,6 +526,12 @@ impl<P, S, C> Ledger<P, S, C> {
     /// Plans moving `[at, confirmed_len())` into a segment. Layer by layer the live allocation
     /// shrinks as the tail moves out: only the net change has to fit. Changes nothing.
     pub fn plan_detach(&self, at: u32) -> Result<DetachPlan, EngineError> {
+        self.plan_detach_with(at, 0)
+    }
+
+    /// [`Ledger::plan_detach`] of a segment that also holds `extra` bytes (a drafter's context
+    /// for its positions, 030).
+    pub fn plan_detach_with(&self, at: u32, extra: u64) -> Result<DetachPlan, EngineError> {
         self.usable()?;
         let end = self.confirmed_len();
         if at > end {
@@ -537,7 +543,7 @@ impl<P, S, C> Ledger<P, S, C> {
         }
         self.check_recurrent()?;
         let capacity = align(at).min(self.capacity);
-        let bytes = u64::from(end - at) * self.kv_bytes_per_token + self.recurrent_bytes;
+        let bytes = u64::from(end - at) * self.kv_bytes_per_token + self.recurrent_bytes + extra;
         let after = self.live_bytes(capacity, false) + bytes;
         self.ensure_free(after.saturating_sub(self.current_live_bytes()))?;
         Ok(DetachPlan {

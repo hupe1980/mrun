@@ -462,13 +462,16 @@ pub fn remote_backend(status: &Value) -> Option<String> {
     Some(status["backend"].as_str().unwrap_or("remote").to_string())
 }
 
-/// mrun's speculation method from a `/mrun/status` body (006): `pld` (prompt lookup) when on,
-/// `none` when off or not reported.
+/// mrun's speculation method from a `/mrun/status` body (006, 030): `dflash` with its drafter,
+/// `pld` (prompt lookup) otherwise when on, `none` when off or not reported.
 pub fn speculation(status: &Value) -> String {
-    if status["speculation"]["mode"] == "auto" {
-        "pld".into()
-    } else {
+    let speculation = &status["speculation"];
+    if speculation["mode"] != "auto" {
         "none".into()
+    } else if speculation["drafter"] == "dflash" {
+        "dflash".into()
+    } else {
+        "pld".into()
     }
 }
 
@@ -595,6 +598,14 @@ mod tests {
         );
         assert_eq!(
             speculation(&serde_json::json!({"speculation": {"mode": "off"}})),
+            "none"
+        );
+        assert_eq!(
+            speculation(&serde_json::json!({"speculation": {"mode": "auto", "drafter": "dflash"}})),
+            "dflash"
+        );
+        assert_eq!(
+            speculation(&serde_json::json!({"speculation": {"mode": "off", "drafter": "dflash"}})),
             "none"
         );
         assert_eq!(speculation(&serde_json::json!({})), "none");

@@ -93,6 +93,15 @@ describe("Now (US1)", () => {
     const text = target.textContent ?? "";
     expect(text).toContain("3.1 tokens per pass, drafted from the prompt");
     expect(text).toContain("3.4 tokens per pass");
+    // The model's DFlash drafter (030) says so.
+    live.status = {
+      ...status,
+      finished: [one, { ...one, id: 6 }, { ...one, id: 7 }],
+      speculation: { mode: "auto", drafter: "dflash", drafted: 700, accepted: 350, passes: 100 },
+    };
+    const dflash = render(Now, { onAction: () => {} });
+    flushSync();
+    expect(dflash.target.textContent).toContain("4.5 tokens per pass, drafted by DFlash");
     live.status = { ...status, speculation: { mode: "off", drafted: 0, accepted: 0, passes: 0 } };
     const off = render(Now, { onAction: () => {} });
     flushSync();

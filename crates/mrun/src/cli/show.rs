@@ -38,6 +38,7 @@ pub fn render_json(ctx: &Ctx, manifest: &Manifest) -> serde_json::Value {
     serde_json::json!({
         "schema_version": 1,
         "vision": vision(manifest) != "no",
+        "drafter": drafter_json(ctx, manifest),
         "name": manifest.name(),
         "path": manifest.dir(&ctx.paths),
         "status": status.label(),
@@ -82,6 +83,9 @@ pub fn render(ctx: &Ctx, manifest: &Manifest) -> String {
     );
     line("syntax", manifest.syntax.clone());
     line("vision", vision(manifest));
+    if let Some(drafter) = drafter(ctx, manifest) {
+        line("drafter", drafter);
+    }
     line("license", manifest.license.clone());
     line("identity", manifest.identity.clone());
     line(
@@ -143,6 +147,39 @@ pub fn run(args: ShowArgs) -> u8 {
             print!("{}", render(&ctx, &manifest));
         }
     }))
+}
+
+/// `z-lab/Qwen3.5-9B-DFlash, 0.73 GB in memory` or `… not pulled: 'mrun pull qwen3.5'` (030);
+/// `None` when the model has no drafter.
+fn drafter(ctx: &Ctx, manifest: &hub::Manifest) -> Option<String> {
+    let alias = aliases::pinned(&manifest.repo, &manifest.revision)?;
+    let pin = alias.drafter.as_ref()?;
+    Some(match hub::drafter::pulled(&ctx.paths, alias) {
+        Some(_) => format!("{}, {} in memory", pin.repo, human_bytes(pin.memory(1))),
+        None => format!(
+            "{} not pulled ({}): 'mrun pull {}'",
+            pin.repo,
+            human_bytes(pin.size()),
+            alias.name
+        ),
+    })
+}
+
+fn drafter_json(ctx: &Ctx, manifest: &hub::Manifest) -> serde_json::Value {
+    let Some(alias) = aliases::pinned(&manifest.repo, &manifest.revision) else {
+        return serde_json::Value::Null;
+    };
+    let Some(pin) = alias.drafter.as_ref() else {
+        return serde_json::Value::Null;
+    };
+    serde_json::json!({
+        "repo": pin.repo,
+        "revision": pin.revision,
+        "license": pin.license,
+        "size": pin.size(),
+        "memory": pin.memory(1),
+        "pulled": hub::drafter::pulled(&ctx.paths, alias).is_some(),
+    })
 }
 
 /// Whether the model reads images (009) and what its tower weighs.

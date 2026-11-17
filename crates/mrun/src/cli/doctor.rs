@@ -105,6 +105,8 @@ pub struct Context {
     pub installed: Vec<Client>,
     /// Names of pulled models.
     pub pulled: Vec<String>,
+    /// Aliases whose DFlash drafter is pulled (030).
+    pub drafters: Vec<String>,
     /// Free bytes on the disk of mrun's model store (in `MRUN_HOME`).
     pub free_disk: Option<u64>,
     pub mrun_home: PathBuf,
@@ -146,6 +148,7 @@ pub fn checks(ctx: &Context) -> Vec<Finding> {
         Some(server_check(ctx)),
         Some(models(ctx)),
         Some(default_model(ctx)),
+        drafter(ctx),
         Some(disk(ctx)),
         Some(home(ctx)),
         claude(ctx),
@@ -425,6 +428,32 @@ fn default_model(ctx: &Context) -> Finding {
     )
 }
 
+/// The DFlash drafter of every pulled alias that has one (030): pulled, or how to get it.
+fn drafter(ctx: &Context) -> Option<Finding> {
+    let missing: Vec<&str> = aliases::ALIASES
+        .iter()
+        .filter(|alias| alias.drafter.is_some() && ctx.pulled.iter().any(|p| p == alias.name))
+        .map(|alias| alias.name)
+        .filter(|name| !ctx.drafters.iter().any(|d| d == name))
+        .collect();
+    if let Some(name) = missing.first() {
+        return Some(Finding::warn(
+            "drafter",
+            format!(
+                "{}: DFlash drafter not pulled; replies decode without it",
+                missing.join(", ")
+            ),
+            format!("mrun pull {name}"),
+        ));
+    }
+    (!ctx.drafters.is_empty()).then(|| {
+        Finding::pass(
+            "drafter",
+            format!("DFlash drafter pulled: {}", ctx.drafters.join(", ")),
+        )
+    })
+}
+
 fn disk(ctx: &Context) -> Finding {
     let Some(free) = ctx.free_disk else {
         return Finding::warn(
@@ -616,6 +645,11 @@ pub fn gather(port: u16) -> Context {
         pulled: hub::manifests(&paths)
             .iter()
             .map(|m| m.name().to_string())
+            .collect(),
+        drafters: aliases::ALIASES
+            .iter()
+            .filter(|alias| hub::drafter::pulled(&paths, alias).is_some())
+            .map(|alias| alias.name.to_string())
             .collect(),
         free_disk: existing_ancestor(&paths.mrun_home).and_then(hub::download::free_space),
         home_error: writable(&paths.mrun_home).err(),
@@ -995,6 +1029,7 @@ mod tests {
             settings_overrides: Vec::new(),
             installed: Client::ALL.to_vec(),
             pulled: vec!["qwen3.6".into()],
+            drafters: vec!["qwen3.6".into()],
             free_disk: Some(100_000_000_000),
             mrun_home: "/h/.mrun".into(),
             home_error: None,
@@ -1010,6 +1045,24 @@ mod tests {
 
     fn find(ctx: &Context, id: &str) -> Option<Finding> {
         checks(ctx).into_iter().find(|f| f.id == id)
+    }
+
+    #[test]
+    fn a_missing_drafter_says_how_to_get_it() {
+        assert!(find(&good(), "drafter").is_some_and(|f| f.message.contains("qwen3.6")));
+        let ctx = Context {
+            drafters: Vec::new(),
+            ..good()
+        };
+        let finding = find(&ctx, "drafter").unwrap();
+        assert!(finding.message.contains("not pulled"), "{finding:?}");
+        assert_eq!(finding.fix.as_deref(), Some("mrun pull qwen3.6"));
+        let none = Context {
+            pulled: Vec::new(),
+            drafters: Vec::new(),
+            ..good()
+        };
+        assert!(find(&none, "drafter").is_none());
     }
 
     #[test]

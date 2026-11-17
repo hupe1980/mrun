@@ -27,9 +27,9 @@ variables.
 | `mrun stop` | Stop a server started with `mrun serve --detach`, also while it generates; exits 0 when nothing runs |
 | `mrun logs` | Show the log of servers started in the background |
 | `mrun cache clear` | Drop all cached state of the running server, the live conversation included (after the running request) |
-| `mrun pull <MODEL>` | Download a model into mrun's store (or import it from the Hugging Face cache), verify it and record it |
+| `mrun pull <MODEL>` | Download a model into mrun's store (or import it from the Hugging Face cache), verify it and record it; an alias brings its DFlash drafter |
 | `mrun ls` | List pulled models and the aliases with family, size, fit, maximum context on this machine and status (`preview` for `qwen3.5`) |
-| `mrun show <MODEL>` | Show a pulled model: family, architecture, quantization, license, identity and fit |
+| `mrun show <MODEL>` | Show a pulled model: family, architecture, quantization, license, identity, fit and its drafter |
 | `mrun rm <MODEL>` | Remove a pulled model from mrun's store |
 | `mrun verify <MODEL>` | Re-hash every file of a pulled model against its manifest |
 | `mrun bench` | Measure mrun and, with `--compare`, other local servers; see [Benchmarks](@/docs/benchmarks.md) |
@@ -59,7 +59,7 @@ mrun run [OPTIONS] [MODEL]
 | `--think` | off | Let models that support it think before answering |
 | `--budget-gib <GIB>` | Metal's recommended working set | A lower memory budget (`MRUN_BUDGET_GIB`); a value above the automatic one is refused |
 | `--context <TOKENS>` | The most that fits | Memory for this many tokens of context, `64K` or `65536` (`MRUN_CONTEXT`); not with `--budget-gib` |
-| `--speculation <auto\|off>` | `auto` | Speculative decoding, as for `serve` |
+| `--speculation <auto\|dflash\|lookup\|off>` | `auto` | Speculative decoding, as for `serve` |
 | `--info` | off | Print the memory budget breakdown after loading and exit |
 | `--mcp <NAMES>` | — | Tool servers of `~/.mrun/mcp.json` the model may call (`workspace,fetch,browser,search`); each call asks `[y]es / [a]lways / [n]o` |
 
@@ -80,7 +80,7 @@ and `/exit` (or `/quit`, `/bye`) quits. Turns reuse the prefix cache.
 | `--lanes <N>` | `MRUN_LANES` | 2 when the context holds 32K tokens per lane, else 1 | Requests decoded at once, 1–4; refused with E042 when they do not fit. Always 1 in a pool |
 | `--pool-port <PORT>` | `MRUN_POOL_PORT` | 8486 | Port the other Macs of a pool reach this one at; listens only while a pool runs |
 | `--no-cache` | `MRUN_NO_CACHE` | off | Disable prefix reuse across requests |
-| `--speculation <auto\|off>` | `MRUN_SPECULATION` | `auto` | Speculative decoding: drafts from the prompt, keeps only what plain decoding would produce, while it is faster ([How it works](@/docs/how-it-works.md#speculative-decoding)) |
+| `--speculation <auto\|dflash\|lookup\|off>` | `MRUN_SPECULATION` | `auto` | Speculative decoding, the output unchanged ([How it works](@/docs/how-it-works.md#speculative-decoding)): `auto` uses the alias's DFlash drafter when it is pulled and leaves 64K tokens (or `--context`), else prompt lookup; `dflash` requires the drafter (E043); `lookup` loads none |
 | `--vision <auto\|on\|off>` | `MRUN_VISION` | auto | Load the vision tower: `auto` unless it alone leaves less than 64K tokens (or `--context`) |
 | `--reject-tool-images` | `MRUN_REJECT_TOOL_IMAGES` | off | Refuse images inside tool results instead of omitting them |
 | `--record <DIR>` | — | off | Record requests and responses as JSON lines into this directory |
@@ -184,6 +184,7 @@ error[E031]: model 'qwen3.7' not found
 | E040 | 4 | The model does not fit this Mac's memory budget, no alias fits, or its context is below the client's minimum (names the budget needed) |
 | E041 | 4 | Other apps or VMs hold the memory the model needs right now; names the largest and a smaller model that fits ([Memory](@/docs/memory.md#other-apps-and-vms)) |
 | E042 | 4 | The requested `--context` does not fit the budget or the model; names the memory it needs and the largest context that fits |
+| E043 | 3 | `--speculation dflash` without a pulled drafter that fits the model; `mrun pull <alias>` fetches it |
 | E050 | 6 | Network or download failure |
 | E051 | 6 | A gated model needs a Hugging Face token |
 | E052 | 6 | Not enough disk space for the download |

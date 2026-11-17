@@ -33,7 +33,8 @@ A line that says what mrun is doing, for example *qwen3.6 is ready*. Under it:
 
   The share of all prompt tokens reused appears at the top once a few requests have finished,
   and under it the tokens per pass of [speculative decoding](@/docs/how-it-works.md#speculative-decoding)
-  once it has drafted; a request that drafted shows its own.
+  and who drafted (the DFlash drafter or the prompt) once it has drafted; a request that drafted
+  shows its own.
 
 ## Chat
 

@@ -122,7 +122,12 @@ export interface Status {
   /** This Mac's pool (026). */
   pool?: PoolView["pool"];
   /** Speculative decoding (006): the mode and totals since the server started. */
-  speculation?: { mode: "auto" | "off" } & Speculation;
+  speculation?: {
+    mode: "auto" | "dflash" | "lookup" | "off";
+    /** Who drafts (030): the model's DFlash drafter, or prompt lookup; null when off. */
+    drafter?: "dflash" | "lookup" | null;
+    drafter_repo?: string | null;
+  } & Speculation;
 }
 
 /** What the server is doing, as one word the whole UI agrees on. */

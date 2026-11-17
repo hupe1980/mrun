@@ -160,10 +160,11 @@ with their state (`joined`, `downloading`, `loading`, `serving`, `lost`) and, on
 `message`, `unreused`), `generated`, `ttft_ms` (from arrival), `decode_tps`, `speculation` and
 `stop` (`end`, `stopped`, `error`). It holds counters only, never content.
 
-`speculation` is `{mode, drafted, accepted, passes}` at the top level (`mode`: `auto` or `off`;
-totals since start) and `{drafted, accepted, passes}` or `null` per running and finished request.
-`/metrics` counts `mrun_speculation_drafted_tokens_total`,
-`mrun_speculation_accepted_tokens_total` and `mrun_speculation_passes_total`.
+`speculation` is `{mode, drafter, drafter_repo, drafted, accepted, passes}` at the top level
+(`mode`: `auto`, `dflash`, `lookup` or `off`; `drafter`: `dflash`, `lookup` or `null` when off; totals since start)
+and `{drafted, accepted, passes}` or `null` per running and finished request. `/metrics` counts
+`mrun_speculation_drafted_tokens_total`, `mrun_speculation_accepted_tokens_total` and
+`mrun_speculation_passes_total`, and `mrun_speculation_drafter{drafter="dflash"|"lookup"}` is 1.
 
 `POST /mrun/cache/clear` waits for a running request, then drops every branch, checkpoint and
 the live conversation and answers `200` with `{"branches_dropped": N, "bytes_freed": B}`

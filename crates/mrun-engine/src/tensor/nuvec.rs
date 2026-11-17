@@ -637,6 +637,26 @@ impl Quantized {
     }
 }
 
+/// `w` `[out, in]` quantized affine with `group_size` and `bits` (MLX `mx.quantize`), evaluated
+/// so the float source can be dropped at once.
+pub fn quantize(w: &Array, group_size: i32, bits: i32) -> Result<Quantized> {
+    let q = ops::quantize(&w.0, nv::Quant::affine(group_size, bits));
+    let mut parts = vec![&q.weight, &q.scales];
+    parts.extend(q.biases.as_ref());
+    for part in parts {
+        part.eval()?;
+    }
+    Ok(Quantized(q))
+}
+
+impl Quantized {
+    /// Bytes of codes, scales and biases.
+    pub fn bytes(&self) -> u64 {
+        let size = |a: &nv::Array| a.size() as u64 * Dtype::from_raw(a.dtype()).size();
+        size(&self.0.weight) + size(&self.0.scales) + self.0.biases.as_ref().map_or(0, size)
+    }
+}
+
 /// `x @ wᵀ` with an affine-quantized `w`.
 pub fn quantized_matmul(x: &Array, w: &Quantized) -> Result<Array> {
     ok(x.0.quantized_matmul(&w.0, true))
@@ -806,6 +826,21 @@ pub mod fast {
         Ok((ok(y)?, ok(s)?))
     }
 
+    /// [`gated_delta`] in one kernel that also returns the state after every step, `[B, T, Hv,
+    /// Dv, Dk]` (the last is the final state); equal to `T` one-step calls bit for bit
+    /// (`models::gated_delta` tests).
+    pub fn gated_delta_steps(
+        q: &Array,
+        k: &Array,
+        v: &Array,
+        g: &Array,
+        beta: &Array,
+        state: &Array,
+    ) -> Result<(Array, Array)> {
+        let (y, s) = nv::fast::gated_delta_steps(&q.0, &k.0, &v.0, &g.0, &beta.0, &state.0);
+        Ok((ok(y)?, ok(s)?))
+    }
+
     /// Rotary embedding of the last `dims` features starting at position `offset`.
     pub fn rope(
         x: &Array,
@@ -873,6 +908,24 @@ pub mod fast {
         )
         .ok()?;
         Some(plan.scratch_bytes as u64)
+    }
+
+    /// `softmax(scale · q kᵀ) v` where the boolean `mask` `[L_q, L_k]` allows a key (small
+    /// blocks: a drafter's few query rows).
+    pub fn scaled_dot_product_attention_masked(
+        q: &Array,
+        k: &Array,
+        v: &Array,
+        scale: f32,
+        mask: &Array,
+    ) -> Result<Array> {
+        ok(nv::fast::scaled_dot_product_attention(
+            &q.0,
+            &k.0,
+            &v.0,
+            scale,
+            &nv::fast::AttentionOptions::default().mask(&mask.0),
+        ))
     }
 
     /// `softmax(scale · q kᵀ + mask) v`, its score buffer within `max_score_bytes`.

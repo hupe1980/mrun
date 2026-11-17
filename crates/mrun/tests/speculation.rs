@@ -82,7 +82,7 @@ async fn get(server: &RunningServer, path: &str) -> String {
 #[tokio::test]
 async fn a_copying_reply_is_the_same_and_counted() {
     let mut replies = Vec::new();
-    for speculation in [Speculation::Off, Speculation::Auto] {
+    for speculation in [Speculation::Off, Speculation::Auto, Speculation::Lookup] {
         let mut server = serve::start(args(speculation), copying()).await.unwrap();
         server.loaded().await.unwrap();
         replies.push(reply(&server).await);
@@ -93,12 +93,16 @@ async fn a_copying_reply_is_the_same_and_counted() {
         match speculation {
             Speculation::Off => {
                 assert_eq!(totals["mode"], "off");
+                assert!(totals["drafter"].is_null(), "{totals}");
                 assert_eq!(totals["drafted"], 0);
                 assert!(finished.is_null(), "{status}");
                 assert!(metrics.contains("mrun_speculation_drafted_tokens_total 0"));
             }
-            Speculation::Auto => {
-                assert_eq!(totals["mode"], "auto");
+            Speculation::Auto | Speculation::Lookup | Speculation::Dflash => {
+                assert_eq!(totals["mode"], speculation.as_str());
+                // The scripted engine has no drafter (030): prompt lookup drafts.
+                assert_eq!(totals["drafter"], "lookup", "{totals}");
+                assert!(metrics.contains("mrun_speculation_drafter{drafter=\"lookup\"} 1"));
                 let drafted = totals["drafted"].as_u64().unwrap();
                 let accepted = totals["accepted"].as_u64().unwrap();
                 assert!(drafted > 0 && accepted > 0, "{totals}");
@@ -115,5 +119,5 @@ async fn a_copying_reply_is_the_same_and_counted() {
         server.shutdown().await.unwrap();
     }
     assert_eq!(replies[0], REPLY);
-    assert_eq!(replies[1], replies[0]);
+    assert!(replies.iter().all(|r| *r == replies[0]));
 }

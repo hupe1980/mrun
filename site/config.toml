@@ -32,4 +32,4 @@ repo = "https://github.com/hupe1980/mrun"
 tagline = "Your agent's context, computed once."
 status = ""
 # The released minor version on the landing page; the release check compares it with Cargo.toml.
-release = "0.7"
+release = "0.8"

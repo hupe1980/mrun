@@ -20,8 +20,8 @@ local servers. What mrun claims:
 - A memory budget that holds.
 - An [independent benchmark](@/docs/benchmarks.md) that reports every cell, including losses.
 
-mrun has no on-disk cache that survives a restart. Its speculative decoding drafts from the
-prompt only, with no draft model, and runs only while a single request is running.
+mrun has no on-disk cache that survives a restart. Its speculative decoding runs only while a
+single request is decoding.
 
 ## Why not just use mlx-lm's server?
 
@@ -39,11 +39,11 @@ back as a prompt ([details](@/docs/prefix-cache.md#exactness)).
 
 ## Does speculative decoding change the output?
 
-No. mrun drafts the next tokens from earlier text in the prompt and the reply (a file the reply
-rewrites, an `Edit`'s old text), checks up to 7 at once on the GPU, and keeps a drafted token only
-where plain decoding would have produced it, sampled with the same random draw. Replies are
-identical with `--speculation off`; it only saves passes. It drafts only while that is measured
-faster on the request, so a reply that copies nothing decodes plainly.
+No. mrun drafts the next tokens with the alias's DFlash drafter or from earlier text in the prompt
+and the reply, checks up to 7 at once on the GPU, and keeps a drafted token only where plain
+decoding would have produced it, sampled with the same random draw. Replies are identical with
+`--speculation off`; it only saves passes. It drafts only while that is measured faster on the
+request.
 
 ## Which models are supported?
 

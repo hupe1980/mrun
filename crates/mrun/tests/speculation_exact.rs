@@ -4,7 +4,8 @@
 //!
 //! Ignored by default (a few minutes on the GPU; the models must be pulled):
 //! `cargo test -p mrun --test speculation_exact -- --ignored` (`MRUN_SPEC_EXACT_MODELS`,
-//! comma-separated, default `qwen3.5,qwen3.6`).
+//! comma-separated, default `qwen3.5,qwen3.6`). A pulled DFlash drafter (030) drafts as `serve`
+//! would load it; `MRUN_SPEC_DRAFTER=off` measures prompt lookup alone.
 
 #![cfg(feature = "engine")]
 
@@ -43,11 +44,22 @@ const COPY: &str =
 /// A request that copies nothing.
 const PROSE: &str =
     "Write a short story about a lighthouse keeper who finds a message in a bottle.";
+/// New code (030 SC-002): nothing to copy from the prompt.
+const CODE: &str = "Write a Rust function that parses an ISO 8601 date like 2026-11-16 into a \
+     (year, month, day) tuple, returning None on invalid input, with unit tests.";
+/// The prompt of nuvec's `scripts/bench_dflash.py` (030 SC-003: nuvec-lm 0.14.0 keeps 200 of 388
+/// drafts on `qwen3.5` with this drafter).
+const NUVEC: &str = "Natalia sold clips to 48 of her friends in April, and then she sold half as \
+     many clips in May. How many clips did Natalia sell altogether in April and May?";
 
 fn prompt(model: &mrun::cli::model::OpenModel, ask: &str) -> Vec<u32> {
-    let source = if ask == COPY { SOURCE } else { "" };
+    let body = if ask == COPY {
+        format!("{ask}\n\n{SOURCE}")
+    } else {
+        ask.to_string()
+    };
     let text = format!(
-        "<|im_start|>user\n{ask}\n\n{source}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        "<|im_start|>user\n{body}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
     );
     model.tokenizer.encode(&text).unwrap()
 }
@@ -60,14 +72,28 @@ struct Loaded {
 
 fn load(name: &str) -> Loaded {
     let model = mrun::cli::model::open(name).expect("pull the model first");
+    let choice = match std::env::var("MRUN_SPEC_DRAFTER").as_deref() {
+        Ok("off") => mrun::cli::serve::Speculation::Lookup,
+        _ => mrun::cli::serve::Speculation::Auto,
+    };
+    let drafter = mrun::cli::model::drafter(&model, choice, false, None, None).unwrap();
     let factory = mrun::cli::model::engine_factory(
         &model,
         mrun::cli::model::overrides(None, None),
         Some(1),
         false,
+        drafter,
     );
     let engine = factory().unwrap();
     assert!(engine.max_draft() > 0, "{name}: the GPU verifies");
+    eprintln!(
+        "{name}: drafter {}",
+        engine
+            .info()
+            .drafter
+            .as_ref()
+            .map_or("none (prompt lookup)", |d| d.name.as_str())
+    );
     Loaded { model, engine }
 }
 
@@ -110,9 +136,14 @@ fn speculation_decodes_what_plain_decoding_decodes() {
     };
     for name in names.split(',') {
         let mut loaded = load(name);
-        for sampling in [Sampling::GREEDY, seeded] {
-            let (plain, _) = decode(&mut loaded, COPY, sampling, false);
-            let (spec, stats) = decode(&mut loaded, COPY, sampling, true);
+        for (sampling, ask) in [
+            (Sampling::GREEDY, COPY),
+            (seeded, COPY),
+            (Sampling::GREEDY, CODE),
+            (seeded, CODE),
+        ] {
+            let (plain, _) = decode(&mut loaded, ask, sampling, false);
+            let (spec, stats) = decode(&mut loaded, ask, sampling, true);
             assert_eq!(spec, plain, "{name} ({sampling:?})");
             assert!(stats.accepted > 0, "{name}: nothing kept ({stats:?})");
             eprintln!(
@@ -131,8 +162,8 @@ fn speculation_decodes_what_plain_decoding_decodes() {
     }
 }
 
-/// SC-002/SC-003: decode speed with speculation off and on, on a copy-heavy and a prose reply
-/// (median of 3 runs each; the same tokens either way).
+/// SC-002/SC-003: decode speed with speculation off and on, per reply kind. Plain and speculative
+/// runs alternate and the median of their ratios is reported, so a shared Mac's load drifts out.
 #[test]
 #[ignore = "about 10 minutes on the GPU with pulled models (the Mac must be idle)"]
 fn speculation_speed() {
@@ -140,28 +171,25 @@ fn speculation_speed() {
         std::env::var("MRUN_SPEC_EXACT_MODELS").unwrap_or_else(|_| "qwen3.5,qwen3.6".into());
     for name in names.split(',') {
         let mut loaded = load(name);
-        for (label, ask) in [("copy", COPY), ("prose", PROSE)] {
-            let mut median = |speculate: bool| {
-                let mut runs: Vec<(f64, Vec<u32>, Stats)> = (0..3)
-                    .map(|_| {
-                        let (tokens, stats) = decode(&mut loaded, ask, Sampling::GREEDY, speculate);
-                        (stats.decode_tps, tokens, stats)
-                    })
-                    .collect();
-                runs.sort_by(|a, b| a.0.total_cmp(&b.0));
-                runs.swap_remove(1)
-            };
-            let (plain, plain_tokens, _) = median(false);
-            let (spec, spec_tokens, stats) = median(true);
-            assert_eq!(spec_tokens, plain_tokens, "{name} {label}");
+        for (label, ask) in [
+            ("copy", COPY),
+            ("code", CODE),
+            ("prose", PROSE),
+            ("nuvec", NUVEC),
+        ] {
+            let mut runs = Vec::new();
+            for _ in 0..5 {
+                let (plain_tokens, plain) = decode(&mut loaded, ask, Sampling::GREEDY, false);
+                let (spec_tokens, spec) = decode(&mut loaded, ask, Sampling::GREEDY, true);
+                assert_eq!(spec_tokens, plain_tokens, "{name} {label}");
+                runs.push((spec.decode_tps / plain.decode_tps, plain.decode_tps, spec));
+            }
+            runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (ratio, plain, stats) = runs.swap_remove(2);
             eprintln!(
-                "{name} {label}: {} tokens, plain {plain:.1} tok/s, speculative {spec:.1} tok/s \
-                 ({:.2}×), {} of {} drafted kept in {} passes",
-                spec_tokens.len(),
-                spec / plain,
-                stats.accepted,
-                stats.drafted,
-                stats.passes
+                "{name} {label}: {} tokens, {ratio:.2}× (plain {plain:.1} tok/s), {} of {} \
+                 drafted kept in {} passes",
+                stats.generated_tokens, stats.accepted, stats.drafted, stats.passes
             );
         }
     }

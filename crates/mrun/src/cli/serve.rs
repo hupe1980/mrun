@@ -86,8 +86,10 @@ pub struct ServeArgs {
     /// cloud up` starts it). The pod token comes from `MRUN_RELAY_TOKEN`.
     #[arg(long, value_name = "AGENT_URL")]
     pub relay: Option<String>,
-    /// Speculative decoding (006): `auto` drafts from the prompt and keeps only what plain
-    /// decoding would produce, while that is faster; `off` decodes one token per pass.
+    /// Speculative decoding (006, 030): drafts are checked so the output stays what plain
+    /// decoding produces. `auto` uses the model's DFlash drafter when it is pulled and fits,
+    /// else prompt lookup; `dflash` requires the drafter; `lookup` drafts from the prompt only;
+    /// `off` decodes one token per pass.
     #[arg(long, env = "MRUN_SPECULATION", value_enum, default_value_t = Speculation::Auto)]
     pub speculation: Speculation,
     /// Port other Macs of a pool reach this one at (026); listens only while a pool runs.
@@ -110,21 +112,32 @@ pub struct ServeArgs {
 /// `--speculation` of `serve` and `run` (006).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
 pub enum Speculation {
-    /// Draft and verify while it is measured faster.
+    /// The drafter when it is pulled and fits, else prompt lookup; each while it is faster.
     #[default]
     Auto,
+    /// The model's DFlash drafter (030); refused without one.
+    Dflash,
+    /// Prompt lookup only (006): no drafter loaded.
+    Lookup,
     /// One token per pass.
     Off,
 }
 
 impl Speculation {
     pub fn on(self) -> bool {
-        self == Self::Auto
+        self != Self::Off
+    }
+
+    /// Whether a drafter is loaded for this choice (when there is one).
+    pub fn drafts_with_model(self) -> bool {
+        matches!(self, Self::Auto | Self::Dflash)
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
+            Self::Dflash => "dflash",
+            Self::Lookup => "lookup",
             Self::Off => "off",
         }
     }
@@ -416,12 +429,21 @@ pub fn load_named(args: &ServeArgs, name: &str) -> Result<Loaded, CliError> {
     let model = crate::cli::model::open(&name)?;
     crate::cli::model::preflight(&model, args.context)?;
     let overrides = crate::cli::model::overrides(args.budget_gib, args.context);
+    let vision = crate::cli::model::vision(&model, &args.vision, args.budget_gib, args.context);
+    let drafter = crate::cli::model::drafter(
+        &model,
+        args.speculation,
+        vision,
+        args.budget_gib,
+        args.context,
+    )?;
     let handle = EngineHandle::spawn_with(
         crate::cli::model::engine_factory(
             &model,
             overrides,
             args.lanes.map(|n| n as usize),
-            crate::cli::model::vision(&model, &args.vision, args.budget_gib, args.context),
+            vision,
+            drafter,
         ),
         model.tokenizer.clone(),
         crate::runtime::handle::DEFAULT_STALL_TIMEOUT,
@@ -675,8 +697,13 @@ pub fn run(args: ServeArgs, factory: EngineFactory) -> u8 {
                 } else {
                     ""
                 };
+                let drafts = if loaded.handle.info().drafter.is_some() {
+                    ", DFlash drafter"
+                } else {
+                    ""
+                };
                 eprintln!(
-                    "mrun serving {} ({}, {syntax}, {lanes} {}{images}) at {url}",
+                    "mrun serving {} ({}, {syntax}, {lanes} {}{images}{drafts}) at {url}",
                     loaded.model_id,
                     loaded.handle.info().family,
                     if lanes == 1 { "lane" } else { "lanes" }

@@ -185,6 +185,21 @@ pub struct ModelInfo {
     pub time_len: TimeLen,
     /// The vision tower when the engine reads images (009).
     pub vision: Option<Vision>,
+    /// The DFlash drafter when one is loaded (030).
+    pub drafter: Option<Drafter>,
+}
+
+/// A loaded DFlash drafter (030).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Drafter {
+    /// Its directory's name (`z-lab--Qwen3.5-9B-DFlash` in the store) or the repo.
+    pub name: String,
+    /// Bytes of its weights as loaded (quantized).
+    pub bytes: u64,
+    /// Bytes of one lane's context at its largest.
+    pub context_bytes: u64,
+    /// Context positions it keeps.
+    pub window: u32,
 }
 
 /// The most image tokens one image takes (009 FR-002): larger images are scaled down to it.
@@ -715,6 +730,12 @@ pub trait Engine {
             });
         }
         verify_serially(self, last, draft, sampling)
+    }
+    /// Up to `max` draft tokens after `last` from the engine's own drafter (030), for
+    /// [`Engine::verify`]; empty when it has none or nothing to draft from. Never changes state.
+    fn draft(&mut self, last: u32, max: u32) -> Result<Vec<u32>, EngineError> {
+        let _ = (last, max);
+        Ok(Vec::new())
     }
     /// Top-`n` log-probabilities of `step`, most likely first.
     fn top_logprobs(&mut self, step: &Step, n: usize) -> Result<Vec<(u32, f32)>, EngineError>;

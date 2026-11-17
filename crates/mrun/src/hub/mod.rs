@@ -8,6 +8,7 @@
 
 pub mod aliases;
 pub mod download;
+pub mod drafter;
 pub mod progress;
 pub mod realign;
 pub mod verify;

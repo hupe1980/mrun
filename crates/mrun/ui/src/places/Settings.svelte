@@ -3,7 +3,7 @@
   // settings are shown with their source and edited in config.toml, which mrun never writes
   // (D066): one settings source for the CLI and the UI.
   import { ask } from "../lib/ask.svelte";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import Symbol from "../components/Symbol.svelte";
   import { host } from "../lib/api";
   import { live } from "../lib/live.svelte";
@@ -19,8 +19,13 @@
   let pane = $state<Pane>((initial as Pane) ?? "general");
   let toolNote = $state<string | null>(null);
   let toolBusy = $state(false);
+  // Once per opening of the pane: the list it loads must not re-run this (no servers at all
+  // would load forever).
   $effect(() => {
-    if (pane === "tools" && !tools.list?.servers.some((s) => s.tools || s.error)) void tools.load("start");
+    if (pane !== "tools") return;
+    untrack(() => {
+      if (!tools.list?.servers.some((s) => s.tools || s.error)) void tools.load("start");
+    });
   });
 
   /** Runs an add or import and says what changed. */
@@ -104,6 +109,10 @@
       // Lanes (011): what the running server chose when left automatic.
       const lanes = live.status?.lanes?.configured;
       if (key === "serve.lanes" && s.value == null && lanes) value = `automatic (${lanes})`;
+      // Speculation (030): who drafts on the running server.
+      const drafter = live.status?.speculation?.drafter;
+      if (key === "serve.speculation" && drafter)
+        value = `${value} (${drafter === "dflash" ? "DFlash drafter" : "prompt lookup"})`;
       return [{ key, label, value, source: sourceWords(s.source) }];
     }),
   );

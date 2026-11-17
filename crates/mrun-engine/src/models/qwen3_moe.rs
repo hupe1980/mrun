@@ -199,6 +199,10 @@ impl Model for Qwen3Moe {
         common::head(&self.head)?.rows(x)
     }
 
+    fn head_raw(&self, x: &Array) -> tensor::Result<Array> {
+        common::head(&self.head)?.raw(x)
+    }
+
     fn hidden(&self) -> i32 {
         self.hidden as i32
     }

@@ -189,7 +189,14 @@ fn spawn(model: &OpenModel, args: &RunArgs) -> Result<EngineHandle, String> {
     let overrides = model::overrides(args.budget_gib, args.context);
     crate::cli::info(&format!("loading {} …", model.name));
     let handle = EngineHandle::spawn(
-        model::engine_factory(model, overrides, Some(1), true),
+        model::engine_factory(
+            model,
+            overrides,
+            Some(1),
+            true,
+            model::drafter(model, args.speculation, true, args.budget_gib, args.context)
+                .map_err(|e| e.to_string())?,
+        ),
         model.tokenizer.clone(),
         crate::runtime::handle::DEFAULT_STALL_TIMEOUT,
     )?;

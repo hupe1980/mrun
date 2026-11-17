@@ -149,6 +149,106 @@ pub fn write_tiny_qwen3_with(dir: &Path, shape: TinyQwen3) -> Result<(), tensor:
     tensor::save_safetensors(&dir.join("model.safetensors"), &refs)
 }
 
+/// Writes a tiny random-weight DFlash drafter (030) for a target of width `hidden` and `vocab`
+/// rows that reads the target layers `taps`: 2 layers (a sliding one with window 8, then full
+/// attention), f32, mask token `vocab − 1`.
+pub fn write_tiny_dflash(
+    dir: &Path,
+    hidden: i32,
+    vocab: u32,
+    taps: &[usize],
+) -> Result<(), tensor::Error> {
+    const HEADS: i32 = 4;
+    const KV_HEADS: i32 = 2;
+    const HEAD_DIM: i32 = 8;
+    const FFN: i32 = 48;
+    const LAYERS: usize = 2;
+    let config = serde_json::json!({
+        "architectures": ["DFlashDraftModel"],
+        "model_type": "qwen3",
+        "hidden_size": hidden,
+        "intermediate_size": FFN,
+        "num_hidden_layers": LAYERS,
+        "num_attention_heads": HEADS,
+        "num_key_value_heads": KV_HEADS,
+        "head_dim": HEAD_DIM,
+        "vocab_size": vocab,
+        "rms_norm_eps": 1e-6,
+        "layer_types": ["sliding_attention", "full_attention"],
+        "sliding_window": 8,
+        "rope_parameters": {"rope_theta": 10_000_000, "rope_type": "default"},
+        "dflash_config": {"block_size": 16, "mask_token_id": vocab - 1, "target_layer_ids": taps}
+    });
+    std::fs::write(dir.join("config.json"), config.to_string())
+        .map_err(|e| tensor::Error(e.to_string()))?;
+    let mut seed = 23;
+    let mut tensors: Vec<(String, Array)> = Vec::new();
+    let mut dense = |name: String, rows: i32, cols: i32, seed: &mut u64| {
+        let data = noise(seed, (rows * cols) as usize, 0.3);
+        tensors.push((name, Array::from_f32(&data, &[rows, cols])));
+    };
+    dense(
+        "fc.weight".into(),
+        hidden,
+        hidden * taps.len() as i32,
+        &mut seed,
+    );
+    for i in 0..LAYERS {
+        let p = format!("layers.{i}");
+        let inner = HEADS * HEAD_DIM;
+        let kv = KV_HEADS * HEAD_DIM;
+        dense(
+            format!("{p}.self_attn.q_proj.weight"),
+            inner,
+            hidden,
+            &mut seed,
+        );
+        dense(
+            format!("{p}.self_attn.k_proj.weight"),
+            kv,
+            hidden,
+            &mut seed,
+        );
+        dense(
+            format!("{p}.self_attn.v_proj.weight"),
+            kv,
+            hidden,
+            &mut seed,
+        );
+        dense(
+            format!("{p}.self_attn.o_proj.weight"),
+            hidden,
+            inner,
+            &mut seed,
+        );
+        dense(format!("{p}.mlp.gate_proj.weight"), FFN, hidden, &mut seed);
+        dense(format!("{p}.mlp.up_proj.weight"), FFN, hidden, &mut seed);
+        dense(format!("{p}.mlp.down_proj.weight"), hidden, FFN, &mut seed);
+    }
+    let mut norm = |name: String, n: i32, seed: &mut u64| {
+        let data: Vec<f32> = noise(seed, n as usize, 0.1)
+            .iter()
+            .map(|x| 1.0 + x)
+            .collect();
+        tensors.push((name, Array::from_f32(&data, &[n])));
+    };
+    for i in 0..LAYERS {
+        let p = format!("layers.{i}");
+        norm(format!("{p}.input_layernorm.weight"), hidden, &mut seed);
+        norm(
+            format!("{p}.post_attention_layernorm.weight"),
+            hidden,
+            &mut seed,
+        );
+        norm(format!("{p}.self_attn.q_norm.weight"), HEAD_DIM, &mut seed);
+        norm(format!("{p}.self_attn.k_norm.weight"), HEAD_DIM, &mut seed);
+    }
+    norm("hidden_norm.weight".into(), hidden, &mut seed);
+    norm("norm.weight".into(), hidden, &mut seed);
+    let refs: Vec<(&str, &Array)> = tensors.iter().map(|(n, a)| (n.as_str(), a)).collect();
+    tensor::save_safetensors(&dir.join("model.safetensors"), &refs)
+}
+
 /// A committed tiny checkpoint of this crate (`tests/fixtures/<name>`).
 pub fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

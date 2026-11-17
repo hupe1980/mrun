@@ -20,6 +20,10 @@ use std::time::{Duration, Instant};
 
 /// Decode tokens between memory-pressure checks.
 const PRESSURE_EVERY: u32 = 64;
+/// Tokens the engine's drafter (030) drafts per round: verifying up to 4 rows reads each weight
+/// once with row-exact products, so 3 drafts cost little more than a step (measured on Qwen3.5-9B
+/// against 5 and 7). A full prompt-lookup draft still takes the engine's maximum.
+const MODEL_DRAFT: usize = 3;
 /// Loop guard (D033): the last `LOOP_WINDOW` output tokens repeating with a period up to
 /// `LOOP_MAX_PERIOD` (two full copies at least: a looping paragraph, not only a phrase) end
 /// generation.
@@ -764,13 +768,25 @@ impl<'a> Job<'a> {
         // Room for the draft: the output limit counts every committed token, the final sample
         // included.
         let room = (d.limit - self.turn.stats.generated_tokens).saturating_sub(1) as usize;
+        let last = d.last;
         let draft = match &d.drafter {
             Some(drafter) if solo && d.mask.is_none() && d.pace.drafting() => {
-                drafter.draft(d.max_draft.min(room))
+                // A full prompt-lookup match costs nothing to make; otherwise the engine's own
+                // drafter (030), when it has one. Either way the verify keeps only what plain
+                // decoding samples.
+                let n = d.max_draft.min(room);
+                let lookup = drafter.draft(n);
+                if lookup.len() >= n || engine.info().drafter.is_none() {
+                    lookup
+                } else {
+                    match engine.draft(last, n.min(MODEL_DRAFT) as u32) {
+                        Ok(model) if !model.is_empty() => model,
+                        _ => lookup,
+                    }
+                }
             }
             _ => Vec::new(),
         };
-        let last = d.last;
         let committed = if draft.is_empty() {
             let step = with_memory(engine, store, &mut self.turn.captured, |engine| {
                 engine.forward(last)

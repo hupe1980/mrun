@@ -30,6 +30,8 @@ pub struct OpenModel {
     /// sizes) and the fields the budget reads, for the pre-load check (D062).
     pub weights: u64,
     pub info: ModelInfo,
+    /// The alias pinned to this model's repo and commit (its drafter, 030).
+    pub alias: Option<&'static hub::aliases::Alias>,
 }
 
 impl OpenModel {
@@ -146,15 +148,25 @@ fn open_with(name: &str, stage: bool) -> Result<OpenModel, CliError> {
             &identity.value[..12]
         );
     }
+    let checkpoint = family.model_info(String::new(), Vec::new());
     let (weights, info) = match &manifest {
-        Some(manifest) => (manifest.loaded_weights(), manifest.model_info()),
-        None => (
-            safetensors_bytes(&dir),
-            family.model_info(String::new(), Vec::new()),
+        // The manifest's sizes, with the checkpoint's vocabulary and layers (the drafter's check).
+        Some(manifest) => (
+            manifest.loaded_weights(),
+            ModelInfo {
+                vocab: checkpoint.vocab,
+                layer_kinds: checkpoint.layer_kinds,
+                ..manifest.model_info()
+            },
         ),
+        None => (safetensors_bytes(&dir), checkpoint),
     };
+    let alias = manifest
+        .as_ref()
+        .and_then(|m| hub::aliases::pinned(&m.repo, &m.revision));
     Ok(OpenModel {
         name: name.to_string(),
+        alias,
         weights,
         info,
         defaults: generation_defaults(&dir),
@@ -208,13 +220,7 @@ pub fn vision(
             let Some(device) = hub::device_memory() else {
                 return true;
             };
-            #[cfg(feature = "engine")]
-            let tower = mrun_engine::load::weights_bytes_of(
-                &model.dir,
-                mrun_engine::models::vision::is_vision_tensor,
-            );
-            #[cfg(not(feature = "engine"))]
-            let tower = 0;
+            let tower = tower_bytes(model);
             if tower == 0 {
                 return true;
             }
@@ -224,6 +230,112 @@ pub fn vision(
                 |weights: u64| hub::fit_with(device, budget, weights, &model.info).max_context;
             room(model.weights) >= need || room(model.weights.saturating_sub(tower)) < need
         }
+    }
+}
+
+/// The DFlash drafter to load for `--speculation` `choice` (030): `auto` takes the alias's
+/// pulled drafter when it fits the target and the model still leaves 64K tokens (or `context`)
+/// with it, and says why when it does not; `dflash` requires it (E043); `lookup` and `off` load
+/// none.
+pub fn drafter(
+    model: &OpenModel,
+    choice: crate::cli::serve::Speculation,
+    vision: bool,
+    budget_gib: Option<u64>,
+    context: Option<u32>,
+) -> Result<Option<std::path::PathBuf>, CliError> {
+    if !choice.drafts_with_model() {
+        return Ok(None);
+    }
+    let required = choice == crate::cli::serve::Speculation::Dflash;
+    let refuse = |message: String| {
+        if required {
+            Err(CliError::new(Code::NoDrafter, message))
+        } else {
+            Ok(None)
+        }
+    };
+    let Some((alias, pin)) = model
+        .alias
+        .and_then(|alias| alias.drafter.as_ref().map(|pin| (alias, pin)))
+    else {
+        return refuse(format!("{} has no DFlash drafter", model.name));
+    };
+    let ctx = Ctx::from_env();
+    let Some(dir) = hub::drafter::pulled(&ctx.paths, alias) else {
+        let message = format!(
+            "{}'s drafter is not pulled: 'mrun pull {}' fetches it ({}): faster replies, the same output",
+            alias.name,
+            alias.name,
+            hub::human_bytes(pin.size())
+        );
+        if !required {
+            eprintln!("note: {message}");
+        }
+        return refuse(message);
+    };
+    if let Err(reason) = fits_target(&dir, &model.info) {
+        let message = format!(
+            "the drafter in {} does not fit {}: {reason}",
+            dir.display(),
+            model.name
+        );
+        if !required {
+            eprintln!("note: {message}; decoding without it");
+        }
+        return refuse(message);
+    }
+    if !required && let Some(device) = hub::device_memory() {
+        let tower = if vision { 0 } else { tower_bytes(model) };
+        let base = model.weights.saturating_sub(tower);
+        let budget = budget_gib.map(|g| g << 30);
+        let need = context.unwrap_or(hub::aliases::DEFAULT_MIN_CONTEXT);
+        let room = |weights: u64| hub::fit_with(device, budget, weights, &model.info).max_context;
+        if room(base) >= need && room(base + pin.memory(1)) < need {
+            eprintln!(
+                "note: the DFlash drafter is left out: with it {} would hold fewer than {need} tokens of context",
+                model.name
+            );
+            return Ok(None);
+        }
+    }
+    Ok(Some(dir))
+}
+
+/// Whether the drafter in `dir` reads this target: a DFlash config of its vocabulary and layers
+/// (the engine checks the width when it loads it).
+fn fits_target(dir: &std::path::Path, info: &ModelInfo) -> Result<(), String> {
+    #[cfg(feature = "engine")]
+    {
+        let config: Value = std::fs::read_to_string(dir.join("config.json"))
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))?;
+        let c = mrun_engine::models::dflash::DFlashConfig::from_config(&config)
+            .map_err(|e| e.to_string())?;
+        if c.vocab != info.vocab {
+            return Err(format!("vocabulary {} against {}", c.vocab, info.vocab));
+        }
+        let layers = info.layer_kinds.len();
+        if let Some(i) = c.target_layer_ids.iter().find(|&&i| i >= layers) {
+            return Err(format!("it reads layer {i} of {layers}"));
+        }
+    }
+    #[cfg(not(feature = "engine"))]
+    let _ = (dir, info);
+    Ok(())
+}
+
+/// Bytes of `model`'s vision tower (009), 0 without one.
+fn tower_bytes(model: &OpenModel) -> u64 {
+    #[cfg(feature = "engine")]
+    return mrun_engine::load::weights_bytes_of(
+        &model.dir,
+        mrun_engine::models::vision::is_vision_tensor,
+    );
+    #[cfg(not(feature = "engine"))]
+    {
+        let _ = model;
+        0
     }
 }
 
@@ -300,6 +412,7 @@ pub fn engine_factory(
     overrides: Overrides,
     lanes: Option<usize>,
     vision: bool,
+    drafter: Option<std::path::PathBuf>,
 ) -> impl FnOnce() -> Result<mrun_engine::NuvecEngine, String> + Send + 'static {
     let dir = model.dir.clone();
     let name = model.name.clone();
@@ -312,6 +425,7 @@ pub fn engine_factory(
         part: None,
         lanes,
         no_vision: !vision,
+        drafter,
     };
     move || {
         use mrun_engine::NuvecLoadError;

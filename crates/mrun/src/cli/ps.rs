@@ -347,16 +347,21 @@ fn render_remote(status: &Value) -> String {
 }
 
 /// Human-readable status.
-/// `speculation  auto · 412 of 530 drafted tokens accepted (78 %) · 2.9 tokens per pass` (006);
-/// `None` when off or nothing was drafted yet.
+/// `speculation  DFlash · 412 of 530 drafted tokens accepted (78 %) · 2.9 tokens per pass` (006,
+/// 030); `None` when off or nothing was drafted yet.
 fn speculation_line(speculation: &Value) -> Option<String> {
     let n = |key: &str| speculation[key].as_u64().unwrap_or(0);
     let (drafted, accepted, passes) = (n("drafted"), n("accepted"), n("passes"));
     if speculation["mode"] != "auto" || drafted == 0 || passes == 0 {
         return None;
     }
+    let drafter = if speculation["drafter"] == "dflash" {
+        "DFlash"
+    } else {
+        "prompt lookup"
+    };
     Some(format!(
-        "speculation  auto · {accepted} of {drafted} drafted tokens accepted ({:.0} %) · {:.1} tokens per pass\n",
+        "speculation  {drafter} · {accepted} of {drafted} drafted tokens accepted ({:.0} %) · {:.1} tokens per pass\n",
         100.0 * accepted as f64 / drafted as f64,
         (accepted + passes) as f64 / passes as f64,
     ))
@@ -576,7 +581,12 @@ mod tests {
         let line = |s: Value| speculation_line(&s);
         assert_eq!(
             line(json!({"mode": "auto", "drafted": 530, "accepted": 412, "passes": 200})).unwrap(),
-            "speculation  auto · 412 of 530 drafted tokens accepted (78 %) · 3.1 tokens per pass\n"
+            "speculation  prompt lookup · 412 of 530 drafted tokens accepted (78 %) · 3.1 tokens per pass\n"
+        );
+        assert_eq!(
+            line(json!({"mode": "auto", "drafter": "dflash", "drafted": 70, "accepted": 35, "passes": 10}))
+                .unwrap(),
+            "speculation  DFlash · 35 of 70 drafted tokens accepted (50 %) · 4.5 tokens per pass\n"
         );
         assert_eq!(
             line(json!({"mode": "auto", "drafted": 0, "accepted": 0, "passes": 0})),
