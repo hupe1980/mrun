@@ -44,6 +44,35 @@ pub struct Alias {
     /// Set when the alias is below the client gate (D061): `ls`, `show`, `launch` and `doctor`
     /// say so.
     pub preview: Option<Preview>,
+    /// The DFlash drafter pulled with the alias (030).
+    pub drafter: Option<Drafter>,
+}
+
+/// A DFlash drafter pinned to an alias (030): pulled with it, loaded beside it.
+#[derive(Debug)]
+pub struct Drafter {
+    pub repo: &'static str,
+    /// Pinned commit (40 lowercase hex).
+    pub revision: &'static str,
+    pub license: &'static str,
+    /// `(path, bytes, blob id)` of every file `pull` fetches.
+    pub files: &'static [(&'static str, u64, &'static str)],
+    /// Bytes of its weights once quantized at load (affine 4-bit, group 64: 0.28 of bf16).
+    pub weights: u64,
+    /// Bytes of one lane's context (its window plus slack, every layer's K and V).
+    pub context: u64,
+}
+
+impl Drafter {
+    /// Bytes `pull` downloads.
+    pub fn size(&self) -> u64 {
+        self.files.iter().map(|&(_, size, _)| size).sum()
+    }
+
+    /// Memory it takes beside the model with `lanes` lanes.
+    pub fn memory(&self, lanes: u64) -> u64 {
+        self.weights + lanes * self.context
+    }
 }
 
 /// Why an alias ships as a preview, with the client gate's measured figures (002 SC-001).
@@ -72,9 +101,9 @@ impl Alias {
         self.weights
     }
 
-    /// Fit on `device` from the pinned numbers (nothing needs to be downloaded).
-    /// As `mrun serve --vision auto` loads it (009): with the vision tower when that still leaves
-    /// [`DEFAULT_MIN_CONTEXT`] tokens, else without.
+    /// Fit on `device` from the pinned numbers (nothing needs to be downloaded), as `mrun serve`
+    /// loads it with `--vision auto` (009) and `--speculation auto` (030): the vision tower, then
+    /// the drafter, each only while the model still leaves [`DEFAULT_MIN_CONTEXT`] tokens.
     pub fn fit(&self, device: DeviceMemory) -> Fit {
         let info = model_info(
             self.family,
@@ -82,15 +111,20 @@ impl Alias {
             self.recurrent_bytes,
             self.max_position,
         );
-        let with = fit(device, self.loaded_weights(), &info);
-        if with.max_context >= DEFAULT_MIN_CONTEXT || self.vision == 0 {
-            return with;
-        }
-        let without = fit(device, self.weights - self.vision, &info);
-        if without.max_context >= DEFAULT_MIN_CONTEXT {
-            without
+        let room = |weights: u64| fit(device, weights, &info);
+        let base = if self.vision == 0
+            || room(self.weights).max_context >= DEFAULT_MIN_CONTEXT
+            || room(self.weights - self.vision).max_context < DEFAULT_MIN_CONTEXT
+        {
+            self.weights
         } else {
-            with
+            self.weights - self.vision
+        };
+        match &self.drafter {
+            Some(d) if room(base + d.memory(1)).max_context >= DEFAULT_MIN_CONTEXT => {
+                room(base + d.memory(1))
+            }
+            _ => room(base),
         }
     }
 
@@ -145,6 +179,27 @@ pub static ALIASES: [Alias; 2] = [
         scratch_per_position: 16_908,
         // Client gate on the M4 Pro (002 research, D061): every failure was a
         // 600 s timeout of a stuck session (the 9B model loops or rambles), not an mrun fault.
+        drafter: Some(Drafter {
+            repo: "z-lab/Qwen3.5-9B-DFlash",
+            revision: "5fc3b3d474760f18c516db87d84c37edbfd3ede6",
+            license: "apache-2.0",
+            files: &[
+                (
+                    "config.json",
+                    1_222,
+                    "1978b9d9484d7e336501619874b89717aa207593",
+                ),
+                (
+                    "model.safetensors",
+                    2_583_816_465,
+                    "0a42274b32554f48de1faa0d42824e9c2ceda649c30ae0a731cddf410dd698c7",
+                ),
+            ],
+            // 1.29 B parameters at 4.5 bits.
+            weights: 726_698_381,
+            // (4,095 + 256) positions × 6 layers × K and V × 8 heads × 128 × bf16.
+            context: 106_930_176,
+        }),
         preview: Some(Preview {
             reason: "below the client gate",
             gate: &[
@@ -209,6 +264,27 @@ pub static ALIASES: [Alias; 2] = [
         scratch: 55 * GIB / 10,
         scratch_per_position: 0,
         preview: None,
+        drafter: Some(Drafter {
+            repo: "z-lab/Qwen3.6-35B-A3B-DFlash",
+            revision: "f181eece646affea2c38b2765f1aaa01a9734ccd",
+            license: "apache-2.0",
+            files: &[
+                (
+                    "config.json",
+                    1_222,
+                    "e632a69fbbeb4dcf3562be37ee28967be84adb6b",
+                ),
+                (
+                    "model.safetensors",
+                    771_819_674,
+                    "1fb90ef50a32bfb8dd2abfe601dd3608d6d5b59dc342820a98830f76f8cd72b7",
+                ),
+            ],
+            // 0.39 B parameters at 4.5 bits.
+            weights: 217_074_283,
+            // (4,095 + 256) positions × 6 layers × K and V × 8 heads × 128 × bf16.
+            context: 106_930_176,
+        }),
         blobs: &[
             (
                 "chat_template.jinja",

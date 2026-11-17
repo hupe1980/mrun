@@ -25,10 +25,10 @@ pub mod testing;
 
 pub use engine::{
     ALIGN, BACKEND, Binding, CHUNK_ALIGN, CancelToken, Checkpoint, CheckpointId, ChunkProgress,
-    Engine, EngineError, GROWTH, ImageSpan, LAYER_TIME_BOUND_MS, LayerKind, MAX_IMAGE_TOKENS,
-    MAX_LANES, MIN_IMAGE_TOKENS, MIN_LANE_TOKENS, MemoryBudget, ModelInfo, Numerics, Pick, Pixels,
-    Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, Vision, align, chunk_len,
-    grown_capacity, verify_serially,
+    Drafter, Engine, EngineError, GROWTH, ImageSpan, LAYER_TIME_BOUND_MS, LayerKind,
+    MAX_IMAGE_TOKENS, MAX_LANES, MIN_IMAGE_TOKENS, MIN_LANE_TOKENS, MemoryBudget, ModelInfo,
+    Numerics, Pick, Pixels, Sampling, Segment, SegmentId, Step, TimeLen, TokenMask, Vision, align,
+    chunk_len, grown_capacity, verify_serially,
 };
 #[cfg(feature = "engine")]
 pub use models::Part;

@@ -34,17 +34,20 @@ request can start, at every measured depth.
 plan, bit for bit, for Qwen3-8B (21 cases) and Qwen3.5-9B (10 cases). Qwen3.6-35B-A3B is not
 covered.
 
-**Speculative decoding** (`--speculation auto` against `off`, median of 3, greedy, 2026-11-10):
+**Speculative decoding** (`auto` against `off`, greedy, median ratio of 5 alternating pairs,
+2026-11-17, under a load average of 20–70 from other work on the Mac):
 
-| Model | Reply | Plain | Speculative | Drafted tokens kept |
-| --- | --- | --- | --- | --- |
-| Qwen3.5-9B 4-bit | Code rewritten with one rename (99 tokens) | 46.0 tok/s | 82.4 tok/s (1.79×) | 80 of 89 |
-| Qwen3.5-9B 4-bit | A short story (256 tokens) | 47.4 tok/s | 47.3 tok/s (1.00×) | 1 of 4, then off |
-| Qwen3.6-35B-A3B 4-bit | Code rewritten with one rename (99 tokens) | 89.0 tok/s | 127.0 tok/s (1.43×) | 80 of 89 |
-| Qwen3.6-35B-A3B 4-bit | A short story (256 tokens) | 89.7 tok/s | 88.0 tok/s (0.98×) | 0 of 4, then off |
+| Reply | Qwen3.5-9B, DFlash | Qwen3.5-9B, prompt lookup only | Qwen3.6-35B-A3B, DFlash |
+| --- | --- | --- | --- |
+| Code rewritten with one rename (99 tokens) | 1.77× | 1.42× | 1.63× |
+| New code: a date parser with tests (256 tokens) | 1.07× | 0.95× | 1.03× |
+| A short story (256 tokens) | 0.97× | 0.96× | 0.94× |
+| A short math answer (190–226 tokens) | 1.52× | 0.94× | 1.23× |
 
-The tokens are identical with and without it, greedy and seeded. The MoE model gains less: a
-verify pass reads the experts every drafted token routes to.
+The tokens are identical with and without it, greedy and seeded. mrun's verify is row-exact, so
+each verified row costs more than in a verify that may round differently: DFlash proposes 3 tokens
+per round, where nuvec-lm's inexact verify reaches 2.05× with 7 on the math answer. The MoE model
+gains less: a verify pass reads the experts every drafted token routes to.
 
 **Parallel lanes** (Qwen3.6-35B-A3B 4-bit, `--lanes 2` against `--lanes 1`, 2026-11-15):
 

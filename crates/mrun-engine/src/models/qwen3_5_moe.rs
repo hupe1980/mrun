@@ -203,7 +203,46 @@ impl GatedDeltaNet {
         let k = heads(&parts[1], c.k_heads, c.k_dim)?;
         let v = heads(&parts[2], c.v_heads, c.v_dim)?;
         let (q, k) = gated_delta::normalize_qk(&q, &k, f64::from(c.k_dim).powf(-0.5), 1e-6)?;
-        let (out, next) = if splits.is_empty() {
+        let every = rows && splits.len() + 1 == len as usize;
+        let (out, next) = if every {
+            // A verify (030): one kernel for every position, the state after each kept. Copies,
+            // so the per-step tape is freed once the pass is evaluated.
+            let (out, tape) = gated_delta::update_steps(
+                &q,
+                &k,
+                &v,
+                a,
+                b,
+                &self.a_log,
+                &self.dt_bias,
+                state.state.as_ref(),
+            )?;
+            let at = |t: i32| -> tensor::Result<Array> {
+                let shape = tape.shape();
+                let mut start = vec![0; shape.len()];
+                let mut stop = shape.clone();
+                start[1] = t;
+                stop[1] = t + 1;
+                let one = tensor::slice(&tape, &start, &stop)?;
+                tensor::deep_copy(&tensor::reshape(
+                    &one,
+                    &[shape[0], shape[2], shape[3], shape[4]],
+                )?)
+            };
+            for &to in splits {
+                // The conv tail at `to`: the K − 1 inputs before it.
+                let conv = tensor::deep_copy(&tensor::slice(
+                    &conv_input,
+                    &[0, to, 0],
+                    &[1, to + c.kernel - 1, c.conv_dim()],
+                )?)?;
+                captured.push(Recurrent {
+                    conv: Some(conv),
+                    state: Some(at(to - 1)?),
+                });
+            }
+            (out, at(len - 1)?)
+        } else if splits.is_empty() {
             gated_delta::update(
                 &q,
                 &k,
@@ -663,6 +702,10 @@ impl Model for Qwen3_5Moe {
 
     fn logits_rows(&self, x: &Array) -> tensor::Result<Array> {
         common::head(&self.head)?.rows(x)
+    }
+
+    fn head_raw(&self, x: &Array) -> tensor::Result<Array> {
+        common::head(&self.head)?.raw(x)
     }
 
     fn hidden(&self) -> i32 {

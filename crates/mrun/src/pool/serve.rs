@@ -221,8 +221,9 @@ fn load_part(model: &OpenModel, part: Part) -> Result<NuvecEngine, String> {
         calibration: mrun_engine::calibration::default_path(),
         part: Some(part),
         lanes: Some(1),
-        // Images need the whole model on one Mac (009).
+        // Images need the whole model on one Mac (009), and so does a drafter (030).
         no_vision: true,
+        drafter: None,
     };
     if std::env::var_os("MRUN_POOL_CPU").is_some() {
         options.cpu = true;

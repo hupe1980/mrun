@@ -113,7 +113,7 @@
         <li><strong>The prefix cache finds the longest identical token prefix</strong> and moves its state back in — or simply continues the live conversation.</li>
         <li><strong>Only the new tokens are processed</strong> on the Apple GPU, with nuvec's Metal kernels, in chunks that can be interrupted.</li>
         <li><strong>Side requests run beside it</strong>: up to four requests decode in one pass, a title streaming while the main turn reads its prompt.</li>
-        <li><strong>Replies that copy decode faster</strong>: tokens drafted from the prompt are checked several at a time and kept only where the model would have written them.</li>
+        <li><strong>Replies decode several tokens per pass</strong>: a small DFlash drafter, or the prompt itself, proposes the next tokens; one pass checks them and keeps only what the model would have written.</li>
         <li><strong>Tokens stream back</strong> with exact usage numbers and a cache report.</li>
       </ol>
       <a class="link-arrow" href="{{ get_url(path='@/docs/how-it-works.md') }}">Read the design overview</a>

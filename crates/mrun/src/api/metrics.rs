@@ -336,6 +336,17 @@ pub fn render(state: &ServerState) -> String {
     ] {
         out.single(name, "counter", help, value.load(Ordering::Relaxed));
     }
+    let info = loaded.handle.info();
+    if let serde_json::Value::String(drafter) =
+        crate::api::status::drafter_label(loaded.handle.speculation(), info.drafter.as_ref())
+    {
+        out.family(
+            "mrun_speculation_drafter",
+            "gauge",
+            "Who drafts for speculative decoding: dflash (the model's drafter) or lookup.",
+        );
+        out.sample("mrun_speculation_drafter", &[("drafter", &drafter)], 1);
+    }
     out.single(
         "mrun_cache_unreused_tokens_total",
         "counter",

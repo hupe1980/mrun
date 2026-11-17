@@ -59,6 +59,28 @@ pub fn remove(paths: &Paths, manifest: &Manifest) -> Result<u64, CliError> {
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(failed(error)),
         _ => {}
     }
+    // The alias's DFlash drafter (030) goes with the model.
+    let drafted = crate::hub::aliases::pinned(&manifest.repo, &manifest.revision)
+        .and_then(|alias| alias.drafter.as_ref())
+        .map(|drafter| crate::hub::drafter::dir(paths, drafter))
+        .filter(|dir| dir.is_dir());
+    let mut freed = freed;
+    if let Some(dir) = drafted {
+        freed += fs::read_dir(&dir)
+            .map(|e| {
+                e.flatten()
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0);
+        let _ = fs::remove_dir_all(&dir);
+        if let Some(repo) = dir.parent()
+            && fs::read_dir(repo).is_ok_and(|mut entries| entries.next().is_none())
+        {
+            let _ = fs::remove_dir(repo);
+        }
+    }
     Ok(freed)
 }
 

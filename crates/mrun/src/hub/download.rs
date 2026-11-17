@@ -69,11 +69,18 @@ struct Lfs {
 
 /// A file to fetch: its blob name is its hash (LFS sha256 or git blob id).
 #[derive(Debug)]
-struct RemoteFile {
-    path: String,
-    size: u64,
-    blob: String,
-    lfs: bool,
+pub(super) struct RemoteFile {
+    pub path: String,
+    pub size: u64,
+    pub blob: String,
+    pub lfs: bool,
+}
+
+/// What a download fetches from: the commit, and what the user pulled (for the retry hint).
+#[derive(Clone, Copy)]
+pub(super) struct Fetch<'a> {
+    pub commit: &'a str,
+    pub target: &'a str,
 }
 
 /// Files a model needs, top level only (the identity function reads the same set).
@@ -86,14 +93,14 @@ fn wanted(path: &str) -> bool {
             || path == "tokenizer.model")
 }
 
-struct Remote<'a> {
+pub(super) struct Remote<'a> {
     client: reqwest::Client,
     hub: &'a Hub,
     repo: &'a str,
 }
 
 impl<'a> Remote<'a> {
-    fn new(hub: &'a Hub, repo: &'a str) -> Result<Self, CliError> {
+    pub(super) fn new(hub: &'a Hub, repo: &'a str) -> Result<Self, CliError> {
         let client = reqwest::Client::builder()
             .user_agent(concat!("mrun/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(CONNECT_TIMEOUT)
@@ -279,6 +286,9 @@ pub async fn pull_with(
             "already pulled: {} is intact — run 'mrun launch'",
             manifest.name()
         ));
+        if let Some(alias) = plan.alias {
+            super::drafter::pull(ctx, alias, report).await?;
+        }
         done(&manifest, true);
         return Ok(manifest);
     }
@@ -313,6 +323,9 @@ pub async fn pull_with(
         }
     }
     let manifest = download_with(ctx, &plan, report).await?;
+    if let Some(alias) = plan.alias {
+        super::drafter::pull(ctx, alias, report).await?;
+    }
     report.note(&format!(
         "ready: {} ({} files verified) — run 'mrun launch'",
         manifest.name(),
@@ -735,7 +748,11 @@ pub async fn download_with(ctx: &Ctx, plan: &Plan, report: &Report) -> Result<Ma
             let _ = fs::remove_file(incomplete(&dir, file));
             place(&source, &target, file, false)?
         } else {
-            fetch_with_retries(&remote, plan, file, &dir, report).await?;
+            let at = Fetch {
+                commit: &plan.commit,
+                target: &plan.target,
+            };
+            fetch_with_retries(&remote, at, file, &dir, report).await?;
             place(&incomplete(&dir, file), &target, file, true)?
         };
         pads.push(pad);
@@ -863,7 +880,12 @@ fn in_cache(source: &Path, file: &RemoteFile) -> bool {
 /// Puts the verified `source` at `target`, realigned when it is a safetensors file that needs it,
 /// and returns the pad. A downloaded `source` (`owned`) is moved or removed; a cached one is
 /// only read.
-fn place(source: &Path, target: &Path, file: &RemoteFile, owned: bool) -> Result<u32, CliError> {
+pub(super) fn place(
+    source: &Path,
+    target: &Path,
+    file: &RemoteFile,
+    owned: bool,
+) -> Result<u32, CliError> {
     let source_error = |error| write_error(error, source);
     if owned && realign::pad_of(source, &file.path).map_err(source_error)? == 0 {
         fs::rename(source, target).map_err(|error| write_error(error, target))?;
@@ -1027,7 +1049,7 @@ pub fn syntax_name(syntax: SyntaxId) -> &'static str {
     }
 }
 
-fn incomplete(dir: &Path, file: &RemoteFile) -> PathBuf {
+pub(super) fn incomplete(dir: &Path, file: &RemoteFile) -> PathBuf {
     dir.join(format!("{}.incomplete", file.path))
 }
 
@@ -1035,7 +1057,7 @@ fn is_file_of_size(path: &Path, size: u64) -> bool {
     fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == size)
 }
 
-fn blob_matches(path: &Path, file: &RemoteFile) -> bool {
+pub(super) fn blob_matches(path: &Path, file: &RemoteFile) -> bool {
     let hash = if file.lfs {
         sha256_file(path)
     } else {
@@ -1072,16 +1094,16 @@ async fn lock_file(lock: &Path, path: &str) -> Result<fs::File, CliError> {
 }
 
 /// [`fetch`] with up to [`RETRIES`] resumed attempts after network failures.
-async fn fetch_with_retries(
+pub(super) async fn fetch_with_retries(
     remote: &Remote<'_>,
-    plan: &Plan,
+    at: Fetch<'_>,
     file: &RemoteFile,
     dir: &Path,
     report: &Report,
 ) -> Result<(), CliError> {
     let mut attempt = 0;
     loop {
-        match fetch(remote, plan, file, dir, report).await {
+        match fetch(remote, at, file, dir, report).await {
             Err(error) if error.code == Code::Network && attempt < RETRIES => {
                 let wait = Duration::from_secs(1 << attempt);
                 attempt += 1;
@@ -1101,7 +1123,7 @@ async fn fetch_with_retries(
 /// Partial files are kept on any failure except a hash mismatch.
 async fn fetch(
     remote: &Remote<'_>,
-    plan: &Plan,
+    at: Fetch<'_>,
     file: &RemoteFile,
     dir: &Path,
     report: &Report,
@@ -1111,10 +1133,10 @@ async fn fetch(
     if offset > file.size {
         offset = 0;
     }
-    let again = || format!("run 'mrun pull {}' again", plan.target);
+    let again = || format!("run 'mrun pull {}' again", at.target);
     if offset < file.size {
         let mut response = remote
-            .get(&remote.resolve_url(&plan.commit, &file.path), offset)
+            .get(&remote.resolve_url(at.commit, &file.path), offset)
             .await?;
         let resume = offset > 0 && response.status() == StatusCode::PARTIAL_CONTENT;
         if !resume {
@@ -1176,7 +1198,7 @@ async fn fetch(
 }
 
 /// A write failure: a full disk is E052 (partial files are kept for resume).
-fn write_error(error: io::Error, path: &Path) -> CliError {
+pub(super) fn write_error(error: io::Error, path: &Path) -> CliError {
     if error.kind() == io::ErrorKind::StorageFull {
         let kept = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
         return CliError::new(

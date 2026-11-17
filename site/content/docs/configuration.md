@@ -139,7 +139,7 @@ mrun config schema > ~/.mrun/config.schema.json
 | `MRUN_LANES` | `serve --lanes` | 2 when the context holds 32K tokens per lane, else 1; 1–4 |
 | `MRUN_POOL_PORT` | `serve --pool-port` | 8486 |
 | `MRUN_NO_CACHE` | `serve --no-cache` | off |
-| `MRUN_SPECULATION` | `--speculation` (`serve`, `run`) | `auto` |
+| `MRUN_SPECULATION` | `--speculation` (`serve`, `run`): `auto`, `dflash`, `lookup` or `off` | `auto` |
 | `MRUN_VISION` | `serve --vision` | auto |
 | `MRUN_REJECT_TOOL_IMAGES` | `serve --reject-tool-images` | off |
 | `MRUN_DETACH` | `serve --detach` | off |

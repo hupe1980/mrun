@@ -102,7 +102,8 @@ fn a_side_request_streams_while_the_main_turn_reads_its_prompt() {
 
 #[test]
 fn subagents_run_at_once_and_reuse_their_prefix_on_both_lanes() {
-    let engine = ScriptedEngine::new(ids("done"), 100_000).with_lanes(2);
+    // A reply long enough that the first subagent still decodes when the second arrives.
+    let engine = ScriptedEngine::new(ids(&"done ".repeat(16)), 100_000).with_lanes(2);
     let handle = spawn(engine, Duration::from_secs(10));
     let mut main_prompt = text(2_000, 'M');
     let main = handle
@@ -127,7 +128,10 @@ fn subagents_run_at_once_and_reuse_their_prefix_on_both_lanes() {
             .map(|&t| {
                 let mut prompt = prefix.clone();
                 prompt.extend(text(50, t));
-                consume(handle.generate(request(prompt, 3)).unwrap(), Duration::ZERO)
+                consume(
+                    handle.generate(request(prompt, 64)).unwrap(),
+                    Duration::ZERO,
+                )
             })
             .collect();
         runs.into_iter()

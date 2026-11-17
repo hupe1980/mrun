@@ -5,6 +5,8 @@ pub(crate) mod activations;
 #[cfg(feature = "engine")]
 mod common;
 #[cfg(feature = "engine")]
+pub mod dflash;
+#[cfg(feature = "engine")]
 pub(crate) mod gated_delta;
 #[cfg(feature = "engine")]
 mod moe;
@@ -170,6 +172,9 @@ mod graph {
         fn logits(&self, x: &Array) -> tensor::Result<Array>;
         /// Hidden states `[1, L, hidden]` → logits of every position `[L, vocab]`.
         fn logits_rows(&self, x: &Array) -> tensor::Result<Array>;
+        /// Hidden states `[1, L, hidden]` → logits `[L, vocab]` through the output projection
+        /// alone, without the final norm (a DFlash drafter's head, 030).
+        fn head_raw(&self, x: &Array) -> tensor::Result<Array>;
         /// Width of the hidden state between layers.
         fn hidden(&self) -> i32;
         /// Analytic scratch of one chunk of `len` tokens at `depth` (activations, MoE routing,

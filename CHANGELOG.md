@@ -6,6 +6,31 @@ All notable changes to mrun are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-17
+
+### Added
+
+- A DFlash drafter for `qwen3.5` and `qwen3.6`: `mrun pull` brings it with the alias, and a small
+  model drafts from the model's own hidden states. The output stays bit for bit what plain
+  decoding produces; with `qwen3.5`, copy-heavy replies decode 1.77× and short answers 1.52×
+  faster ([Benchmarks](https://hupe1980.github.io/mrun/docs/benchmarks/)).
+  `--speculation auto|dflash|lookup|off`: `auto` uses the drafter when it leaves 64K tokens of
+  context, else prompt lookup. `mrun show`, `mrun ps`, `/mrun/status`, `/metrics` and the window
+  name who drafted.
+
+### Changed
+
+- Speculative decoding starts after one plain step and judges its speed over four rounds, so a
+  reply that does not gain decodes plainly sooner.
+- `/mrun/status` reports the chosen `speculation.mode` (`auto`, `dflash`, `lookup` or `off`).
+- nuvec 0.14.0: batches of 3–16 requests decode faster on 4- and 8-bit models.
+- pageon 0.4.1 for the browser tools: editors, the clipboard, IndexedDB, script-created and
+  sandboxed iframes, and faster layouts (GitHub's home page uses a third of the CPU).
+
+### Fixed
+
+- Settings › Tools no longer reloads the list without end when no tool servers are set up.
+
 ## [0.7.0] - 2026-11-15
 
 ### Added
@@ -204,7 +229,10 @@ The first release.
 - One release archive for macOS 15 and later, a Homebrew formula, and three crates on
   crates.io.
 
-[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/hupe1980/mrun/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/hupe1980/mrun/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/hupe1980/mrun/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/hupe1980/mrun/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/hupe1980/mrun/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/hupe1980/mrun/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/hupe1980/mrun/compare/v0.4.1...v0.4.2

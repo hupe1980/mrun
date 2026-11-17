@@ -95,14 +95,25 @@ On M5-class GPUs the Neural Accelerator (NAX) kernels run where MLX would use th
 
 ## Speculative decoding
 
-Each decode step reads every weight once to produce one token. Agent replies copy a lot (an
-`Edit`'s old text, a rewritten file, repeated paths), so mrun looks up the reply's last tokens in
-the prompt and the reply so far and drafts what followed there. One pass checks the draft and up
-to 7 tokens at a time. Each position is sampled exactly as plain decoding samples it, with the
-same random draw, and a drafted token is kept only where it equals that sample, so the reply is
-the same token for token. The pass runs nuvec's row-exact kernels: each row has the bits of a
-one-token step. A request drafts only while its speculative rounds are faster than its plain steps.
-`mrun ps`, Now and each chat reply show the tokens per pass. Pools decode plainly.
+Each decode step reads every weight once to produce one token. mrun drafts tokens and checks them
+in one pass. Drafts come from two places:
+
+- **Prompt lookup.** Agent replies copy a lot (an `Edit`'s old text, a rewritten file, repeated
+  paths). When the reply's last tokens appear earlier, mrun drafts the 7 that followed there. A
+  full match goes first, since it costs nothing to make.
+- **The DFlash drafter.** A small model pulled with the alias (`z-lab/Qwen3.5-9B-DFlash` for
+  `qwen3.5`, `z-lab/Qwen3.6-35B-A3B-DFlash` for `qwen3.6`, quantized to 4 bits at load) reads the
+  hidden states of some of the model's layers and proposes the next 3 tokens in one forward pass.
+  It keeps the last 4,096 positions of context per lane (about 100 MB), and prefix-cache branches
+  keep theirs.
+
+Each position is sampled exactly as plain decoding samples it, with the same random draw, and a
+drafted token is kept only where it equals that sample, so the reply is the same token for token
+whoever drafted. The pass runs nuvec's row-exact kernels: each row has the bits of a one-token
+step; up to 4 rows read each weight once, which is why the drafter proposes 3. A request drafts
+only while its speculative rounds, averaged over 4, are faster than its plain steps, and only
+while it decodes alone. `mrun ps`, Now and each chat reply show who drafted and the tokens per
+pass. Pools decode plainly.
 
 ## Design rules
 
